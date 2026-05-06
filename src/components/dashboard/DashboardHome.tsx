@@ -1,0 +1,354 @@
+"use client";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { KpiCard } from "@/components/ui/KpiCard";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import {
+  BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
+} from "recharts";
+import {
+  TrendingUp, TrendingDown, Package, FileText, Bot,
+  DollarSign, ArrowUpRight, Download, LayoutDashboard, Loader2,
+} from "lucide-react";
+import Link from "next/link";
+import { formatCurrency } from "@/lib/utils/format";
+import {
+  getKpiMensal, getPorContaContabil, getSaldoPorBanco, getSaldoAtualPorBanco,
+  type KpiMensalRow, type PorContaContabilRow, type SaldoAtualBanco,
+} from "@/lib/queries/dashboard";
+import { listarTransacoesEmpresa, type TransacaoEmpresaRich } from "@/lib/queries/financeiro";
+import { STATUS_ARAMBURU_LABEL } from "@/types";
+import { BancoDetalheModal } from "@/components/dashboard/BancoDetalheModal";
+import { LancamentoDetalheModal } from "@/components/dashboard/LancamentoDetalheModal";
+import { SaldosBancariosGrid } from "@/components/dashboard/SaldosBancariosGrid";
+
+const PIE_COLORS = ["#246354", "#a67c20", "#3a6230", "#c49830", "#7aa870", "#d9b455", "#1a4d40", "#836016"];
+
+const MES_NOMES: Record<string, string> = {
+  "01": "Jan", "02": "Fev", "03": "Mar", "04": "Abr",
+  "05": "Mai", "06": "Jun", "07": "Jul", "08": "Ago",
+  "09": "Set", "10": "Out", "11": "Nov", "12": "Dez",
+};
+
+function mesShort(yyyymm: string) {
+  const m = yyyymm?.split("-");
+  if (!m || m.length < 2) return yyyymm ?? "";
+  return `${MES_NOMES[m[1]] ?? m[1]}/${m[0].slice(2)}`;
+}
+
+const quickAccess = [
+  { label: "Financeiro",  href: "/dashboard/financeiro",  icon: TrendingUp,      color: "bg-primary-700" },
+  { label: "Estoque",     href: "/dashboard/estoque",     icon: Package,          color: "bg-primary-600" },
+  { label: "Documentos",  href: "/dashboard/documentos",  icon: FileText,         color: "bg-accent-600" },
+  { label: "Assistentes", href: "/dashboard/assistentes", icon: Bot,              color: "bg-stone-700" },
+];
+
+export function DashboardHome() {
+  const [kpiAll, setKpiAll]     = useState<KpiMensalRow[]>([]);
+  const [byConta, setByConta]   = useState<PorContaContabilRow[]>([]);
+  const [saldosBanco, setSaldosBanco] = useState<SaldoAtualBanco[]>([]);
+  const [recent, setRecent]     = useState<TransacaoEmpresaRich[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState<string | null>(null);
+
+  const [mesFiltro, setMesFiltro] = useState<string>("");      // "" = todos
+  const [contaSelecionada, setContaSelecionada] = useState<string | null>(null);   // drill no PieChart
+  const [bancoModal, setBancoModal] = useState<SaldoAtualBanco | null>(null);
+  const [lancModal, setLancModal] = useState<TransacaoEmpresaRich | null>(null);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const [k, c, sb, r] = await Promise.all([
+        getKpiMensal(),
+        getPorContaContabil(mesFiltro || undefined),
+        getSaldoAtualPorBanco(),
+        listarTransacoesEmpresa(mesFiltro ? { mesReferencia: mesFiltro } : {}, 1, 5),
+      ]);
+      setKpiAll(k);
+      setByConta(c);
+      setSaldosBanco(sb);
+      setRecent(r.rows);
+    } catch (e: unknown) {
+      setError((e as Error).message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [mesFiltro]);
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // KPI consolidado: usa o mês filtrado ou totaliza tudo.
+  const kpiAtual = useMemo(() => {
+    const base = mesFiltro ? kpiAll.filter((r) => r.mes_referencia === mesFiltro) : kpiAll;
+    return base.reduce(
+      (acc, r) => {
+        acc.entradas += Number(r.entradas_realizadas ?? 0);
+        acc.saidas   += Number(r.saidas_realizadas ?? 0);
+        acc.aPagar   += Number(r.saidas_a_pagar ?? 0);
+        acc.provis   += Number(r.saidas_provisionadas ?? 0);
+        return acc;
+      },
+      { entradas: 0, saidas: 0, aPagar: 0, provis: 0 },
+    );
+  }, [kpiAll, mesFiltro]);
+
+  // BarChart: receita vs despesa mensal
+  const barData = useMemo(() => kpiAll.map((r) => ({
+    mes: mesShort(r.mes_referencia),
+    Receita: Number(r.entradas_realizadas ?? 0),
+    Despesa: Number(r.saidas_realizadas ?? 0),
+  })), [kpiAll]);
+
+  // PieChart: despesa por conta contábil (apenas saídas)
+  const pieData = useMemo(() => {
+    const saidas = byConta.filter((r) => r.natureza === "saida");
+    const m = new Map<string, { name: string; value: number; codigo: string }>();
+    for (const r of saidas) {
+      const k = r.conta_contabil_cod;
+      const cur = m.get(k);
+      const v = Math.abs(Number(r.valor_total ?? 0));
+      if (cur) cur.value += v;
+      else m.set(k, { name: r.conta_contabil_nome, value: v, codigo: k });
+    }
+    return Array.from(m.values()).sort((a, b) => b.value - a.value).slice(0, 8);
+  }, [byConta]);
+
+  const meses = useMemo(() => kpiAll.map((r) => r.mes_referencia), [kpiAll]);
+
+  return (
+    <div className="space-y-6 max-w-[1400px]">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-[#0f1f1c]">Home</h1>
+          <p className="text-sm text-stone-500">Visão geral da Agropecuária Aramburu</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={mesFiltro}
+            onChange={(e) => { setMesFiltro(e.target.value); setContaSelecionada(null); }}
+            className="h-9 rounded-lg border border-stone-200 px-3 text-sm bg-white"
+          >
+            <option value="">Todos os meses</option>
+            {meses.map((m) => <option key={m} value={m}>{mesShort(m)}</option>)}
+          </select>
+          <Button variant="outline" size="sm">
+            <Download size={14} /> Relatório Financeiro
+          </Button>
+          <Button size="sm">
+            <Download size={14} /> Relatório Contábil
+          </Button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {/* Quick access */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {quickAccess.map(({ label, href, icon: Icon, color }) => (
+          <Link key={href} href={href}>
+            <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-5 flex flex-col items-center gap-3 hover:shadow-md transition cursor-pointer">
+              <div className={`w-14 h-14 rounded-xl ${color} flex items-center justify-center`}>
+                <Icon size={24} className="text-white" />
+              </div>
+              <span className="text-sm font-semibold text-stone-800">{label}</span>
+            </div>
+          </Link>
+        ))}
+      </div>
+
+      {/* Saldos por Banco — fileira em destaque */}
+      <SaldosBancariosGrid
+        saldos={saldosBanco}
+        loading={loading}
+        onSelect={setBancoModal}
+      />
+
+      {/* KPIs */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <KpiCard
+          label="Entradas realizadas"
+          value={formatCurrency(kpiAtual.entradas)}
+          icon={<TrendingUp size={16}/>}
+          trend="up"
+          helpText="Soma de tudo que efetivamente entrou na conta no período (Recebido, Resgatado, Aplicação)."
+        />
+        <KpiCard
+          label="Saídas realizadas"
+          value={formatCurrency(kpiAtual.saidas)}
+          icon={<TrendingDown size={16}/>}
+          trend="down"
+          helpText="Soma de tudo que efetivamente saiu da conta no período (Pago, Repassado, Aplicado, Resgate)."
+        />
+        <KpiCard
+          label="A pagar"
+          value={formatCurrency(Math.abs(kpiAtual.aPagar))}
+          icon={<DollarSign size={16}/>}
+          helpText="Lançamentos confirmados que ainda não foram pagos. Saídas previstas."
+        />
+        <KpiCard
+          label="Provisionado"
+          value={formatCurrency(Math.abs(kpiAtual.provis))}
+          icon={<DollarSign size={16}/>}
+          trend="neutral"
+          helpText="Previsões de saída ainda sem confirmação (estimativas, recorrências futuras). Não afeta o saldo atual."
+        />
+      </div>
+
+      {/* Gráficos */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>Receita × Despesa por Mês</CardTitle>
+            {loading && <Loader2 size={14} className="animate-spin text-stone-400" />}
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart
+                data={barData}
+                margin={{ top: 4, right: 8, bottom: 0, left: 0 }}
+                onClick={(s) => {
+                  // drill: clique numa barra filtra o mês
+                  const label = s?.activeLabel as string | undefined;
+                  if (!label) return;
+                  const found = meses.find((m) => mesShort(m) === label);
+                  if (found) setMesFiltro(found);
+                }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" />
+                <XAxis dataKey="mes" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false}
+                  tickFormatter={(v) => `${(v/1000).toFixed(0)}k`} />
+                <RechartsTooltip
+                  formatter={(v) => formatCurrency(Number(v ?? 0))}
+                  contentStyle={{ borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12 }}
+                />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="Receita" fill="#246354" radius={[4,4,0,0]} cursor="pointer" />
+                <Bar dataKey="Despesa" fill="#c49830" radius={[4,4,0,0]} cursor="pointer" />
+              </BarChart>
+            </ResponsiveContainer>
+            <p className="text-[10px] text-stone-400 mt-1 text-center">Clique numa barra para filtrar o mês.</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Despesa por Conta Contábil{mesFiltro ? ` — ${mesShort(mesFiltro)}` : ""}</CardTitle>
+            {contaSelecionada && (
+              <button onClick={() => setContaSelecionada(null)} className="text-xs text-accent-600 hover:underline">limpar</button>
+            )}
+          </CardHeader>
+          <CardContent>
+            {pieData.length === 0 && !loading && (
+              <p className="text-xs text-stone-400 text-center py-8">Sem despesas neste período.</p>
+            )}
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  cx="50%" cy="50%"
+                  outerRadius={88} innerRadius={48}
+                  dataKey="value"
+                  labelLine={false}
+                  onClick={(d) => {
+                    const codigo = (d as { codigo?: string }).codigo;
+                    if (codigo) setContaSelecionada(prev => prev === codigo ? null : codigo);
+                  }}
+                >
+                  {pieData.map((entry, i) => (
+                    <Cell key={i}
+                      fill={PIE_COLORS[i % PIE_COLORS.length]}
+                      stroke={contaSelecionada === entry.codigo ? "#0f1f1c" : "none"}
+                      strokeWidth={contaSelecionada === entry.codigo ? 2 : 0}
+                      cursor="pointer"
+                    />
+                  ))}
+                </Pie>
+                <RechartsTooltip formatter={(v) => formatCurrency(Number(v ?? 0))}
+                  contentStyle={{ borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12 }} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="space-y-1 mt-2 text-[11px] max-h-32 overflow-y-auto">
+              {pieData.map((d, i) => (
+                <button
+                  key={d.codigo}
+                  onClick={() => setContaSelecionada(prev => prev === d.codigo ? null : d.codigo)}
+                  className={`flex items-center gap-2 w-full text-left px-1 py-0.5 rounded hover:bg-stone-50 ${contaSelecionada === d.codigo ? "bg-accent-50" : ""}`}
+                >
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
+                  <span className="truncate flex-1 text-stone-600">{d.codigo} – {d.name}</span>
+                  <span className="font-semibold text-stone-700 tabular-nums">{formatCurrency(d.value)}</span>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Últimos Lançamentos — full width */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Últimos Lançamentos</CardTitle>
+          <Link href="/dashboard/financeiro" className="text-xs text-accent-600 hover:underline">Ver todos</Link>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-stone-50 border-b border-stone-100">
+                  {["Data","Descrição","Conta","Banco","Status","Valor"].map(h => (
+                    <th key={h} className="px-4 py-2 text-left text-xs font-semibold text-stone-500 uppercase whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {recent.length === 0 && !loading && (
+                  <tr><td colSpan={6} className="px-4 py-6 text-center text-stone-400 text-xs">Nenhum lançamento.</td></tr>
+                )}
+                {recent.map((t) => (
+                  <tr
+                    key={t.id}
+                    onClick={() => setLancModal(t)}
+                    className="border-b border-stone-50 last:border-0 table-row-alt hover:bg-primary-50/40 cursor-pointer transition-colors"
+                    title="Clique para ver detalhes"
+                  >
+                    <td className="px-4 py-2 text-stone-500 text-xs whitespace-nowrap">
+                      {new Date(t.data).toLocaleDateString("pt-BR")}
+                    </td>
+                    <td className="px-4 py-2 text-stone-700 max-w-[320px] truncate" title={t.descricao ?? ""}>
+                      {t.descricao || <span className="text-stone-300">—</span>}
+                      <div className="text-[10px] text-stone-400">{t.fornecedor_nome ?? ""}</div>
+                    </td>
+                    <td className="px-4 py-2 text-stone-600 text-xs whitespace-nowrap">
+                      {t.conta_contabil?.nome ?? <span className="text-stone-300">—</span>}
+                    </td>
+                    <td className="px-4 py-2 text-stone-600 text-xs whitespace-nowrap">
+                      {t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? <span className="text-stone-300">—</span>}
+                    </td>
+                    <td className="px-4 py-2">
+                      <Badge variant="neutral">{STATUS_ARAMBURU_LABEL[t.status]}</Badge>
+                    </td>
+                    <td className="px-4 py-2 font-semibold text-stone-800 tabular-nums whitespace-nowrap">
+                      {formatCurrency(t.valor)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Modais de drill-down */}
+      <BancoDetalheModal banco={bancoModal} onClose={() => setBancoModal(null)} />
+      <LancamentoDetalheModal lancamento={lancModal} onClose={() => setLancModal(null)} />
+    </div>
+  );
+}

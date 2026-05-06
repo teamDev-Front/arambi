@@ -1,26 +1,56 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* Primary – petroleum green (azul-verde fechado) */
+  --color-primary-50:  #eef4f2;
+  --color-primary-100: #cde0d9;
+  --color-primary-200: #9dc4b8;
+  --color-primary-300: #6ba494;
+  --color-primary-400: #3e8270;
+  --color-primary-500: #246354;
+  --color-primary-600: #1a4d40;
+  --color-primary-700: #133830;
+  --color-primary-800: #0d2620;
+  --color-primary-900: #071410;
+
+  /* Accent – warm gold/tan */
+  --color-accent-50:  #fdf8ee;
+  --color-accent-100: #f7e9c8;
+  --color-accent-200: #edd28e;
+  --color-accent-300: #d9b455;
+  --color-accent-400: #c49830;
+  --color-accent-500: #a67c20;
+  --color-accent-600: #836016;
+  --color-accent-700: #60450f;
+  --color-accent-800: #3d2c09;
+  --color-accent-900: #1a1204;
+
+  /* Surfaces */
+  --color-surface:       #f4f1ec;
+  --color-surface-card:  #ffffff;
+  --color-surface-dark:  #1a2e28;
+
+  /* Sidebar – petróleo profundo */
+  --color-sidebar-bg:     #152420;
+  --color-sidebar-active: #1f3830;
+  --color-sidebar-border: #253d35;
+  --color-sidebar-text:   #b8d8d0;
+  --color-sidebar-muted:  #5a9485;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+* { box-sizing: border-box; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #f5f0e8;
+  color: #1a1a1a;
+  font-family: Inter, system-ui, sans-serif;
 }
+
+/* Scrollbar */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: #b8d7ae; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4a7c3f; }
+
+/* Table alternating rows */
+.table-row-alt:nth-child(even) { background-color: #faf7f2; }
