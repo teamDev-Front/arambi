@@ -23,6 +23,7 @@ import { STATUS_ARAMBURU_LABEL } from "@/types";
 import { BancoDetalheModal } from "@/components/dashboard/BancoDetalheModal";
 import { LancamentoDetalheModal } from "@/components/dashboard/LancamentoDetalheModal";
 import { SaldosBancariosGrid } from "@/components/dashboard/SaldosBancariosGrid";
+import { useToast } from "@/components/ui/Toast";
 
 const PIE_COLORS = ["#246354", "#a67c20", "#3a6230", "#c49830", "#7aa870", "#d9b455", "#1a4d40", "#836016"];
 
@@ -46,12 +47,12 @@ const quickAccess = [
 ];
 
 export function DashboardHome() {
+  const toast = useToast();
   const [kpiAll, setKpiAll]     = useState<KpiMensalRow[]>([]);
   const [byConta, setByConta]   = useState<PorContaContabilRow[]>([]);
   const [saldosBanco, setSaldosBanco] = useState<SaldoAtualBanco[]>([]);
   const [recent, setRecent]     = useState<TransacaoEmpresaRich[]>([]);
   const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState<string | null>(null);
 
   const [mesFiltro, setMesFiltro] = useState<string>("");      // "" = todos
   const [contaSelecionada, setContaSelecionada] = useState<string | null>(null);   // drill no PieChart
@@ -59,7 +60,7 @@ export function DashboardHome() {
   const [lancModal, setLancModal] = useState<TransacaoEmpresaRich | null>(null);
 
   const fetchAll = useCallback(async () => {
-    setLoading(true); setError(null);
+    setLoading(true);
     try {
       const [k, c, sb, r] = await Promise.all([
         getKpiMensal(),
@@ -72,10 +73,11 @@ export function DashboardHome() {
       setSaldosBanco(sb);
       setRecent(r.rows);
     } catch (e: unknown) {
-      setError((e as Error).message ?? String(e));
+      toast.error("Erro carregando dashboard", (e as Error).message ?? String(e));
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesFiltro]);
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -142,12 +144,6 @@ export function DashboardHome() {
           </Button>
         </div>
       </div>
-
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
 
       {/* Quick access */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

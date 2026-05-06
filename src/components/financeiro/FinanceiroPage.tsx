@@ -36,6 +36,7 @@ import {
   type ContaBancariaEmpresaRow,
   type TransacaoEmpresaInsert,
 } from "@/types";
+import { useToast } from "@/components/ui/Toast";
 
 const PAGE_SIZE = 25;
 
@@ -81,11 +82,12 @@ function statusBadgeVariant(status: StatusAramburu): BadgeVariant {
 }
 
 export function FinanceiroPage() {
+  const toast = useToast();
+
   // ---- dados ----
   const [rows, setRows] = useState<TransacaoEmpresaRich[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // ---- lookups (carregados uma vez) ----
   const [classificacoes, setClassificacoes] = useState<ClassificacaoFinanceiraRow[]>([]);
@@ -139,13 +141,15 @@ export function FinanceiroPage() {
   useEffect(() => {
     Promise.all([listarClassificacoes(), listarContasEmpresa(), listarMesesDistintos()])
       .then(([cf, cb, m]) => { setClassificacoes(cf); setBancos(cb); setMeses(m); })
-      .catch((e) => setError(e.message ?? String(e)));
+      .catch((e: unknown) =>
+        toast.error("Erro carregando cadastros", (e as Error).message ?? String(e))
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // dados (refetch sempre que filtros / page mudam)
   const fetchData = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const { rows, total } = await listarTransacoesEmpresa(
         {
@@ -161,10 +165,11 @@ export function FinanceiroPage() {
       setRows(rows);
       setTotal(total);
     } catch (e: unknown) {
-      setError((e as Error).message ?? String(e));
+      toast.error("Erro carregando lançamentos", (e as Error).message ?? String(e));
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, filterStatus, filterContaContabil, filterBanco, filterMes, page]);
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -218,12 +223,18 @@ export function FinanceiroPage() {
     };
     setSaving(true);
     try {
-      if (editId) await atualizarTransacaoEmpresa(editId, payload);
-      else        await criarTransacaoEmpresa(payload);
+      if (editId) {
+        await atualizarTransacaoEmpresa(editId, payload);
+        toast.success("Lançamento atualizado");
+      } else {
+        await criarTransacaoEmpresa(payload);
+        toast.success("Lançamento criado");
+      }
       setModalOpen(false);
       await fetchData();
     } catch (e: unknown) {
-      setError((e as Error).message ?? String(e));
+      const msg = (e as Error).message ?? String(e);
+      toast.error(editId ? "Não foi possível atualizar" : "Não foi possível criar", msg);
     } finally {
       setSaving(false);
     }
@@ -233,9 +244,10 @@ export function FinanceiroPage() {
     if (!confirm("Excluir este lançamento?")) return;
     try {
       await deletarTransacaoEmpresa(id);
+      toast.success("Lançamento excluído");
       await fetchData();
     } catch (e: unknown) {
-      setError((e as Error).message ?? String(e));
+      toast.error("Não foi possível excluir", (e as Error).message ?? String(e));
     }
   }
 
@@ -255,12 +267,6 @@ export function FinanceiroPage() {
           <Button size="sm" onClick={openNew}><Plus size={14} /> Nova Transação</Button>
         </div>
       </div>
-
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
 
       {/* KPIs (página atual) */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">

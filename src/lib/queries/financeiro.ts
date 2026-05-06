@@ -78,14 +78,30 @@ export async function listarTransacoesEmpresa(
   return { rows: (data ?? []) as TransacaoEmpresaRich[], total: count ?? 0 };
 }
 
+/**
+ * Erro lançado quando uma operação atinge 0 linhas — geralmente RLS bloqueando
+ * (usuário sem permissão) ou registro inexistente.
+ */
+class PermissionOrNotFoundError extends Error {
+  constructor(operacao: string) {
+    super(
+      `Operação não realizada (${operacao}). ` +
+      `Provavelmente sua conta não tem permissão (precisa ser admin ou editor). ` +
+      `Verifique sua role em public.users no Supabase.`
+    );
+    this.name = "PermissionOrNotFoundError";
+  }
+}
+
 export async function criarTransacaoEmpresa(payload: TransacaoEmpresaInsert): Promise<TransacaoEmpresaRow> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from("transacoes_empresa")
     .insert(payload)
     .select()
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new PermissionOrNotFoundError("criar lançamento");
   return data as TransacaoEmpresaRow;
 }
 
@@ -99,15 +115,23 @@ export async function atualizarTransacaoEmpresa(
     .update(payload)
     .eq("id", id)
     .select()
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new PermissionOrNotFoundError("atualizar lançamento");
   return data as TransacaoEmpresaRow;
 }
 
 export async function deletarTransacaoEmpresa(id: string): Promise<void> {
   const supabase = createClient();
-  const { error } = await supabase.from("transacoes_empresa").delete().eq("id", id);
+  // Pedimos retorno da row deletada pra confirmar que de fato saiu (RLS pode
+  // bloquear silenciosamente — sem erro, mas sem deletar nada).
+  const { data, error } = await supabase
+    .from("transacoes_empresa")
+    .delete()
+    .eq("id", id)
+    .select("id");
   if (error) throw error;
+  if (!data || data.length === 0) throw new PermissionOrNotFoundError("excluir lançamento");
 }
 
 // ----------------------------------------------------------------------------
