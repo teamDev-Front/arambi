@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
@@ -8,7 +9,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Pagination } from "@/components/ui/Pagination";
 import {
-  Plus, Download, Search, Edit2, Trash2,
+  Plus, FileText, Search, Edit2, Trash2,
   TrendingUp, TrendingDown, DollarSign, Loader2,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
@@ -262,18 +263,40 @@ export function FinanceiroPage() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" size="sm"><Download size={14} /> Relatório Financeiro</Button>
-          <Button variant="outline" size="sm"><Download size={14} /> Relatório Contábil</Button>
+          <Link href="/dashboard/relatorios">
+            <Button variant="outline" size="sm"><FileText size={14} /> Gerar Relatórios PDF</Button>
+          </Link>
           <Button size="sm" onClick={openNew}><Plus size={14} /> Nova Transação</Button>
         </div>
       </div>
 
       {/* KPIs (página atual) */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <KpiCard label="Total no banco"  value={String(total)}                     icon={<DollarSign size={16}/>} />
-        <KpiCard label="Entradas (página)" value={formatCurrency(kpis.entradas)}   icon={<TrendingUp size={16}/>} />
-        <KpiCard label="Saídas (página)"   value={formatCurrency(kpis.saidas)}     icon={<TrendingDown size={16}/>} />
-        <KpiCard label="A pagar (página)"  value={formatCurrency(kpis.aPagar)}     icon={<TrendingDown size={16}/>} trend="down" />
+        <KpiCard
+          label="Total no banco"
+          value={String(total)}
+          icon={<DollarSign size={16}/>}
+          helpText="Quantidade total de lançamentos respeitando os filtros aplicados (não apenas a página visível)."
+        />
+        <KpiCard
+          label="Entradas (página)"
+          value={formatCurrency(kpis.entradas)}
+          icon={<TrendingUp size={16}/>}
+          helpText="Soma dos lançamentos com status de entrada (Recebido, Resgatado, Aplicação, etc.) APENAS da página atual."
+        />
+        <KpiCard
+          label="Saídas (página)"
+          value={formatCurrency(kpis.saidas)}
+          icon={<TrendingDown size={16}/>}
+          helpText="Soma das saídas realizadas (Pago, Repassado, Aplicado) APENAS da página atual."
+        />
+        <KpiCard
+          label="A pagar (página)"
+          value={formatCurrency(kpis.aPagar)}
+          icon={<TrendingDown size={16}/>}
+          trend="down"
+          helpText="Compromissos em aberto (A pagar, A repassar, A aplicar) na página atual. Use os filtros para somar o mês inteiro."
+        />
       </div>
 
       {/* Tabela */}
@@ -281,13 +304,13 @@ export function FinanceiroPage() {
         <CardHeader className="flex-col items-start gap-3 lg:flex-row lg:items-center lg:gap-2">
           <CardTitle>Lançamentos</CardTitle>
           <div className="flex items-center gap-2 flex-wrap ml-auto">
-            <div className="relative">
+            <div className="relative" title="Busca por descrição, fornecedor ou referência (NF / recibo / nº contrato)">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
               <input
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                placeholder="Buscar descrição, fornecedor, ref..."
-                className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-64 focus:outline-none focus:ring-1 focus:ring-accent-400"
+                placeholder="Buscar descrição, fornecedor, NF, recibo..."
+                className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-72 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
             </div>
             <select

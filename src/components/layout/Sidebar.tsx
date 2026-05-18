@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils/cn";
 import {
   LayoutDashboard,
   TrendingUp,
-  Package,
+  Sprout,
   FileText,
   Bot,
   Receipt,
@@ -13,13 +13,19 @@ import {
   ChevronLeft,
   ChevronRight,
   Leaf,
+  Landmark,
+  HandCoins,
+  FileBarChart,
 } from "lucide-react";
 import { useState } from "react";
 
 const navItems = [
   { label: "Home", href: "/dashboard", icon: LayoutDashboard },
   { label: "Financeiro", href: "/dashboard/financeiro", icon: TrendingUp },
-  { label: "Estoque", href: "/dashboard/estoque", icon: Package },
+  { label: "Bancos", href: "/dashboard/bancos", icon: Landmark },
+  { label: "Vendas Futuras", href: "/dashboard/vendas-futuras", icon: HandCoins },
+  { label: "Estoque & Safra", href: "/dashboard/estoque", icon: Sprout },
+  { label: "Relatórios PDF", href: "/dashboard/relatorios", icon: FileBarChart },
   { label: "Documentos", href: "/dashboard/documentos", icon: FileText },
   { label: "Assistentes IA", href: "/dashboard/assistentes", icon: Bot },
   { label: "Recibos & Termos", href: "/dashboard/recibos", icon: Receipt },

@@ -1,252 +1,717 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
-import { KpiCard } from "@/components/ui/KpiCard";
 import { Modal } from "@/components/ui/Modal";
-import { Input, Select } from "@/components/ui/Input";
+import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Pagination } from "@/components/ui/Pagination";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Plus, Search, Edit2, Trash2, Package, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
-import { formatCurrency } from "@/lib/utils/format";
+import { Tooltip } from "@/components/ui/Tooltip";
+import { useToast } from "@/components/ui/Toast";
+import {
+  Plus, Search, Edit2, Trash2, Loader2, Save,
+  Warehouse, Sprout, Calculator, Calendar, PackageCheck,
+  Coins, TrendingDown, ArrowDownToLine, HelpCircle,
+} from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer,
+} from "recharts";
+import {
+  listarArmazens, listarParametros, obterParametro, upsertParametro,
+  listarDepositosCalculados, criarDeposito, atualizarDeposito, deletarDeposito,
+  calcularResumoSafra,
+} from "@/lib/queries/safra";
+import { formatCurrency, formatDate } from "@/lib/utils/format";
+import {
+  CULTURA_LABEL, CULTURA_EMOJI, SAFRA_DEP_STATUS_LABEL,
+  type ArmazemRow, type SafraParametrosRow, type SafraDepositoCalculadoRow,
+  type CulturaSafra, type SafraDepositoStatus, type Database,
+} from "@/types";
 
-type EstoqueStatus = "em_estoque" | "baixo_estoque" | "critico" | "esgotado";
+const PAGE_SIZE = 16;
 
-interface Produto {
-  id: string;
-  produto: string;
-  categoria: string;
-  quantidade: number;
-  unidade: string;
-  valor_unitario: number;
-  status: EstoqueStatus;
-  fornecedor: string;
-}
-
-const CATEGORIAS_EST = ["Eletrônicos","Móveis","Acessórios","Periféricos","Insumos","Maquinário","Sementes","Fertilizantes"];
-
-function genId() { return Math.random().toString(36).slice(2); }
-
-const statusMeta: Record<EstoqueStatus, { label: string; variant: BadgeVariant; icon: React.ReactNode }> = {
-  em_estoque:   { label: "Em Estoque",   variant: "success",  icon: <CheckCircle2 size={12}/> },
-  baixo_estoque:{ label: "Baixo Estoque",variant: "warning",  icon: <AlertTriangle size={12}/> },
-  critico:      { label: "Crítico",      variant: "danger",   icon: <AlertTriangle size={12}/> },
-  esgotado:     { label: "Esgotado",     variant: "neutral",  icon: <XCircle size={12}/> },
+type DepForm = {
+  cultura: CulturaSafra;
+  safra: string;
+  data_deposito: string;
+  dfe_entrada: string;
+  nfp: string;
+  kg_bruto: string;
+  status: SafraDepositoStatus;
+  observacao: string;
+};
+const EMPTY_DEP: DepForm = {
+  cultura: "milho",
+  safra: "",
+  data_deposito: new Date().toISOString().slice(0, 10),
+  dfe_entrada: "",
+  nfp: "",
+  kg_bruto: "",
+  status: "armazenado",
+  observacao: "",
 };
 
-const INITIAL: Produto[] = [
-  { id: genId(), produto: "Notebook Dell XPS", categoria: "Eletrônicos", quantidade: 15, unidade: "un", valor_unitario: 8500, status: "em_estoque", fornecedor: "Dell Brasil" },
-  { id: genId(), produto: "Smartphone Samsung S21", categoria: "Eletrônicos", quantidade: 30, unidade: "un", valor_unitario: 3200, status: "em_estoque", fornecedor: "Samsung" },
-  { id: genId(), produto: "Cadeira Office Ergonômica", categoria: "Móveis", quantidade: 5, unidade: "un", valor_unitario: 1200, status: "baixo_estoque", fornecedor: "Ergos" },
-  { id: genId(), produto: "Fone de Ouvido JBL", categoria: "Acessórios", quantidade: 30, unidade: "un", valor_unitario: 350, status: "em_estoque", fornecedor: "JBL" },
-  { id: genId(), produto: "Impressora HP LaserJet", categoria: "Periféricos", quantidade: 12, unidade: "un", valor_unitario: 2800, status: "critico", fornecedor: "HP" },
-  { id: genId(), produto: "Sementes Milho HB", categoria: "Sementes", quantidade: 200, unidade: "kg", valor_unitario: 45, status: "em_estoque", fornecedor: "Syngenta" },
-  { id: genId(), produto: "Fertilizante NPK 10-10-10", categoria: "Fertilizantes", quantidade: 3, unidade: "saco 50kg", valor_unitario: 180, status: "baixo_estoque", fornecedor: "Yara" },
-];
+type ParamForm = {
+  quebra_quinzena_pct: string;
+  armazenagem_por_kg_quinzena: string;
+  devolucao_por_saca: string;
+  carencia_dias: string;
+  kg_por_saca: string;
+  data_atual: string;
+  cotacao_simulada_sc: string;
+};
 
-const barData = CATEGORIAS_EST.slice(0, 6).map((c) => ({
-  categoria: c.split(" ")[0],
-  quantidade: Math.floor(Math.random() * 50) + 5,
-}));
+function statusBadge(s: SafraDepositoStatus): BadgeVariant {
+  switch (s) {
+    case "armazenado":      return "info";
+    case "vendido_total":   return "success";
+    case "vendido_parcial": return "warning";
+    case "retirado":        return "neutral";
+    case "baixa":           return "danger";
+  }
+}
 
-const PAGE_SIZE = 6;
+const fmtKg = (n: number) => `${n.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`;
+const fmtSc = (n: number) => `${n.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} sc`;
 
 export function EstoquePage() {
-  const [produtos, setProdutos] = useState<Produto[]>(INITIAL);
+  const toast = useToast();
+
+  const [armazens, setArmazens] = useState<ArmazemRow[]>([]);
+  const [armazemId, setArmazemId] = useState<string>("");
+  const [parametros, setParametros] = useState<SafraParametrosRow[]>([]);
+
+  const [cultura, setCultura] = useState<CulturaSafra>("milho");
+  const [safra, setSafra] = useState<string>("");
+
+  const [, setParam] = useState<SafraParametrosRow | null>(null);
+  const [paramForm, setParamForm] = useState<ParamForm | null>(null);
+  const [paramSaving, setParamSaving] = useState(false);
+
+  const [rows, setRows] = useState<SafraDepositoCalculadoRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState<EstoqueStatus | "">("");
-  const [filterCat, setFilterCat] = useState("");
+  const [filterStatus, setFilterStatus] = useState<SafraDepositoStatus | "">("");
   const [page, setPage] = useState(1);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editRow, setEditRow] = useState<Produto | null>(null);
-  const [form, setForm] = useState<Omit<Produto, "id">>({
-    produto: "", categoria: CATEGORIAS_EST[0], quantidade: 0, unidade: "un",
-    valor_unitario: 0, status: "em_estoque", fornecedor: "",
-  });
 
-  const filtered = useMemo(() => produtos.filter((p) => {
-    const q = search.toLowerCase();
-    return (
-      (!q || p.produto.toLowerCase().includes(q) || p.fornecedor.toLowerCase().includes(q)) &&
-      (!filterStatus || p.status === filterStatus) &&
-      (!filterCat || p.categoria === filterCat)
-    );
-  }), [produtos, search, filterStatus, filterCat]);
+  const [depModal, setDepModal] = useState(false);
+  const [depEditId, setDepEditId] = useState<string | null>(null);
+  const [depForm, setDepForm] = useState<DepForm>(EMPTY_DEP);
+  const [depSaving, setDepSaving] = useState(false);
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // ---- Initial load: armazens & parametros ----
+  useEffect(() => {
+    (async () => {
+      try {
+        const arms = await listarArmazens();
+        setArmazens(arms);
+        if (arms.length > 0 && !armazemId) setArmazemId(arms[0].id);
+      } catch (e: unknown) {
+        toast.error("Erro carregando armazéns", (e as Error).message);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const totais = {
-    total: produtos.length,
-    emEstoque: produtos.filter(p => p.status === "em_estoque").length,
-    criticos: produtos.filter(p => p.status === "critico" || p.status === "baixo_estoque").length,
-    valorTotal: produtos.reduce((s, p) => s + p.quantidade * p.valor_unitario, 0),
-  };
+  useEffect(() => {
+    if (!armazemId) return;
+    (async () => {
+      try {
+        const params = await listarParametros(armazemId);
+        setParametros(params);
+        // Default cultura/safra escolhe o primeiro parâmetro
+        if (params.length > 0 && !safra) {
+          setCultura(params[0].cultura);
+          setSafra(params[0].safra);
+        }
+      } catch (e: unknown) {
+        toast.error("Erro carregando parâmetros", (e as Error).message);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [armazemId]);
 
-  function openNew() {
-    setEditRow(null);
-    setForm({ produto: "", categoria: CATEGORIAS_EST[0], quantidade: 0, unidade: "un", valor_unitario: 0, status: "em_estoque", fornecedor: "" });
-    setModalOpen(true);
-  }
-  function openEdit(row: Produto) {
-    setEditRow(row);
-    setForm({ produto: row.produto, categoria: row.categoria, quantidade: row.quantidade, unidade: row.unidade, valor_unitario: row.valor_unitario, status: row.status, fornecedor: row.fornecedor });
-    setModalOpen(true);
-  }
-  function handleSave() {
-    const entry: Produto = { ...form, id: editRow?.id ?? genId() };
-    if (editRow) {
-      setProdutos(prev => prev.map(p => p.id === editRow.id ? entry : p));
-    } else {
-      setProdutos(prev => [entry, ...prev]);
+  // ---- carregar param atual quando cultura/safra mudam ----
+  useEffect(() => {
+    if (!armazemId || !cultura || !safra) { setParam(null); setParamForm(null); return; }
+    obterParametro(armazemId, cultura, safra)
+      .then((p) => {
+        setParam(p);
+        setParamForm(p ? {
+          quebra_quinzena_pct: String(p.quebra_quinzena_pct),
+          armazenagem_por_kg_quinzena: String(p.armazenagem_por_kg_quinzena),
+          devolucao_por_saca: String(p.devolucao_por_saca),
+          carencia_dias: String(p.carencia_dias),
+          kg_por_saca: String(p.kg_por_saca),
+          data_atual: p.data_atual,
+          cotacao_simulada_sc: p.cotacao_simulada_sc !== null ? String(p.cotacao_simulada_sc) : "",
+        } : {
+          quebra_quinzena_pct: "0.0015",
+          armazenagem_por_kg_quinzena: "0.20",
+          devolucao_por_saca: "4.75",
+          carencia_dias: "30",
+          kg_por_saca: "60",
+          data_atual: new Date().toISOString().slice(0, 10),
+          cotacao_simulada_sc: "50",
+        });
+      })
+      .catch((e) => toast.error("Erro carregando parâmetro", (e as Error).message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [armazemId, cultura, safra]);
+
+  // ---- carregar depósitos ----
+  const fetchDepositos = useCallback(async () => {
+    if (!armazemId) return;
+    setLoading(true);
+    try {
+      const data = await listarDepositosCalculados({
+        armazemId,
+        cultura,
+        safra: safra || undefined,
+        status: filterStatus || undefined,
+        search: search || undefined,
+      });
+      setRows(data);
+    } catch (e: unknown) {
+      toast.error("Erro carregando depósitos", (e as Error).message);
+    } finally {
+      setLoading(false);
     }
-    setModalOpen(false);
-  }
-  function handleDelete(id: string) { setProdutos(prev => prev.filter(p => p.id !== id)); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [armazemId, cultura, safra, filterStatus, search]);
 
+  useEffect(() => { fetchDepositos(); }, [fetchDepositos]);
+
+  // ---- derivados ----
+  const resumo = useMemo(() => calcularResumoSafra(rows), [rows]);
+  const safrasDistintas = useMemo(() => {
+    const fromParams = parametros.filter((p) => p.cultura === cultura).map((p) => p.safra);
+    const fromRows = rows.map((r) => r.safra);
+    return Array.from(new Set([...fromParams, ...fromRows])).sort();
+  }, [parametros, rows, cultura]);
+  const culturasDistintas = useMemo(
+    () => Array.from(new Set(parametros.map((p) => p.cultura))) as CulturaSafra[],
+    [parametros],
+  );
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const paged = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const armazem = armazens.find((a) => a.id === armazemId);
+
+  // ---- Salvar parâmetros ----
+  async function saveParam() {
+    if (!armazemId || !cultura || !safra || !paramForm) return;
+    setParamSaving(true);
+    try {
+      type P = Database["public"]["Tables"]["safra_parametros"]["Insert"];
+      const payload: P = {
+        armazem_id: armazemId,
+        cultura, safra,
+        quebra_quinzena_pct: Number(paramForm.quebra_quinzena_pct),
+        armazenagem_por_kg_quinzena: Number(paramForm.armazenagem_por_kg_quinzena),
+        devolucao_por_saca: Number(paramForm.devolucao_por_saca),
+        carencia_dias: Number(paramForm.carencia_dias),
+        kg_por_saca: Number(paramForm.kg_por_saca),
+        data_atual: paramForm.data_atual,
+        cotacao_simulada_sc: paramForm.cotacao_simulada_sc === "" ? null : Number(paramForm.cotacao_simulada_sc),
+        observacao: null,
+      };
+      const saved = await upsertParametro(payload);
+      setParam(saved);
+      setParametros((prev) => {
+        const idx = prev.findIndex((p) => p.id === saved.id);
+        if (idx >= 0) { const copy = [...prev]; copy[idx] = saved; return copy; }
+        return [...prev, saved];
+      });
+      toast.success("Parâmetros atualizados", "Os cálculos foram recalculados.");
+      await fetchDepositos();
+    } catch (e: unknown) {
+      toast.error("Não foi possível salvar parâmetros", (e as Error).message);
+    } finally {
+      setParamSaving(false);
+    }
+  }
+
+  // ---- CRUD depósito ----
+  function openNovoDep() {
+    setDepEditId(null);
+    setDepForm({ ...EMPTY_DEP, cultura, safra });
+    setDepModal(true);
+  }
+  function openEditDep(r: SafraDepositoCalculadoRow) {
+    setDepEditId(r.id);
+    setDepForm({
+      cultura: r.cultura,
+      safra: r.safra,
+      data_deposito: r.data_deposito,
+      dfe_entrada: r.dfe_entrada ?? "",
+      nfp: r.nfp ?? "",
+      kg_bruto: String(r.kg_bruto),
+      status: r.status,
+      observacao: r.observacao ?? "",
+    });
+    setDepModal(true);
+  }
+  async function saveDep() {
+    if (!armazemId || !depForm.kg_bruto || !depForm.safra || !depForm.data_deposito) {
+      toast.warning("Campos obrigatórios", "Safra, data e quantidade são obrigatórios.");
+      return;
+    }
+    setDepSaving(true);
+    try {
+      type P = Database["public"]["Tables"]["safra_depositos"]["Insert"];
+      const payload: P = {
+        armazem_id: armazemId,
+        cultura: depForm.cultura,
+        safra: depForm.safra.trim(),
+        data_deposito: depForm.data_deposito,
+        dfe_entrada: depForm.dfe_entrada.trim() || null,
+        nfp: depForm.nfp.trim() || null,
+        kg_bruto: Number(depForm.kg_bruto),
+        status: depForm.status,
+        observacao: depForm.observacao.trim() || null,
+        origem_planilha: null,
+        created_by: null,
+      };
+      if (depEditId) {
+        await atualizarDeposito(depEditId, payload);
+        toast.success("Depósito atualizado");
+      } else {
+        await criarDeposito(payload);
+        toast.success("Depósito registrado");
+      }
+      setDepModal(false);
+      await fetchDepositos();
+    } catch (e: unknown) {
+      toast.error("Não foi possível salvar", (e as Error).message);
+    } finally {
+      setDepSaving(false);
+    }
+  }
+  async function removeDep(r: SafraDepositoCalculadoRow) {
+    if (!confirm(`Excluir depósito DFe ${r.dfe_entrada ?? "(s/ DFe)"} de ${fmtKg(Number(r.kg_bruto))}?`)) return;
+    try {
+      await deletarDeposito(r.id);
+      toast.success("Depósito excluído");
+      await fetchDepositos();
+    } catch (e: unknown) {
+      toast.error("Não foi possível excluir", (e as Error).message);
+    }
+  }
+
+  // ---- render ----
   return (
-    <div className="space-y-6 max-w-[1400px]">
+    <div className="space-y-6 max-w-[1500px]">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold text-[#0f1f1c]">Estoque</h1>
-          <p className="text-sm text-stone-500">Controle de inventário</p>
+          <h1 className="text-xl font-bold text-[#0f1f1c]">Estoque & Safra</h1>
+          <p className="text-sm text-stone-500">
+            Acompanhamento de grãos armazenados — taxa de armazenagem, quebra técnica e simulação de venda
+          </p>
         </div>
-        <Button size="sm" onClick={openNew}><Plus size={14} /> Adicionar Produto</Button>
+        <Button size="sm" onClick={openNovoDep} disabled={!armazemId}>
+          <Plus size={14} /> Novo Depósito
+        </Button>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Total de Itens" value={String(totais.total)} icon={<Package size={16}/>} />
-        <KpiCard label="Em Estoque" value={String(totais.emEstoque)} trend="up" icon={<CheckCircle2 size={16}/>} />
-        <KpiCard label="Críticos/Baixos" value={String(totais.criticos)} trend={totais.criticos > 0 ? "down" : "neutral"} icon={<AlertTriangle size={16}/>} />
-        <KpiCard label="Valor Total" value={formatCurrency(totais.valorTotal)} trend="up" icon={<Package size={16}/>} />
-      </div>
-
-      {/* Chart */}
+      {/* Seletor: Armazém × Cultura × Safra */}
       <Card>
-        <CardHeader><CardTitle>Quantidade por Categoria</CardTitle></CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={barData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" />
-              <XAxis dataKey="categoria" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12 }} />
-              <Bar dataKey="quantidade" name="Qtd" fill="#22c55e" radius={[4,4,0,0]} />
-            </BarChart>
-          </ResponsiveContainer>
+        <CardContent className="p-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Select label="Armazém" value={armazemId} onChange={(e) => { setArmazemId(e.target.value); setSafra(""); }}>
+              <option value="">Selecione…</option>
+              {armazens.map((a) => (
+                <option key={a.id} value={a.id}>{a.apelido ?? a.nome}</option>
+              ))}
+            </Select>
+            <Select label="Cultura" value={cultura} onChange={(e) => { setCultura(e.target.value as CulturaSafra); }}>
+              {(Object.keys(CULTURA_LABEL) as CulturaSafra[])
+                .filter((c) => culturasDistintas.length === 0 || culturasDistintas.includes(c))
+                .map((c) =>
+                  <option key={c} value={c}>{CULTURA_EMOJI[c]} {CULTURA_LABEL[c]}</option>
+                )}
+            </Select>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-stone-700">Safra</label>
+              <div className="flex gap-2">
+                <select
+                  value={safra}
+                  onChange={(e) => setSafra(e.target.value)}
+                  className="flex-1 h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent-400"
+                >
+                  <option value="">Selecione…</option>
+                  {safrasDistintas.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <input
+                  placeholder="ou digitar…"
+                  value={safra}
+                  onChange={(e) => setSafra(e.target.value)}
+                  className="w-28 h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent-400"
+                />
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
-      {/* Table */}
+      {/* Cards principais — Safra / Armazém / Quantidade */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="border-l-4 border-l-[#a67c20]">
+          <CardContent className="p-5 flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-700">
+              <Sprout size={20} />
+            </div>
+            <div>
+              <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Safra / Cultura</p>
+              <p className="text-lg font-bold text-stone-800">
+                {CULTURA_EMOJI[cultura]} {CULTURA_LABEL[cultura]} {safra && `· ${safra}`}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-[#3a6230]">
+          <CardContent className="p-5 flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-700">
+              <Warehouse size={20} />
+            </div>
+            <div>
+              <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Armazém</p>
+              <p className="text-lg font-bold text-stone-800">
+                {armazem?.apelido ?? armazem?.nome ?? "—"}
+              </p>
+              {armazem?.cidade && <p className="text-xs text-stone-500">{armazem.cidade}/{armazem.uf}</p>}
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-[#5a9485]">
+          <CardContent className="p-5 flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-sky-50 flex items-center justify-center text-sky-700">
+              <PackageCheck size={20} />
+            </div>
+            <div>
+              <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Quantidade Armazenada</p>
+              <p className="text-lg font-bold text-stone-800">{fmtKg(resumo.total_kg_bruto)}</p>
+              <p className="text-xs text-stone-500">{fmtSc(resumo.total_sc_bruto)} brutas</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Painel de cálculos + Parâmetros */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Parâmetros (editáveis) */}
+        <Card className="lg:col-span-1">
+          <CardHeader>
+            <CardTitle>
+              Parâmetros
+              <Tooltip text="Taxas e regras desta safra. Editar aqui recalcula todos os depósitos em tempo real." position="bottom">
+                <HelpCircle size={12} className="inline-block ml-1 text-stone-300" />
+              </Tooltip>
+            </CardTitle>
+            <Calculator size={16} className="text-stone-400" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {!paramForm ? (
+              <p className="text-xs text-stone-400">Selecione um armazém, cultura e safra para configurar.</p>
+            ) : (
+              <>
+                <div>
+                  <div className="flex items-center gap-1 mb-1.5">
+                    <label className="text-xs font-medium text-stone-600">Data Atual (referência do cálculo)</label>
+                    <Tooltip text="Data simulada para 'congelar' os cálculos de quebra técnica e armazenagem. Mudar essa data recalcula tudo automaticamente." position="bottom">
+                      <HelpCircle size={11} className="text-stone-300" />
+                    </Tooltip>
+                  </div>
+                  <input type="date" value={paramForm.data_atual}
+                    onChange={(e) => setParamForm({ ...paramForm, data_atual: e.target.value })}
+                    className="w-full h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent-400"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1 mb-1.5">
+                    <label className="text-xs font-medium text-stone-600">Cotação Simulada (R$/saca)</label>
+                    <Tooltip text="Preço hipotético para projetar o valor da venda. NÃO grava negócio — só simula a coluna 'Valor de Venda'." position="bottom">
+                      <HelpCircle size={11} className="text-stone-300" />
+                    </Tooltip>
+                  </div>
+                  <input type="number" step="0.01" value={paramForm.cotacao_simulada_sc}
+                    onChange={(e) => setParamForm({ ...paramForm, cotacao_simulada_sc: e.target.value })}
+                    placeholder="R$ 50,00"
+                    className="w-full h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent-400"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-stone-100">
+                  <div>
+                    <label className="text-[10px] font-medium text-stone-500 uppercase">Quebra/Quinzena</label>
+                    <input type="number" step="0.00001" value={paramForm.quebra_quinzena_pct}
+                      onChange={(e) => setParamForm({ ...paramForm, quebra_quinzena_pct: e.target.value })}
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                    />
+                    <span className="text-[10px] text-stone-400">ex: 0.0015 = 0,15%</span>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-stone-500 uppercase">Carência (dias)</label>
+                    <input type="number" value={paramForm.carencia_dias}
+                      onChange={(e) => setParamForm({ ...paramForm, carencia_dias: e.target.value })}
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-stone-500 uppercase">Armaz. kg/quinz</label>
+                    <input type="number" step="0.0001" value={paramForm.armazenagem_por_kg_quinzena}
+                      onChange={(e) => setParamForm({ ...paramForm, armazenagem_por_kg_quinzena: e.target.value })}
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                    />
+                    <span className="text-[10px] text-stone-400">R$ por kg / 15 dias</span>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-stone-500 uppercase">Devolução/saca</label>
+                    <input type="number" step="0.01" value={paramForm.devolucao_por_saca}
+                      onChange={(e) => setParamForm({ ...paramForm, devolucao_por_saca: e.target.value })}
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-medium text-stone-500 uppercase">kg por saca</label>
+                    <input type="number" step="0.01" value={paramForm.kg_por_saca}
+                      onChange={(e) => setParamForm({ ...paramForm, kg_por_saca: e.target.value })}
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                    />
+                  </div>
+                </div>
+                <Button size="sm" className="w-full mt-2" onClick={saveParam} loading={paramSaving} disabled={paramSaving}>
+                  <Save size={14}/> Aplicar / Salvar Parâmetros
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Cálculo consolidado de taxas */}
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>
+              Cálculo Consolidado
+              <Tooltip text="Resumo dos custos da safra na data definida acima. 'Saldo a receber' = receita simulada - todas as taxas." position="bottom">
+                <HelpCircle size={12} className="inline-block ml-1 text-stone-300" />
+              </Tooltip>
+            </CardTitle>
+            <Calendar size={16} className="text-stone-400" />
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="rounded-lg bg-stone-50 p-3">
+                <p className="text-[10px] uppercase text-stone-500 font-medium tracking-wide">Quebra Técnica</p>
+                <p className="text-base font-bold text-red-600">{fmtKg(resumo.total_quebra_kg)}</p>
+                <p className="text-[10px] text-stone-400 mt-0.5">do total bruto</p>
+              </div>
+              <div className="rounded-lg bg-stone-50 p-3">
+                <p className="text-[10px] uppercase text-stone-500 font-medium tracking-wide">Líquido após quebra</p>
+                <p className="text-base font-bold text-stone-800">{fmtKg(resumo.total_kg_liquido)}</p>
+                <p className="text-[10px] text-stone-400 mt-0.5">{fmtSc(resumo.total_sc_liquida)}</p>
+              </div>
+              <div className="rounded-lg bg-stone-50 p-3">
+                <p className="text-[10px] uppercase text-stone-500 font-medium tracking-wide">Taxa Armazenagem</p>
+                <p className="text-base font-bold text-orange-600">{formatCurrency(resumo.total_taxa_armazenagem)}</p>
+              </div>
+              <div className="rounded-lg bg-stone-50 p-3">
+                <p className="text-[10px] uppercase text-stone-500 font-medium tracking-wide">Taxa Devolução</p>
+                <p className="text-base font-bold text-orange-600">{formatCurrency(resumo.total_taxa_devolucao)}</p>
+              </div>
+              <div className="rounded-lg bg-red-50 border border-red-100 p-3">
+                <p className="text-[10px] uppercase text-red-700 font-medium tracking-wide flex items-center gap-1">
+                  <TrendingDown size={11}/> Total a Descontar
+                </p>
+                <p className="text-base font-bold text-red-700">{formatCurrency(resumo.total_a_descontar)}</p>
+              </div>
+              <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
+                <p className="text-[10px] uppercase text-emerald-700 font-medium tracking-wide flex items-center gap-1">
+                  <Coins size={11}/> Valor de Venda (simulado)
+                </p>
+                <p className="text-base font-bold text-emerald-700">{formatCurrency(resumo.total_valor_venda)}</p>
+              </div>
+            </div>
+            <div className="mt-4 rounded-lg bg-gradient-to-r from-[#0f1f1c] to-[#1a3028] p-4 text-white flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase text-[#7ab8aa] font-medium tracking-wide flex items-center gap-1">
+                  <ArrowDownToLine size={11}/> Saldo a receber se vender hoje
+                </p>
+                <p className="text-2xl font-bold">{formatCurrency(resumo.saldo_a_receber)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] uppercase text-[#7ab8aa]">{resumo.qtd_depositos} DFe(s)</p>
+                <p className="text-xs">{fmtKg(resumo.total_kg_bruto)} brutos</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Gráfico de depósitos por dia */}
+      {resumo.por_data_deposito.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Depósitos por Data</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={resumo.por_data_deposito} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" />
+                <XAxis dataKey="data" tick={{ fontSize: 11 }} axisLine={false} tickLine={false}
+                  tickFormatter={(d) => formatDate(d)}
+                />
+                <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false}
+                  tickFormatter={(v) => `${(v / 1000).toFixed(0)}t`}
+                />
+                <RTooltip
+                  contentStyle={{ borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12 }}
+                  formatter={(v: unknown) => fmtKg(Number(v) || 0)}
+                  labelFormatter={(l: unknown) => formatDate(String(l ?? ""))}
+                />
+                <Bar dataKey="kg_bruto" name="Bruto" fill="#a67c20" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="kg_liquido" name="Líquido" fill="#3a6230" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Tabela detalhada de depósitos */}
       <Card>
-        <CardHeader>
-          <CardTitle>Produtos</CardTitle>
-          <div className="flex items-center gap-2 flex-wrap">
+        <CardHeader className="flex-col items-start gap-3 lg:flex-row lg:items-center">
+          <CardTitle>Detalhe dos Depósitos</CardTitle>
+          <div className="flex items-center gap-2 flex-wrap ml-auto">
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
               <input
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                placeholder="Buscar produto..."
-                className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-44 focus:outline-none focus:ring-1 focus:ring-accent-400"
+                placeholder="DFe, NFP, observação..."
+                className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-56 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
             </div>
-            <select
-              value={filterStatus}
-              onChange={(e) => { setFilterStatus(e.target.value as EstoqueStatus | ""); setPage(1); }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs focus:outline-none"
-            >
+            <select value={filterStatus}
+              onChange={(e) => { setFilterStatus(e.target.value as SafraDepositoStatus | ""); setPage(1); }}
+              className="h-8 rounded-lg border border-stone-200 px-2 text-xs">
               <option value="">Todos status</option>
-              <option value="em_estoque">Em Estoque</option>
-              <option value="baixo_estoque">Baixo Estoque</option>
-              <option value="critico">Crítico</option>
-              <option value="esgotado">Esgotado</option>
-            </select>
-            <select
-              value={filterCat}
-              onChange={(e) => { setFilterCat(e.target.value); setPage(1); }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs focus:outline-none"
-            >
-              <option value="">Todas categorias</option>
-              {CATEGORIAS_EST.map(c => <option key={c}>{c}</option>)}
+              {(Object.keys(SAFRA_DEP_STATUS_LABEL) as SafraDepositoStatus[]).map((s) =>
+                <option key={s} value={s}>{SAFRA_DEP_STATUS_LABEL[s]}</option>)}
             </select>
           </div>
         </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-xs">
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-100">
-                  {["Produto","Categoria","Qtd","Un.","Valor Unit.","Total","Fornecedor","Status","Ações"].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase">{h}</th>
+                  {["Data","DFe","NFP","kg Bruto","Sc Bruto","Dias","Qz","Quebra","kg Líq","Sc Líq","Tx Armaz","Tx Devol","Total Desc","Valor Venda","Status","Ações"].map((h) => (
+                    <th key={h} className="px-2 py-3 text-left text-[10px] font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {paged.map((p) => {
-                  const meta = statusMeta[p.status];
-                  return (
-                    <tr key={p.id} className="border-b border-stone-50 hover:bg-stone-50 transition table-row-alt">
-                      <td className="px-4 py-3 font-medium text-stone-700">{p.produto}</td>
-                      <td className="px-4 py-3 text-stone-500 text-xs">{p.categoria}</td>
-                      <td className="px-4 py-3 font-semibold text-stone-800">{p.quantidade}</td>
-                      <td className="px-4 py-3 text-stone-500 text-xs">{p.unidade}</td>
-                      <td className="px-4 py-3 text-stone-700">{formatCurrency(p.valor_unitario)}</td>
-                      <td className="px-4 py-3 font-semibold text-stone-700">{formatCurrency(p.quantidade * p.valor_unitario)}</td>
-                      <td className="px-4 py-3 text-stone-500 text-xs">{p.fornecedor}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant={meta.variant}>
-                          <span className="flex items-center gap-1">{meta.icon}{meta.label}</span>
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => openEdit(p)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition"><Edit2 size={13}/></button>
-                          <button onClick={() => handleDelete(p.id)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition"><Trash2 size={13}/></button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {paged.length === 0 && (
-                  <tr><td colSpan={9} className="px-4 py-10 text-center text-stone-400 text-sm">Nenhum produto encontrado.</td></tr>
+                {loading && (
+                  <tr><td colSpan={16} className="px-4 py-12 text-center text-stone-400">
+                    <Loader2 size={18} className="inline-block animate-spin mr-2" /> Carregando…
+                  </td></tr>
                 )}
+                {!loading && paged.length === 0 && (
+                  <tr><td colSpan={16} className="px-4 py-12 text-center text-stone-400">
+                    Nenhum depósito encontrado. Clique em &quot;Novo Depósito&quot; para começar.
+                  </td></tr>
+                )}
+                {!loading && paged.map((r) => (
+                  <tr key={r.id} className="border-b border-stone-50 hover:bg-stone-50 transition-colors table-row-alt">
+                    <td className="px-2 py-2 text-stone-500 whitespace-nowrap">{formatDate(r.data_deposito)}</td>
+                    <td className="px-2 py-2 text-stone-700 font-mono">{r.dfe_entrada ?? "—"}</td>
+                    <td className="px-2 py-2 text-stone-700 font-mono">{r.nfp ?? "—"}</td>
+                    <td className="px-2 py-2 text-stone-800 text-right font-medium">{Number(r.kg_bruto).toLocaleString("pt-BR")}</td>
+                    <td className="px-2 py-2 text-stone-500 text-right">{Number(r.sc_bruto).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td>
+                    <td className="px-2 py-2 text-stone-500 text-right">{r.dias_percorridos}</td>
+                    <td className="px-2 py-2 text-stone-500 text-right">{Number(r.quinzenas).toFixed(2)}</td>
+                    <td className="px-2 py-2 text-red-600 text-right">{Number(r.quebra_kg).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
+                    <td className="px-2 py-2 text-stone-700 text-right">{Number(r.kg_liquido).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
+                    <td className="px-2 py-2 text-stone-700 text-right">{Number(r.sc_liquida).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td>
+                    <td className="px-2 py-2 text-orange-700 text-right">{formatCurrency(Number(r.taxa_armazenagem))}</td>
+                    <td className="px-2 py-2 text-orange-700 text-right">{formatCurrency(Number(r.taxa_devolucao))}</td>
+                    <td className="px-2 py-2 text-red-700 font-semibold text-right">{formatCurrency(Number(r.total_a_descontar))}</td>
+                    <td className="px-2 py-2 text-emerald-700 font-semibold text-right">{formatCurrency(Number(r.valor_venda_simulado))}</td>
+                    <td className="px-2 py-2"><Badge variant={statusBadge(r.status)}>{SAFRA_DEP_STATUS_LABEL[r.status]}</Badge></td>
+                    <td className="px-2 py-2">
+                      <div className="flex items-center gap-0.5">
+                        <button onClick={() => openEditDep(r)} className="p-1 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar"><Edit2 size={12}/></button>
+                        <button onClick={() => removeDep(r)} className="p-1 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir"><Trash2 size={12}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
+              {!loading && rows.length > 0 && (
+                <tfoot>
+                  <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700 text-[11px]">
+                    <td colSpan={3} className="px-2 py-2.5 uppercase tracking-wide">Totais</td>
+                    <td className="px-2 py-2.5 text-right">{resumo.total_kg_bruto.toLocaleString("pt-BR")}</td>
+                    <td className="px-2 py-2.5 text-right">{resumo.total_sc_bruto.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td>
+                    <td colSpan={2}></td>
+                    <td className="px-2 py-2.5 text-red-700 text-right">{resumo.total_quebra_kg.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
+                    <td className="px-2 py-2.5 text-right">{resumo.total_kg_liquido.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
+                    <td className="px-2 py-2.5 text-right">{resumo.total_sc_liquida.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td>
+                    <td className="px-2 py-2.5 text-orange-700 text-right">{formatCurrency(resumo.total_taxa_armazenagem)}</td>
+                    <td className="px-2 py-2.5 text-orange-700 text-right">{formatCurrency(resumo.total_taxa_devolucao)}</td>
+                    <td className="px-2 py-2.5 text-red-700 text-right">{formatCurrency(resumo.total_a_descontar)}</td>
+                    <td className="px-2 py-2.5 text-emerald-700 text-right">{formatCurrency(resumo.total_valor_venda)}</td>
+                    <td colSpan={2}></td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
           <div className="flex items-center justify-between px-4 py-3 border-t border-stone-100">
-            <p className="text-xs text-stone-400">{filtered.length} produto(s)</p>
+            <p className="text-xs text-stone-400">
+              {loading ? "…" : `${rows.length} depósito${rows.length === 1 ? "" : "s"}`}
+            </p>
             <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
           </div>
         </CardContent>
       </Card>
 
-      {/* Modal */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editRow ? "Editar Produto" : "Novo Produto"}>
+      {/* Modal Depósito */}
+      <Modal open={depModal} onClose={() => setDepModal(false)}
+        title={depEditId ? "Editar Depósito" : "Novo Depósito"} size="lg">
         <div className="p-6 space-y-4">
-          <Input label="Produto" value={form.produto} onChange={(e) => setForm({ ...form, produto: e.target.value })} placeholder="Nome do produto" />
-          <div className="grid grid-cols-2 gap-4">
-            <Select label="Categoria" value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
-              {CATEGORIAS_EST.map(c => <option key={c}>{c}</option>)}
+          <div className="grid grid-cols-2 gap-3">
+            <Select label="Cultura *" value={depForm.cultura}
+              onChange={(e) => setDepForm({ ...depForm, cultura: e.target.value as CulturaSafra })}>
+              {(Object.keys(CULTURA_LABEL) as CulturaSafra[]).map((c) =>
+                <option key={c} value={c}>{CULTURA_EMOJI[c]} {CULTURA_LABEL[c]}</option>)}
             </Select>
-            <Select label="Status" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as EstoqueStatus })}>
-              <option value="em_estoque">Em Estoque</option>
-              <option value="baixo_estoque">Baixo Estoque</option>
-              <option value="critico">Crítico</option>
-              <option value="esgotado">Esgotado</option>
+            <Input label="Safra *" placeholder="25/25" value={depForm.safra}
+              onChange={(e) => setDepForm({ ...depForm, safra: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Input label="Data Depósito *" type="date" value={depForm.data_deposito}
+              onChange={(e) => setDepForm({ ...depForm, data_deposito: e.target.value })} />
+            <Input label="DFe (entrada)" placeholder="54383" value={depForm.dfe_entrada}
+              onChange={(e) => setDepForm({ ...depForm, dfe_entrada: e.target.value })} />
+            <Input label="NFP" placeholder="8285721" value={depForm.nfp}
+              onChange={(e) => setDepForm({ ...depForm, nfp: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Quantidade (kg bruto) *" type="number" step="0.001"
+              value={depForm.kg_bruto} onChange={(e) => setDepForm({ ...depForm, kg_bruto: e.target.value })} />
+            <Select label="Status" value={depForm.status}
+              onChange={(e) => setDepForm({ ...depForm, status: e.target.value as SafraDepositoStatus })}>
+              {(Object.keys(SAFRA_DEP_STATUS_LABEL) as SafraDepositoStatus[]).map((s) =>
+                <option key={s} value={s}>{SAFRA_DEP_STATUS_LABEL[s]}</option>)}
             </Select>
           </div>
-          <div className="grid grid-cols-3 gap-4">
-            <Input label="Quantidade" type="number" value={String(form.quantidade)} onChange={(e) => setForm({ ...form, quantidade: Number(e.target.value) })} />
-            <Input label="Unidade" value={form.unidade} onChange={(e) => setForm({ ...form, unidade: e.target.value })} />
-            <Input label="Valor Unit. (R$)" type="number" value={String(form.valor_unitario)} onChange={(e) => setForm({ ...form, valor_unitario: Number(e.target.value) })} />
-          </div>
-          <Input label="Fornecedor" value={form.fornecedor} onChange={(e) => setForm({ ...form, fornecedor: e.target.value })} />
+          <Textarea label="Observação" rows={2} value={depForm.observacao}
+            onChange={(e) => setDepForm({ ...depForm, observacao: e.target.value })} />
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
-            <Button onClick={handleSave}>{editRow ? "Salvar" : "Adicionar"}</Button>
+            <Button variant="ghost" onClick={() => setDepModal(false)}>Cancelar</Button>
+            <Button onClick={saveDep} loading={depSaving} disabled={depSaving}>
+              {depEditId ? "Salvar Alterações" : "Adicionar"}
+            </Button>
           </div>
         </div>
       </Modal>

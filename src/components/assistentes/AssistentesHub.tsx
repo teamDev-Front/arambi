@@ -18,8 +18,11 @@ interface Agent {
   status: "ativo" | "em_breve";
 }
 
+// Decisão de produto 15/05/2026: o Assistente Financeiro foi escondido por
+// enquanto (volume de dados grande demais para um único agente). Mantemos a
+// definição comentada para reativar quando o pipeline estiver pronto.
+//   { id: "financeiro", nome: "Assistente Financeiro", ... }
 const AGENTS: Agent[] = [
-  { id: "financeiro", nome: "Assistente Financeiro", descricao: "Relatórios e análise financeira. Consulte gastos, receitas e indicadores.", icon: <DollarSign size={22}/>, color: "bg-emerald-700", area: "Financeiro", status: "ativo" },
   { id: "contabilidade", nome: "Assistente de Contabilidade", descricao: "Auxílio contábil, lançamentos e conciliação bancária.", icon: <Calculator size={22}/>, color: "bg-blue-700", area: "Contabilidade", status: "ativo" },
   { id: "adv-trabalhista", nome: "Assistente Adv. Trabalhista", descricao: "Suporte jurídico trabalhista, contratos CLT e legislação.", icon: <Scale size={22}/>, color: "bg-purple-700", area: "Jurídico", status: "ativo" },
   { id: "adv-ambiental", nome: "Assistente Adv. Ambiental", descricao: "Legislação ambiental, licenciamentos e conformidade.", icon: <Leaf size={22}/>, color: "bg-green-700", area: "Jurídico", status: "ativo" },
@@ -30,9 +33,9 @@ const AGENTS: Agent[] = [
 ];
 
 const RECENTES = [
-  { session: "adriana-financeiro", agente: "Assistente Financeiro", ultima: "Preciso do relatório financeiro deste mês.", tempo: "há 5 min" },
   { session: "joao-adv-trabalhista", agente: "Adv. Trabalhista", ultima: "Qual o prazo para homologação?", tempo: "há 2h" },
   { session: "maria-contabilidade", agente: "Contabilidade", ultima: "Como lançar essa despesa?", tempo: "há 1 dia" },
+  { session: "lola-fiscal", agente: "Fiscal / NF-e", ultima: "Confirmando a emissão da NF 256.", tempo: "há 2 dias" },
 ];
 
 export function AssistentesHub() {
@@ -97,7 +100,7 @@ export function AssistentesHub() {
                     <td className="px-4 py-3 text-stone-500 text-xs truncate max-w-[200px]">{r.ultima}</td>
                     <td className="px-4 py-3 text-stone-400 text-xs">{r.tempo}</td>
                     <td className="px-4 py-3">
-                      <Link href={`/dashboard/assistentes/financeiro`}>
+                      <Link href={`/dashboard/assistentes/contabilidade`}>
                         <Button variant="ghost" size="sm">Abrir</Button>
                       </Link>
                     </td>

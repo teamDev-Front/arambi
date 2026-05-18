@@ -27,6 +27,12 @@ export type LtsStatus       = "pago" | "em_aberto" | "vence_hoje" | "vencido" | 
 export type LogTipo         = "auth" | "chat" | "import" | "export" | "crud" | "system";
 export type ChatRole        = "user" | "assistant" | "system";
 
+// Novos enums — vendas/safra/pdfmonkey
+export type CulturaSafra    = "soja" | "milho" | "sorgo" | "girassol" | "algodao" | "feijao" | "trigo";
+export type VendaStatus     = "firmada" | "parcial" | "liquidada" | "cancelada";
+export type SafraDepositoStatus = "armazenado" | "vendido_parcial" | "vendido_total" | "retirado" | "baixa";
+export type PdfMonkeySlug   = "capa_empresa" | "capa_socio" | "relatorio_contabil" | "relatorio_socios";
+
 // ============================================================================
 // Tabelas
 // ============================================================================
@@ -85,6 +91,8 @@ export type ContaBancariaEmpresaRow = WithTimestamps & {
   agencia: string | null;
   conta: string | null;
   tipo: string | null;
+  numero_conta: string | null;
+  digito: string | null;
   ativa: boolean;
   ordem: number | null;
 };
@@ -96,6 +104,10 @@ export type ContaBancariaSocioRow = WithTimestamps & {
   banco: string | null;
   agencia: string | null;
   conta: string | null;
+  tipo: string | null;
+  numero_conta: string | null;
+  digito: string | null;
+  email_chave: string | null;
   ativa: boolean;
   ordem: number | null;
 };
@@ -169,6 +181,155 @@ export type TransacaoSocioRow = {
 export type TransacaoSocioInsert = Omit<TransacaoSocioRow, "id" | "mes_referencia" | "created_at" | "updated_at">;
 
 // ============================================================================
+// Tabelas Vendas Futuras + Safra (migrations 0014/0015)
+// ============================================================================
+
+export type ArmazemRow = WithTimestamps & {
+  id: string;
+  nome: string;
+  apelido: string | null;
+  cnpj: string | null;
+  cidade: string | null;
+  uf: string | null;
+  observacao: string | null;
+  ativo: boolean;
+  ordem: number | null;
+};
+
+export type SafraParametrosRow = WithTimestamps & {
+  id: string;
+  armazem_id: string;
+  cultura: CulturaSafra;
+  safra: string;
+  quebra_quinzena_pct: number;
+  armazenagem_por_kg_quinzena: number;
+  devolucao_por_saca: number;
+  carencia_dias: number;
+  kg_por_saca: number;
+  data_atual: string;                       // "YYYY-MM-DD"
+  cotacao_simulada_sc: number | null;
+  observacao: string | null;
+};
+
+export type SafraDepositoRow = WithTimestamps & {
+  id: string;
+  armazem_id: string;
+  cultura: CulturaSafra;
+  safra: string;
+  data_deposito: string;
+  dfe_entrada: string | null;
+  nfp: string | null;
+  kg_bruto: number;
+  status: SafraDepositoStatus;
+  observacao: string | null;
+  origem_planilha: string | null;
+  created_by: string | null;
+};
+
+export type SafraDepositoCalculadoRow = {
+  id: string;
+  armazem_id: string;
+  armazem_nome: string;
+  armazem_apelido: string | null;
+  cultura: CulturaSafra;
+  safra: string;
+  data_deposito: string;
+  dfe_entrada: string | null;
+  nfp: string | null;
+  kg_bruto: number;
+  status: SafraDepositoStatus;
+  observacao: string | null;
+  created_at: string;
+  updated_at: string;
+  parametros_id: string | null;
+  quebra_quinzena_pct: number | null;
+  armazenagem_por_kg_quinzena: number | null;
+  devolucao_por_saca: number | null;
+  carencia_dias: number | null;
+  kg_por_saca: number | null;
+  data_atual: string | null;
+  cotacao_simulada_sc: number | null;
+  sc_bruto: number;
+  dias_percorridos: number;
+  quinzenas: number;
+  quebra_kg: number;
+  kg_liquido: number;
+  sc_liquida: number;
+  taxa_armazenagem: number;
+  taxa_devolucao: number;
+  total_a_descontar: number;
+  valor_venda_simulado: number;
+};
+
+export type VendaProvisionadaRow = WithTimestamps & {
+  id: string;
+  data_venda: string;
+  comprador: string;
+  cultura: CulturaSafra;
+  safra: string;
+  aut_fixacao: string | null;
+  numero_contrato: string | null;
+  nota_fiscal: string | null;
+  kg: number;
+  preco_sc: number;
+  kg_por_saca: number;
+  data_pgto_prevista: string;
+  destino_empresa: boolean;
+  socio_destino_id: string | null;
+  taxa_armazenagem: number;
+  observacao: string | null;
+  status: VendaStatus;
+  transacao_empresa_id: string | null;
+  origem_planilha: string | null;
+  created_by: string | null;
+};
+
+export type VendaProvisionadaRichRow = VendaProvisionadaRow & {
+  sacas: number;
+  valor_total: number;
+  socio_destino_nome: string | null;
+  socio_destino_apelido: string | null;
+  mes_recebimento: string;
+  trimestre_recebimento: string;
+};
+
+export type VendaPorPeriodoRow = {
+  destino_empresa: boolean;
+  socio_destino_id: string | null;
+  cultura: CulturaSafra;
+  safra: string;
+  qtd: number;
+  sacas_total: number;
+  valor_total: number;
+  // discriminantes (uma view tem mes, outra tem tri)
+  mes_recebimento?: string;
+  trimestre_recebimento?: string;
+};
+
+export type PdfMonkeyTemplateRow = WithTimestamps & {
+  slug: PdfMonkeySlug;
+  nome: string;
+  descricao: string | null;
+  template_id: string | null;
+  ativo: boolean;
+  exemplo_payload: Json | null;
+};
+
+export type PdfMonkeyGeracaoRow = {
+  id: string;
+  template_slug: PdfMonkeySlug;
+  mes_referencia: string | null;
+  socio_id: string | null;
+  pdfmonkey_document_id: string | null;
+  status: string | null;
+  download_url: string | null;
+  payload: Json | null;
+  erro: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+// ============================================================================
 // Database type (formato esperado pelo @supabase/postgrest-js)
 // ============================================================================
 // Cada Tabela precisa de Row + Insert + Update + Relationships (mesmo vazio).
@@ -238,6 +399,42 @@ export interface Database {
         Row: TransacaoSocioRow;
         Insert: TransacaoSocioInsert;
         Update: Partial<TransacaoSocioInsert>;
+        Relationships: EmptyRels;
+      };
+      armazens: {
+        Row: ArmazemRow;
+        Insert: Omit<ArmazemRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<ArmazemRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      safra_parametros: {
+        Row: SafraParametrosRow;
+        Insert: Omit<SafraParametrosRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<SafraParametrosRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      safra_depositos: {
+        Row: SafraDepositoRow;
+        Insert: Omit<SafraDepositoRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<SafraDepositoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      vendas_provisionadas: {
+        Row: VendaProvisionadaRow;
+        Insert: Omit<VendaProvisionadaRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<VendaProvisionadaRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      pdfmonkey_templates: {
+        Row: PdfMonkeyTemplateRow;
+        Insert: Omit<PdfMonkeyTemplateRow, "created_at" | "updated_at">;
+        Update: Partial<Omit<PdfMonkeyTemplateRow, "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      pdfmonkey_geracoes: {
+        Row: PdfMonkeyGeracaoRow;
+        Insert: Omit<PdfMonkeyGeracaoRow, "id" | "created_at">;
+        Update: Partial<Omit<PdfMonkeyGeracaoRow, "id" | "created_at">>;
         Relationships: EmptyRels;
       };
     };
@@ -321,6 +518,22 @@ export interface Database {
           saldo_projetado: number;
           total_lancamentos: number;
         };
+        Relationships: EmptyRels;
+      };
+      v_safra_depositos_calculado: {
+        Row: SafraDepositoCalculadoRow;
+        Relationships: EmptyRels;
+      };
+      v_vendas_provisionadas: {
+        Row: VendaProvisionadaRichRow;
+        Relationships: EmptyRels;
+      };
+      v_vendas_por_trimestre: {
+        Row: Required<Pick<VendaPorPeriodoRow, "destino_empresa" | "socio_destino_id" | "cultura" | "safra" | "qtd" | "sacas_total" | "valor_total" | "trimestre_recebimento">>;
+        Relationships: EmptyRels;
+      };
+      v_vendas_por_mes: {
+        Row: Required<Pick<VendaPorPeriodoRow, "destino_empresa" | "socio_destino_id" | "cultura" | "safra" | "qtd" | "sacas_total" | "valor_total" | "mes_recebimento">>;
         Relationships: EmptyRels;
       };
     };

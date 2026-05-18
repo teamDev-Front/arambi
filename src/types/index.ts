@@ -1,6 +1,7 @@
 // Tipos públicos do app (re-export e helpers).
 export type {
   Database,
+  Json,
   StatusAramburu,
   StatusDL,
   TipoDespesa,
@@ -13,17 +14,33 @@ export type {
   LtsStatus,
   LogTipo,
   ChatRole,
+  CulturaSafra,
+  VendaStatus,
+  SafraDepositoStatus,
+  PdfMonkeySlug,
   ClassificacaoFinanceiraRow,
   ClassificacaoPessoalRow,
   SocioRow,
   ContaBancariaEmpresaRow,
+  ContaBancariaSocioRow,
   TransacaoEmpresaRow,
   TransacaoEmpresaInsert,
   TransacaoEmpresaUpdate,
   TransacaoSocioRow,
+  ArmazemRow,
+  SafraParametrosRow,
+  SafraDepositoRow,
+  SafraDepositoCalculadoRow,
+  VendaProvisionadaRow,
+  VendaProvisionadaRichRow,
+  PdfMonkeyTemplateRow,
+  PdfMonkeyGeracaoRow,
 } from "./database";
 
-import type { StatusAramburu, FormaPgto, TipoDespesa, ObsObra } from "./database";
+import type {
+  StatusAramburu, FormaPgto, TipoDespesa, ObsObra,
+  CulturaSafra, VendaStatus, SafraDepositoStatus, PdfMonkeySlug,
+} from "./database";
 
 // ----------------------------------------------------------------------------
 // Labels em PT-BR para UI (status snake_case → texto humano)
@@ -109,3 +126,48 @@ export interface KpiCard {
   trend?: "up" | "down" | "neutral";
   prefix?: string;
 }
+
+// ----------------------------------------------------------------------------
+// Labels — Cultura / Safra / Vendas (módulo Provisionamento)
+// ----------------------------------------------------------------------------
+export const CULTURA_LABEL: Record<CulturaSafra, string> = {
+  soja:      "Soja",
+  milho:     "Milho",
+  sorgo:     "Sorgo",
+  girassol:  "Girassol",
+  algodao:   "Algodão",
+  feijao:    "Feijão",
+  trigo:     "Trigo",
+};
+
+export const CULTURA_EMOJI: Record<CulturaSafra, string> = {
+  soja:      "🫛",
+  milho:     "🌽",
+  sorgo:     "🌾",
+  girassol:  "🌻",
+  algodao:   "🪺",
+  feijao:    "🫘",
+  trigo:     "🌾",
+};
+
+export const VENDA_STATUS_LABEL: Record<VendaStatus, string> = {
+  firmada:    "Firmada",
+  parcial:    "Parcial",
+  liquidada:  "Liquidada",
+  cancelada:  "Cancelada",
+};
+
+export const SAFRA_DEP_STATUS_LABEL: Record<SafraDepositoStatus, string> = {
+  armazenado:      "Armazenado",
+  vendido_parcial: "Vendido (parcial)",
+  vendido_total:   "Vendido (total)",
+  retirado:        "Retirado",
+  baixa:           "Baixa",
+};
+
+export const PDFMONKEY_LABEL: Record<PdfMonkeySlug, string> = {
+  capa_empresa:        "Capa Empresa",
+  capa_socio:          "Capa Sócio",
+  relatorio_contabil:  "Relatório Contábil",
+  relatorio_socios:    "Relatório Sócios",
+};
