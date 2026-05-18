@@ -32,6 +32,13 @@ export type CulturaSafra    = "soja" | "milho" | "sorgo" | "girassol" | "algodao
 export type VendaStatus     = "firmada" | "parcial" | "liquidada" | "cancelada";
 export type SafraDepositoStatus = "armazenado" | "vendido_parcial" | "vendido_total" | "retirado" | "baixa";
 export type PdfMonkeySlug   = "capa_empresa" | "capa_socio" | "relatorio_contabil" | "relatorio_socios";
+export type DocumentoGeradoTipo =
+  | "recibo_vale_combustivel"
+  | "recibo_aluguel"
+  | "recibo_pagamento_prestador"
+  | "termo_autorizacao_pagamento_terceiros"
+  | "termo_transferencia_bancaria"
+  | "contrato_prestacao_servicos";
 
 // ============================================================================
 // Tabelas
@@ -329,6 +336,21 @@ export type PdfMonkeyGeracaoRow = {
   created_by: string | null;
 };
 
+export type DocumentoGeradoRow = {
+  id: string;
+  tipo: DocumentoGeradoTipo;
+  numero: string | null;
+  beneficiario: string | null;
+  valor: number | null;
+  descricao: string | null;
+  mes_referencia: string | null;
+  dados: Json;
+  pdf_path: string | null;
+  pdf_size: number | null;
+  created_at: string;
+  created_by: string | null;
+};
+
 // ============================================================================
 // Database type (formato esperado pelo @supabase/postgrest-js)
 // ============================================================================
@@ -435,6 +457,12 @@ export interface Database {
         Row: PdfMonkeyGeracaoRow;
         Insert: Omit<PdfMonkeyGeracaoRow, "id" | "created_at">;
         Update: Partial<Omit<PdfMonkeyGeracaoRow, "id" | "created_at">>;
+        Relationships: EmptyRels;
+      };
+      documentos_gerados: {
+        Row: DocumentoGeradoRow;
+        Insert: Omit<DocumentoGeradoRow, "id" | "created_at">;
+        Update: Partial<Omit<DocumentoGeradoRow, "id" | "created_at">>;
         Relationships: EmptyRels;
       };
     };

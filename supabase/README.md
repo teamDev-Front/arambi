@@ -15,7 +15,14 @@ supabase/
 │   ├── 0006_obra_lts.sql
 │   ├── 0007_sistema_aplicacao.sql
 │   ├── 0008_views_dashboard.sql
-│   └── 0009_rls.sql
+│   ├── 0009_rls.sql
+│   ├── 0010_saldo_por_banco.sql
+│   ├── 0011_contas_investimento.sql
+│   ├── 0012_promover_admin.sql
+│   ├── 0013_garantir_perfil_admin.sql
+│   ├── 0014_vendas_e_safra.sql
+│   ├── 0015_bancos_e_pdfmonkey.sql
+│   └── 0016_documentos_gerados.sql      ← tabela + bucket Storage p/ recibos & termos via código
 ├── seed/                Dados de domínio (extraídos da planilha)
 │   ├── 01_classificacao_financeira.sql      78 linhas (plano de contas)
 │   ├── 02_classificacao_pessoal.sql         6 linhas (categorias dos sócios)

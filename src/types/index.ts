@@ -35,11 +35,14 @@ export type {
   VendaProvisionadaRichRow,
   PdfMonkeyTemplateRow,
   PdfMonkeyGeracaoRow,
+  DocumentoGeradoTipo,
+  DocumentoGeradoRow,
 } from "./database";
 
 import type {
   StatusAramburu, FormaPgto, TipoDespesa, ObsObra,
   CulturaSafra, VendaStatus, SafraDepositoStatus, PdfMonkeySlug,
+  DocumentoGeradoTipo,
 } from "./database";
 
 // ----------------------------------------------------------------------------
@@ -170,4 +173,25 @@ export const PDFMONKEY_LABEL: Record<PdfMonkeySlug, string> = {
   capa_socio:          "Capa Sócio",
   relatorio_contabil:  "Relatório Contábil",
   relatorio_socios:    "Relatório Sócios",
+};
+
+// ----------------------------------------------------------------------------
+// Labels — Documentos gerados via código (recibos & termos)
+// ----------------------------------------------------------------------------
+export const DOCUMENTO_GERADO_LABEL: Record<DocumentoGeradoTipo, string> = {
+  recibo_vale_combustivel:               "Recibo de Vale Combustível",
+  recibo_aluguel:                        "Recibo de Aluguel",
+  recibo_pagamento_prestador:            "Recibo de Pagamento a Prestador",
+  termo_autorizacao_pagamento_terceiros: "Termo de Autorização de Pagamento a Terceiros",
+  termo_transferencia_bancaria:          "Termo de Transferência Bancária",
+  contrato_prestacao_servicos:           "Contrato de Prestação de Serviços",
+};
+
+export const DOCUMENTO_GERADO_LABEL_CURTO: Record<DocumentoGeradoTipo, string> = {
+  recibo_vale_combustivel:               "Vale Combustível",
+  recibo_aluguel:                        "Aluguel",
+  recibo_pagamento_prestador:            "Pagamento a Prestador",
+  termo_autorizacao_pagamento_terceiros: "Autorização a Terceiros",
+  termo_transferencia_bancaria:          "Transferência Bancária",
+  contrato_prestacao_servicos:           "Contrato de Serviços",
 };
