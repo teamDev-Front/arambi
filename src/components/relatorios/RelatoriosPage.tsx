@@ -11,6 +11,7 @@ import {
   Building2, RefreshCw, ExternalLink, AlertCircle, CheckCircle2,
 } from "lucide-react";
 import { gerarPdfBloqueante, consultarStatus } from "@/lib/pdfmonkey/frontend";
+import type { ContabilObservacao, RelatorioSociosOverrides } from "@/lib/pdfmonkey/types";
 import { listarSocios } from "@/lib/queries/bancos";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateTime } from "@/lib/utils/format";
@@ -18,6 +19,8 @@ import {
   PDFMONKEY_LABEL,
   type PdfMonkeySlug, type SocioRow, type PdfMonkeyGeracaoRow,
 } from "@/types";
+import { ContabilObservacoesModal } from "./ContabilObservacoesModal";
+import { SociosOverridesModal } from "./SociosOverridesModal";
 
 const TEMPLATES: Array<{
   slug: PdfMonkeySlug;
@@ -60,6 +63,8 @@ export function RelatoriosPage() {
   const [socioId, setSocioId] = useState<string>("");
 
   const [modalSocioOpen, setModalSocioOpen] = useState(false);
+  const [modalObsOpen, setModalObsOpen] = useState(false);
+  const [modalOverridesOpen, setModalOverridesOpen] = useState(false);
   const [slugAtual, setSlugAtual] = useState<PdfMonkeySlug | null>(null);
   const [gerando, setGerando] = useState<PdfMonkeySlug | null>(null);
 
@@ -91,24 +96,46 @@ export function RelatoriosPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchHistorico(); }, [fetchHistorico]);
 
   // ---- ações ----
   function clickGerar(slug: PdfMonkeySlug) {
     const tpl = TEMPLATES.find((t) => t.slug === slug)!;
+    setSlugAtual(slug);
     if (tpl.precisaSocio) {
-      setSlugAtual(slug);
       setSocioId(socios[0]?.id ?? "");
       setModalSocioOpen(true);
+      return;
+    }
+    if (slug === "relatorio_contabil") {
+      setModalObsOpen(true);
+      return;
+    }
+    if (slug === "relatorio_socios") {
+      setModalOverridesOpen(true);
       return;
     }
     void gerar(slug);
   }
 
-  async function gerar(slug: PdfMonkeySlug, socio_id?: string) {
+  async function gerar(
+    slug: PdfMonkeySlug,
+    extras?: {
+      socio_id?: string;
+      observacoes?: ContabilObservacao[];
+      socios_overrides?: RelatorioSociosOverrides;
+    },
+  ) {
     setGerando(slug);
     try {
-      const res = await gerarPdfBloqueante({ slug, mes_referencia: mesRef, socio_id });
+      const res = await gerarPdfBloqueante({
+        slug,
+        mes_referencia: mesRef,
+        socio_id:         extras?.socio_id,
+        observacoes:      extras?.observacoes,
+        socios_overrides: extras?.socios_overrides,
+      });
       if (res.status === "success" && res.download_url) {
         toast.success(`${PDFMONKEY_LABEL[slug]} gerado`, "Baixe pelo link na tabela abaixo.");
         window.open(res.download_url, "_blank");
@@ -123,6 +150,8 @@ export function RelatoriosPage() {
     } finally {
       setGerando(null);
       setModalSocioOpen(false);
+      setModalObsOpen(false);
+      setModalOverridesOpen(false);
     }
   }
 
@@ -281,12 +310,30 @@ export function RelatoriosPage() {
           </Select>
           <div className="flex gap-3 justify-end pt-2">
             <Button variant="ghost" onClick={() => setModalSocioOpen(false)}>Cancelar</Button>
-            <Button onClick={() => slugAtual && socioId && gerar(slugAtual, socioId)} disabled={!socioId || gerando !== null} loading={gerando !== null}>
+            <Button onClick={() => slugAtual && socioId && gerar(slugAtual, { socio_id: socioId })} disabled={!socioId || gerando !== null} loading={gerando !== null}>
               <FileText size={13}/> Gerar
             </Button>
           </div>
         </div>
       </Modal>
+
+      {/* Modal de observações — Relatório Contábil */}
+      <ContabilObservacoesModal
+        open={modalObsOpen}
+        mesRef={mesRef}
+        onClose={() => { if (gerando === null) setModalObsOpen(false); }}
+        submitting={gerando === "relatorio_contabil"}
+        onConfirmar={(observacoes) => gerar("relatorio_contabil", { observacoes })}
+      />
+
+      {/* Modal de notas editáveis — Relatório Sócios */}
+      <SociosOverridesModal
+        open={modalOverridesOpen}
+        mesRef={mesRef}
+        onClose={() => { if (gerando === null) setModalOverridesOpen(false); }}
+        submitting={gerando === "relatorio_socios"}
+        onConfirmar={(socios_overrides) => gerar("relatorio_socios", { socios_overrides })}
+      />
     </div>
   );
 }

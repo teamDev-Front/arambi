@@ -30,7 +30,9 @@ import {
   buildCapaEmpresa, buildCapaSocio,
   buildRelatorioContabil, buildRelatorioSocios,
 } from "@/lib/pdfmonkey/builders";
-import type { AnyPayload } from "@/lib/pdfmonkey/types";
+import type {
+  AnyPayload, ContabilObservacao, RelatorioSociosOverrides,
+} from "@/lib/pdfmonkey/types";
 import type { PdfMonkeySlug, Json } from "@/types";
 
 interface Body {
@@ -38,6 +40,10 @@ interface Body {
   mes_referencia?: string;
   socio_id?: string;
   payload?: AnyPayload;
+  /** Observações livres do relatório contábil (preenchidas no modal antes de gerar). */
+  observacoes?: ContabilObservacao[];
+  /** Overrides editáveis do relatório de sócios (saldo inicial e notas dos gráficos). */
+  socios_overrides?: RelatorioSociosOverrides;
 }
 
 const VALID_SLUGS: PdfMonkeySlug[] = [
@@ -83,8 +89,15 @@ export async function POST(req: NextRequest) {
       payload = await buildCapaSocio(supabase, { mesReferencia: body.mes_referencia, socioId: body.socio_id! });
     } else if (slug === "relatorio_contabil") {
       payload = await buildRelatorioContabil(supabase, { mesReferencia: body.mes_referencia });
+      // Sobrescreve observações se vieram do front
+      if (body.observacoes && Array.isArray(body.observacoes)) {
+        (payload as { observacoes: ContabilObservacao[] }).observacoes = body.observacoes;
+      }
     } else {
-      payload = await buildRelatorioSocios(supabase, { mesReferencia: body.mes_referencia });
+      payload = await buildRelatorioSocios(supabase, {
+        mesReferencia: body.mes_referencia,
+        overrides: body.socios_overrides,
+      });
     }
   } catch (e) {
     return NextResponse.json({ error: `Erro montando payload: ${(e as Error).message}` }, { status: 500 });

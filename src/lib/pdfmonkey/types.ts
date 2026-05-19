@@ -14,6 +14,18 @@ export interface CapaEmpresaItem {
   pgto?: string;
 }
 
+/** Total movimentado em um banco no mês. O template PDFMonkey itera sobre `bancos[]`. */
+export interface BancoTotal {
+  /** Apelido exibível (ex.: "Cora", "Sicredi MJU") */
+  nome: string;
+  /** Nome completo / razão (ex.: "Banco Cora (0001)") */
+  nome_completo?: string;
+  /** Slug em snake-case para CSS opcional no template ("cora", "sicredi", "inter"…) */
+  slug?: string;
+  /** Total já formatado em BRL (ex.: "R$ 383.184,43") */
+  total: string;
+}
+
 export interface CapaEmpresaPayload {
   empresa: string;
   cnpj: string;
@@ -22,10 +34,8 @@ export interface CapaEmpresaPayload {
   numero_mes: string;            // "1º"
   realizado_em: string;
   preparado_por: string;
-  banco_principal: string;
-  banco_secundario: string;
-  total_cora: string;
-  total_sicredi: string;
+  /** Lista dinâmica de bancos com totais do mês — substituiu o par fixo Cora/Sicredi. */
+  bancos: BancoTotal[];
   total_geral: string;
   despesas_fixas: CapaEmpresaItem[];
   total_fixas: string;
@@ -60,8 +70,6 @@ export interface CapaSocioPayload {
   numero_mes: string;
   realizado_em: string;
   preparado_por: string;
-  banco_principal: string;
-  banco_secundario: string;
   periodo: string;
 
   imovel: CapaSocioItem[];
@@ -85,8 +93,8 @@ export interface CapaSocioPayload {
 
   contas_socio: CapaSocioContaItem[];
 
-  total_cora: string;
-  total_sicredi: string;
+  /** Lista dinâmica de bancos com totais do mês — substituiu o par fixo Cora/Sicredi. */
+  bancos: BancoTotal[];
   total_geral: string;
 }
 
@@ -205,6 +213,18 @@ export interface RelatorioSociosPayload {
   saidas_distribuicao: { itens: SaidaDistItem[] };
   distribuicao_lucro: { categorias: DistribCategoria[]; meses: string[]; nota: string };
   distribuicao_aramburu: DistribAramburu[];
+}
+
+/** Subset de `RelatorioSociosPayload` que o front pode sobrescrever no modal de geração. */
+export interface RelatorioSociosOverrides {
+  saldo_inicial_texto?: string;
+  nota_entradas?:            string;
+  nota_saidas?:              string;
+  nota_obra_sede?:           string;
+  nota_despesas_classif?:    string;
+  nota_impostos?:            string;
+  nota_distribuicao_lucro?:  string;
+  obs_fazenda?:              string;
 }
 
 // ============================================================================

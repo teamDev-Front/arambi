@@ -564,6 +564,15 @@ export interface Database {
         Row: Required<Pick<VendaPorPeriodoRow, "destino_empresa" | "socio_destino_id" | "cultura" | "safra" | "qtd" | "sacas_total" | "valor_total" | "mes_recebimento">>;
         Relationships: EmptyRels;
       };
+      v_distribuicao_lucro_mensal: {
+        Row: {
+          mes_referencia: string;
+          classificacao_pessoal: string;
+          classificacao_nome: string;
+          valor_total: number;
+        };
+        Relationships: EmptyRels;
+      };
     };
     Functions: Record<string, never>;
     Enums: Record<string, never>;

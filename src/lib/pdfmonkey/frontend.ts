@@ -1,11 +1,14 @@
 // Cliente browser-side para os endpoints /api/pdfmonkey/*
 
 import type { PdfMonkeySlug } from "@/types";
+import type { ContabilObservacao, RelatorioSociosOverrides } from "./types";
 
 export interface GerarPdfArgs {
   slug: PdfMonkeySlug;
   mes_referencia: string;        // "YYYY-MM"
   socio_id?: string;             // só p/ capa_socio
+  observacoes?: ContabilObservacao[];        // só p/ relatorio_contabil
+  socios_overrides?: RelatorioSociosOverrides; // só p/ relatorio_socios
 }
 
 export interface GerarPdfResult {

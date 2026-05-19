@@ -59,19 +59,35 @@ export async function buildCapaEmpresa(
 ): Promise<CapaEmpresaPayload> {
   const { mes, numero_mes } = mesReferenciaToHuman(args.mesReferencia);
 
-  // Saldos por banco no mês (vw existente)
-  const { data: porBanco } = await supabase
-    .from("v_saldo_por_banco_mensal")
-    .select("*")
-    .eq("mes_referencia", args.mesReferencia);
+  // Saldos por banco no mês (vw existente) + cadastros para enriquecer apelido/banco
+  const [porBancoRes, contasRes] = await Promise.all([
+    supabase.from("v_saldo_por_banco_mensal").select("*").eq("mes_referencia", args.mesReferencia),
+    supabase.from("contas_bancarias_empresa").select("id, nome, apelido, banco, ordem, ativa").eq("ativa", true).order("ordem", { ascending: true, nullsFirst: false }),
+  ]);
+  const porBanco = porBancoRes.data;
+  const contasCadastradas = contasRes.data ?? [];
+  const cadastroPorId = new Map(contasCadastradas.map((c) => [c.id, c]));
 
-  let total_cora = 0, total_sicredi = 0, total_geral = 0;
+  // Soma a variação por banco (uma row por banco), montando a lista dinâmica.
+  const totalPorContaId = new Map<string, number>();
   for (const r of porBanco ?? []) {
+    if (!r.conta_bancaria_id) continue;
     const v = Math.abs(Number(r.variacao_no_mes ?? 0));
-    if ((r.conta_bancaria_nome ?? "").toLowerCase().includes("cora")) total_cora += v;
-    if ((r.conta_bancaria_nome ?? "").toLowerCase().includes("sicredi")) total_sicredi += v;
-    total_geral += v;
+    totalPorContaId.set(r.conta_bancaria_id, (totalPorContaId.get(r.conta_bancaria_id) ?? 0) + v);
   }
+
+  // Lista de bancos preserva a ordem do cadastro; contas sem movimento aparecem zeradas.
+  const bancos = contasCadastradas.map((c) => {
+    const total = totalPorContaId.get(c.id) ?? 0;
+    return {
+      nome:           c.apelido ?? c.nome,
+      nome_completo:  c.nome,
+      slug:           (c.banco ?? c.nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""),
+      total:          brl(total),
+    };
+  });
+  const total_geral = Array.from(totalPorContaId.values()).reduce((a, b) => a + b, 0);
+  void cadastroPorId;
 
   // Transações do mês agrupadas por tipo_despesa (fixa/variavel/eventual)
   const { data: ts } = await supabase
@@ -123,10 +139,7 @@ export async function buildCapaEmpresa(
     numero_mes,
     realizado_em: new Date().toLocaleDateString("pt-BR"),
     preparado_por: args.preparadoPor ?? "Adriane Estefany",
-    banco_principal: "CORA",
-    banco_secundario: "SICREDI",
-    total_cora: brl(total_cora),
-    total_sicredi: brl(total_sicredi),
+    bancos,
     total_geral: brl(total_geral),
     despesas_fixas: buckets.fixa.items,
     total_fixas: brl(buckets.fixa.total),
@@ -166,9 +179,9 @@ export async function buildCapaSocio(
   const { data: lancamentos } = await supabase
     .from("transacoes_socio")
     .select(`
-      data, classificacao_pessoal, descricao, valor,
+      data, classificacao_pessoal, descricao, valor, conta_bancaria_socio_id,
       conta_bancaria_socio_nome,
-      conta_bancaria:contas_bancarias_socio(banco, nome)
+      conta_bancaria:contas_bancarias_socio(id, banco, nome)
     `)
     .eq("socio_id", args.socioId)
     .eq("mes_referencia", args.mesReferencia)
@@ -179,8 +192,9 @@ export async function buildCapaSocio(
     classificacao_pessoal: string;
     descricao: string;
     valor: number;
+    conta_bancaria_socio_id: string | null;
     conta_bancaria_socio_nome: string | null;
-    conta_bancaria: { banco: string | null; nome: string } | null;
+    conta_bancaria: { id: string; banco: string | null; nome: string } | null;
   };
 
   type BucketKey = "imovel" | "familia" | "renda" | "pessoais" | "fazenda";
@@ -199,7 +213,8 @@ export async function buildCapaSocio(
     "1.05": "fazenda",  "1.5 - Fazenda Aramburu": "fazenda",
   };
 
-  let total_cora = 0, total_sicredi = 0;
+  // Agrupa por conta bancária do sócio (não por substring "cora/sicredi" no nome)
+  const totalPorContaId = new Map<string, number>();
   for (const l of (lancamentos ?? []) as unknown as LancamentoSocio[]) {
     const k = toBucket[l.classificacao_pessoal];
     if (!k) continue;
@@ -212,9 +227,19 @@ export async function buildCapaSocio(
       descricao: l.descricao,
       banco,
     });
-    if (banco.toLowerCase().includes("cora")) total_cora += valor;
-    if (banco.toLowerCase().includes("sicredi")) total_sicredi += valor;
+    const cid = l.conta_bancaria?.id ?? l.conta_bancaria_socio_id;
+    if (cid) totalPorContaId.set(cid, (totalPorContaId.get(cid) ?? 0) + valor);
   }
+
+  // Lista de bancos do sócio (todas as contas ativas, mesmo sem movimento).
+  // A tabela contas_bancarias_socio não tem campo `apelido`, usa-se o nome curto.
+  const bancos = (contas ?? []).map((c) => ({
+    nome:           c.banco ?? c.nome ?? "—",
+    nome_completo:  c.nome,
+    slug:           (c.banco ?? c.nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""),
+    total:          brl(totalPorContaId.get(c.id) ?? 0),
+  }));
+  const total_geral = Array.from(totalPorContaId.values()).reduce((a, b) => a + b, 0);
 
   return {
     nome_socio: socio.nome_completo,
@@ -224,8 +249,6 @@ export async function buildCapaSocio(
     numero_mes,
     realizado_em: new Date().toLocaleDateString("pt-BR"),
     preparado_por: args.preparadoPor ?? "Adriane Estefany",
-    banco_principal: "CORA",
-    banco_secundario: "SICREDI",
     periodo: mesReferenciaToFraseSocio(args.mesReferencia),
     imovel: buckets.imovel.items,
     total_imovel: brl(buckets.imovel.total),
@@ -248,9 +271,8 @@ export async function buildCapaSocio(
         : c.nome,
       tipo: c.tipo ?? "Corrente",
     })),
-    total_cora: brl(total_cora),
-    total_sicredi: brl(total_sicredi),
-    total_geral: brl(total_cora + total_sicredi),
+    bancos,
+    total_geral: brl(total_geral),
   };
 }
 
@@ -360,45 +382,404 @@ export async function buildRelatorioContabil(
 }
 
 // ----------------------------------------------------------------------------
-// Relatório Sócios (infográfico) — esqueleto inicial usa os números reais
-// das views mensais. A maioria dos campos visuais (cores, dashes, rotações)
-// segue um cálculo determinístico simples; pode ser refinado depois.
+// Relatório Sócios (infográfico) — espelha o PDF Canva atual.
+// Todas as seções vêm das views/tabelas reais. Cores fixas seguem a paleta
+// aprovada pelo template PDFMonkey.
 // ----------------------------------------------------------------------------
 export interface BuildRelatorioSociosArgs {
   mesReferencia: string;
   preparadoPor?: string;
+  /** Overrides opcionais que a UI pode injetar antes de gerar. */
+  overrides?: {
+    saldo_inicial_texto?: string;
+    nota_entradas?:           string;
+    nota_saidas?:             string;
+    nota_obra_sede?:          string;
+    nota_despesas_classif?:   string;
+    nota_impostos?:           string;
+    nota_distribuicao_lucro?: string;
+    obs_fazenda?:             string;
+  };
 }
+
+// Paleta usada pelo template (idêntica ao JSON-exemplo aprovado).
+const CORES_SAIDA: Record<string, { classe: string; hex: string }> = {
+  "2.1": { classe: "verde",     hex: "#4ade80" },
+  "2.2": { classe: "verdeEsc",  hex: "#22c55e" },
+  "2.3": { classe: "azul",      hex: "#60a5fa" },
+  "2.4": { classe: "azul",      hex: "#3b82f6" },
+  "2.5": { classe: "azul",      hex: "#1d4ed8" },
+  "2.6": { classe: "roxo",      hex: "#8b5cf6" },
+  "2.7": { classe: "roxoClaro", hex: "#c084fc" },
+  "2.9": { classe: "rosa",      hex: "#ec4899" },
+};
+
+const NOMES_SAIDA: Record<string, string> = {
+  "2.1": "Despesas Administrativas",
+  "2.2": "Despesas com Pessoal",
+  "2.3": "Operação da Propriedade",
+  "2.4": "Serviços Terceirizados",
+  "2.5": "Financeiras e Bancárias",
+  "2.6": "Investimentos em Capital (aplicações)",
+  "2.7": "Investimentos em Imobilizado Operacional (obra da sede)",
+  "2.9": "Outras Saídas",
+};
+
+const OBRA_LABELS: Record<string, { label: string; cor: string; icone: string }> = {
+  projeto:      { label: "PROJETO",         cor: "#60a5fa", icone: "📐" },
+  ordem_compra: { label: "ORDEM DE COMPRA", cor: "#fb923c", icone: "🧾" },
+  medicao_01:   { label: "MEDIÇÃO",         cor: "#ec4899", icone: "👷" },
+  medicao_02:   { label: "MEDIÇÃO",         cor: "#ec4899", icone: "👷" },
+  medicao_03:   { label: "MEDIÇÃO",         cor: "#ec4899", icone: "👷" },
+  medicao_04:   { label: "MEDIÇÃO",         cor: "#ec4899", icone: "👷" },
+  medicao_05:   { label: "MEDIÇÃO",         cor: "#ec4899", icone: "👷" },
+  medicao_06:   { label: "MEDIÇÃO",         cor: "#ec4899", icone: "👷" },
+  outras:       { label: "OUTRAS",          cor: "#a3e635", icone: "🛒" },
+  retencao:     { label: "OUTRAS",          cor: "#a3e635", icone: "🛒" },
+  sem:          { label: "OUTRAS",          cor: "#a3e635", icone: "🛒" },
+};
+
+const PCT_NUM = (parte: number, total: number) => total > 0 ? (parte / total) * 100 : 0;
 
 export async function buildRelatorioSocios(
   supabase: SupabaseClient<Database>,
   args: BuildRelatorioSociosArgs,
 ): Promise<RelatorioSociosPayload> {
   const { mes } = mesReferenciaToHuman(args.mesReferencia);
+  const overrides = args.overrides ?? {};
+  const [ano, mesNumStr] = args.mesReferencia.split("-");
+  const mesNum = parseInt(mesNumStr, 10);
 
-  // 1) Totais por conta contábil no mês
-  const { data: porConta } = await supabase
-    .from("v_por_conta_contabil_mensal")
-    .select("*")
-    .eq("mes_referencia", args.mesReferencia);
+  // ─── Queries paralelas ────────────────────────────────────────────────────
+  const [
+    porContaRes,
+    porCentroRes,
+    saldoBancosRes,
+    obraRes,
+    despesasTipoRes,
+    impostosRes,
+    armazenagemRes,
+    distLucroYtdRes,
+  ] = await Promise.all([
+    supabase.from("v_por_conta_contabil_mensal").select("*").eq("mes_referencia", args.mesReferencia),
+    supabase.from("v_por_centro_custo_mensal").select("*").eq("mes_referencia", args.mesReferencia),
+    supabase.from("v_saldo_por_banco_mensal").select("*").eq("mes_referencia", args.mesReferencia),
+    supabase.from("transacoes_empresa")
+      .select("obs_obra, valor")
+      .eq("mes_referencia", args.mesReferencia)
+      .eq("centro_custo_cod", "2.7.2"),
+    supabase.from("transacoes_empresa")
+      .select("tipo_despesa, valor, conta_contabil_cod")
+      .eq("mes_referencia", args.mesReferencia)
+      .neq("status", "saldo_inicial"),
+    supabase.from("v_por_centro_custo_mensal")
+      .select("*")
+      .eq("mes_referencia", args.mesReferencia)
+      .in("centro_custo_cod", ["2.1.6", "2.2.2"]),
+    supabase.from("v_safra_depositos_calculado")
+      .select("cultura, sc_liquida")
+      .neq("status", "vendido_total"),
+    supabase.from("v_distribuicao_lucro_mensal")
+      .select("classificacao_pessoal, valor_total, mes_referencia")
+      .gte("mes_referencia", `${ano}-01`)
+      .lte("mes_referencia", args.mesReferencia),
+  ]);
 
+  // ─── Totais por conta contábil no mês ─────────────────────────────────────
   const totByConta: Record<string, number> = {};
-  for (const r of porConta ?? []) {
+  for (const r of porContaRes.data ?? []) {
     totByConta[r.conta_contabil_cod] = Math.abs(Number(r.valor_total));
   }
   const get = (c: string) => totByConta[c] ?? 0;
 
-  const receita        = get("1.2");
+  // ─── Visão geral ──────────────────────────────────────────────────────────
+  const receita        = get("1.2") + get("1.3");
   const resgate        = get("1.8");
   const outros_recb    = get("1.9");
-  const aplicacao      = get("2.6");      // Invest Capital
-  const imob_op        = get("2.7");
   const distrib_lucro  = get("2.8");
   const fazenda_total =
-    get("2.1") + get("2.2") + get("2.3") + get("2.4") + get("2.5") + get("2.7") + get("2.9");
-
+    get("2.1") + get("2.2") + get("2.3") + get("2.4") + get("2.5") + get("2.6") + get("2.7") + get("2.9");
   const total_despesas = fazenda_total + distrib_lucro;
-  const pctDistrib = total_despesas > 0 ? (distrib_lucro / total_despesas) * 100 : 0;
-  const pctFazenda = total_despesas > 0 ? (fazenda_total / total_despesas) * 100 : 0;
+  const pctDistrib = PCT_NUM(distrib_lucro, total_despesas);
+  const pctFazenda = PCT_NUM(fazenda_total, total_despesas);
+
+  // ─── Saldo inicial dos bancos (texto auto-gerado) ─────────────────────────
+  let saldoInicialTexto = overrides.saldo_inicial_texto ?? "";
+  if (!saldoInicialTexto) {
+    const partes: string[] = [];
+    let totalIni = 0;
+    for (const r of (saldoBancosRes.data ?? []).sort((a, b) => (a.conta_bancaria_nome ?? "").localeCompare(b.conta_bancaria_nome ?? ""))) {
+      const v = Number(r.saldo_inicial_no_mes ?? 0);
+      if (v > 0) {
+        partes.push(`R$ ${fmt(v)} no ${r.conta_bancaria_nome ?? "—"}`);
+        totalIni += v;
+      }
+    }
+    const mesNomeLower = NOMES_MES[mesNum - 1]?.toLowerCase() ?? "";
+    saldoInicialTexto = partes.length > 0
+      ? `Saldo inicial de caixa em ${mesNomeLower}: R$ ${fmt(totalIni)}, distribuído entre ${partes.join(", ")}.`
+      : `Saldo inicial de caixa em ${mesNomeLower}: não há saldo inicial registrado para os bancos cadastrados.`;
+  }
+
+  // ─── Entradas ──────────────────────────────────────────────────────────────
+  const receitaSoja  = get("1.2.1");
+  const receitaMilho = get("1.2.2");
+  const estorno      = get("1.6");
+
+  // Altura: proporção ao maior valor de entrada (até 95)
+  const maxEntrada = Math.max(receitaSoja, receitaMilho, estorno, resgate, outros_recb);
+  const altura = (v: number) => maxEntrada > 0 ? Math.round((v / maxEntrada) * 95) : 0;
+
+  const entradasItens = [
+    { label: "Receita de Arrendamento de Terras - Soja",  valor: receitaSoja  > 0 ? fmt(receitaSoja)  : "-", cor: "verde",    altura: altura(receitaSoja) },
+    { label: "Receita de Arrendamento de Terras - Milho", valor: receitaMilho > 0 ? fmt(receitaMilho) : "-", cor: "amarelo",  altura: altura(receitaMilho) },
+    { label: "Estorno de Pagamento",                       valor: estorno      > 0 ? fmt(estorno)      : "-", cor: "vermelho", altura: altura(estorno) },
+    { label: "Resgate de Aplicações",                      valor: resgate      > 0 ? fmt(resgate)      : "-", cor: "azul",     altura: altura(resgate) },
+    { label: "Outros Recebimentos *",                      valor: outros_recb  > 0 ? fmt(outros_recb)  : "-", cor: "roxo",     altura: altura(outros_recb) },
+  ];
+
+  // ─── Receitas por cultura ──────────────────────────────────────────────────
+  // Soma sacas por cultura nas vendas que pagaram neste mês de referência.
+  type VendaPorMes = { cultura: string; sacas_total: number; valor_total: number };
+  const { data: vendasMes } = await supabase
+    .from("v_vendas_por_mes")
+    .select("cultura, sacas_total, valor_total")
+    .eq("mes_recebimento", args.mesReferencia);
+  const sacasPorCultura: Record<string, number> = {};
+  for (const v of (vendasMes ?? []) as VendaPorMes[]) {
+    sacasPorCultura[v.cultura] = (sacasPorCultura[v.cultura] ?? 0) + Number(v.sacas_total);
+  }
+
+  const totalReceita = receitaSoja + receitaMilho;
+  const pctSoja  = PCT_NUM(receitaSoja,  totalReceita);
+  const pctMilho = PCT_NUM(receitaMilho, totalReceita);
+  const receitas = [
+    {
+      cultura: "Soja", emoji: "🫛",
+      valor: receitaSoja > 0 ? fmt(receitaSoja) : "-",
+      sacas: sacasPorCultura["soja"] ? new Intl.NumberFormat("pt-BR").format(sacasPorCultura["soja"]) : (receitaSoja > 0 ? "—" : "0"),
+      pct: Number(pctSoja.toFixed(0)),
+      pct_txt: `${pctSoja.toFixed(0)}%`,
+      ring_dash: Number((pctSoja * 2.638).toFixed(1)),
+      cor: "#4ade80",
+    },
+    {
+      cultura: "Milho", emoji: "🌽",
+      valor: receitaMilho > 0 ? fmt(receitaMilho) : "-",
+      sacas: sacasPorCultura["milho"] ? new Intl.NumberFormat("pt-BR").format(sacasPorCultura["milho"]) : "0",
+      pct: Number(pctMilho.toFixed(0)),
+      pct_txt: `${pctMilho.toFixed(0)}%`,
+      ring_dash: Number((pctMilho * 2.638).toFixed(1)),
+      cor: "#fbbf24",
+    },
+  ];
+
+  // ─── Saídas (8 categorias) ─────────────────────────────────────────────────
+  const codigosSaida = ["2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.9"];
+  const totalSaida = codigosSaida.reduce((acc, c) => acc + get(c), 0);
+  let rotAcc = -90;
+  const saidasItens = codigosSaida.map((c) => {
+    const valor = get(c);
+    const pct = PCT_NUM(valor, totalSaida);
+    const dash = Number(pct.toFixed(1));
+    const rot = Number(rotAcc.toFixed(2));
+    rotAcc += dash * 3.6;
+    const cores = CORES_SAIDA[c];
+    return {
+      label: NOMES_SAIDA[c] ?? c,
+      valor: valor > 0 ? fmt(valor) : "-",
+      pct: pct < 0.5 && pct > 0 ? "-" : pct.toFixed(1).replace(/\.0$/, ""),
+      cor_classe: cores.classe,
+      cor_hex:    cores.hex,
+      dash,
+      rot,
+    };
+  });
+
+  // ─── Obra da sede (categorias por obs_obra) ───────────────────────────────
+  type ObraRow = { obs_obra: string; valor: number };
+  const obraTot: Record<string, number> = {};
+  let obraTotal = 0;
+  for (const r of (obraRes.data ?? []) as ObraRow[]) {
+    const bucketKey = OBRA_LABELS[r.obs_obra]?.label ?? "OUTRAS";
+    const v = Math.abs(Number(r.valor));
+    obraTot[bucketKey] = (obraTot[bucketKey] ?? 0) + v;
+    obraTotal += v;
+  }
+  const obraOrdem = ["PROJETO", "ORDEM DE COMPRA", "MEDIÇÃO", "OUTRAS"];
+  const obraIconesPorLabel: Record<string, { cor: string; icone: string }> = {
+    "PROJETO":         { cor: "#60a5fa", icone: "📐" },
+    "ORDEM DE COMPRA": { cor: "#fb923c", icone: "🧾" },
+    "MEDIÇÃO":         { cor: "#ec4899", icone: "👷" },
+    "OUTRAS":          { cor: "#a3e635", icone: "🛒" },
+  };
+  const obraCategorias = obraOrdem.map((lbl) => {
+    const v = obraTot[lbl] ?? 0;
+    const pct = PCT_NUM(v, obraTotal);
+    return {
+      label: lbl,
+      valor: v > 0 ? fmt(v) : "-",
+      pct: v > 0 ? pct.toFixed(0) : "-",
+      cor: obraIconesPorLabel[lbl].cor,
+      icone: obraIconesPorLabel[lbl].icone,
+    };
+  });
+  const obraBarra = obraOrdem
+    .filter((lbl) => lbl !== "PROJETO" && (obraTot[lbl] ?? 0) > 0)
+    .map((lbl) => ({ cor: obraIconesPorLabel[lbl].cor, altura: Number(PCT_NUM(obraTot[lbl] ?? 0, obraTotal).toFixed(0)) }));
+
+  // ─── Despesas por tipo (fixa, variavel, eventual, periodica) ───────────────
+  type DespTipoRow = { tipo_despesa: string; valor: number; conta_contabil_cod: string };
+  const tipos = { fixa: 0, variavel: 0, eventual: 0, periodica: 0 };
+  for (const r of (despesasTipoRes.data ?? []) as DespTipoRow[]) {
+    // Excluímos investimentos (2.6, 2.7) e distribuição (2.8) — são movimentações
+    const cod = r.conta_contabil_cod;
+    if (cod.startsWith("2.6") || cod.startsWith("2.7") || cod.startsWith("2.8")) {
+      // Mantém EVENTUAIS de obra da sede (2.7) por convenção — mas exclui aplicações (2.6) e distribuição
+      if (cod.startsWith("2.6") || cod.startsWith("2.8")) continue;
+    }
+    if (r.tipo_despesa in tipos) {
+      (tipos as Record<string, number>)[r.tipo_despesa] += Math.abs(Number(r.valor));
+    }
+  }
+  const totalDespClass = tipos.fixa + tipos.variavel + tipos.eventual + tipos.periodica;
+  const pctFixas    = PCT_NUM(tipos.fixa,      totalDespClass);
+  const pctVar      = PCT_NUM(tipos.variavel,  totalDespClass);
+  const pctEvent    = PCT_NUM(tipos.eventual,  totalDespClass);
+  const pctPer      = PCT_NUM(tipos.periodica, totalDespClass);
+
+  // Donut rotations: começa eventuais em -90 (topo) e acumula no sentido horário
+  const segOrdem: Array<{ k: keyof typeof tipos; pct: number; cor: string }> = [
+    { k: "eventual",  pct: pctEvent, cor: "#4ade80" },
+    { k: "fixa",      pct: pctFixas, cor: "#fbbf24" },
+    { k: "variavel",  pct: pctVar,   cor: "#cbd5e1" },
+    { k: "periodica", pct: pctPer,   cor: "#3b82f6" },
+  ];
+  let acc = -90;
+  const donutSegs = segOrdem.map((s) => {
+    const dash = Number(s.pct.toFixed(1));
+    const rot = Number(acc.toFixed(2));
+    acc += dash * 3.6;
+    return { cor: s.cor, dash, rot };
+  });
+  const [evSeg, fxSeg, vrSeg, prSeg] = donutSegs;
+  const realizadoPct = totalReceita > 0 ? Number(((totalDespClass / totalReceita) * 100).toFixed(0)) : 0;
+
+  // ─── Impostos ──────────────────────────────────────────────────────────────
+  type ImpostoRow = { centro_custo_cod: string; valor_total: number };
+  const impMap: Record<string, number> = {};
+  for (const r of (impostosRes.data ?? []) as ImpostoRow[]) {
+    impMap[r.centro_custo_cod] = Math.abs(Number(r.valor_total));
+  }
+  const impAdmin = impMap["2.1.6"] ?? 0;
+  const impFolha = impMap["2.2.2"] ?? 0;
+
+  // ─── Armazenagem ───────────────────────────────────────────────────────────
+  type ArmRow = { cultura: string; sc_liquida: number };
+  const armPorCultura: Record<string, number> = {};
+  for (const r of (armazenagemRes.data ?? []) as ArmRow[]) {
+    armPorCultura[r.cultura] = (armPorCultura[r.cultura] ?? 0) + Number(r.sc_liquida);
+  }
+  const armazenagem = [
+    { cultura: "Soja",  emoji: "🫛", valor: armPorCultura["soja"]  ? new Intl.NumberFormat("pt-BR").format(armPorCultura["soja"])  + " sc" : "-", rotulo: "Armazém", cor: "#4ade80" },
+    { cultura: "Milho", emoji: "🌽", valor: armPorCultura["milho"] ? new Intl.NumberFormat("pt-BR").format(armPorCultura["milho"]) + " sc" : "-", rotulo: "Armazém", cor: "#fbbf24" },
+  ];
+
+  // ─── Saídas distribuição (4 itens) ─────────────────────────────────────────
+  const aplicacao = get("2.6");
+  const imobOp    = get("2.7");
+  const demaisFazenda = get("2.1") + get("2.2") + get("2.3") + get("2.4") + get("2.5") + get("2.9");
+  const totalSaiDist  = distrib_lucro + aplicacao + imobOp + demaisFazenda;
+  const itensDist: Array<{ label: string; valor: number; cor: string }> = [
+    { label: "Distribuição de Lucro",                           valor: distrib_lucro,  cor: "#3b82f6" },
+    { label: "Investimentos em Capital (aplicações)",           valor: aplicacao,      cor: "#22c55e" },
+    { label: "Investimentos em Imobilizado Operacional (obra da sede)", valor: imobOp,         cor: "#86efac" },
+    { label: "Demais despesas da Fazenda",                      valor: demaisFazenda,  cor: "#4ade80" },
+  ];
+  let rotDist = -90;
+  const saidasDistItens = itensDist.map((i) => {
+    const pct = PCT_NUM(i.valor, totalSaiDist);
+    const dash = Number(pct.toFixed(1));
+    const rot = Number(rotDist.toFixed(2));
+    rotDist += dash * 3.6;
+    return {
+      label: i.label,
+      valor: i.valor > 0 ? fmt(i.valor) : "-",
+      pct: Number(pct.toFixed(1)),
+      cor: i.cor,
+      dash, rot,
+    };
+  });
+
+  // ─── Distribuição de lucro YTD (Imóvel, Família, Renda, ...) ───────────────
+  type DistRow = { classificacao_pessoal: string; valor_total: number };
+  const distYtd: Record<string, number> = {};
+  for (const r of (distLucroYtdRes.data ?? []) as DistRow[]) {
+    distYtd[r.classificacao_pessoal] = (distYtd[r.classificacao_pessoal] ?? 0) + Math.abs(Number(r.valor_total));
+  }
+  const distTotal = Object.values(distYtd).reduce((a, b) => a + b, 0);
+
+  const distCorPorCod: Record<string, string> = {
+    "1.01": "#86efac",
+    "1.02": "#7dd3fc",
+    "1.03": "#fb923c",
+    "1.04": "#fbbf24",
+    "1.05": "#818cf8",
+    "1.06": "#c084fc",
+  };
+  const distLabelPorCod: Record<string, string> = {
+    "1.01": "Imóvel",
+    "1.02": "Família",
+    "1.03": "Renda Mensal/Qualidade de Vida",
+    "1.04": "Despesas Pessoais",
+    "1.05": "Fazenda Aramburu",
+    "1.06": "Contratos de Venda",
+  };
+  const distCategorias = Object.keys(distLabelPorCod).map((cod) => {
+    const v = distYtd[cod] ?? 0;
+    const pct = PCT_NUM(v, distTotal);
+    return {
+      label: distLabelPorCod[cod],
+      valor: v > 0 ? fmt(v) : "-",
+      pct:   Number(pct.toFixed(0)),
+      cor:   distCorPorCod[cod],
+    };
+  });
+
+  // ─── Distribuição Aramburu (3 categorias resumindo despesas fazenda) ──────
+  const energia    = (porCentroRes.data ?? []).find((r) => r.centro_custo_cod === "2.3.2")?.valor_total ?? 0;
+  const despPessoal = get("2.2");
+  const despOpDiv  = (get("2.3") + get("2.4") + get("2.5") + get("2.1") + get("2.9")) - Math.abs(Number(energia));
+  const totFaz = Math.abs(Number(energia)) + despOpDiv + despPessoal;
+  const segsFaz = [
+    { label: "Despesa Fixa",                   sub: "Energia Elétrica",                              v: Math.abs(Number(energia)), cor: "#fbbf24" },
+    { label: "Despesas Operacionais Diversas", sub: "Serviços, Taxas, Diárias, Materiais, etc",      v: Math.max(despOpDiv, 0),    cor: "#86efac" },
+    { label: "Despesa com Pessoal",            sub: "Folha de Pagamento, Benefícios, Férias e Rescisões", v: despPessoal,           cor: "#bae6fd" },
+  ];
+  let rotF = -90;
+  const distribuicaoAramburu = segsFaz.map((s) => {
+    const pct = PCT_NUM(s.v, totFaz);
+    const dash = Number(pct.toFixed(1));
+    const rot = Number(rotF.toFixed(2));
+    rotF += dash * 3.6;
+    return {
+      label: s.label, sub: s.sub,
+      valor: s.v > 0 ? fmt(s.v) : "-",
+      pct:   Number(pct.toFixed(1)),
+      cor:   s.cor,
+      dash, rot,
+    };
+  });
+
+  // ─── Notas padrão (editáveis via overrides) ────────────────────────────────
+  const notaEntradas = overrides.nota_entradas ?? "Outros Recebimentos: correspondem a entradas provenientes de transferências internas entre contas da empresa, sem impacto no resultado operacional.";
+  const notaSaidas   = overrides.nota_saidas   ?? "Distribuição de Lucro não está considerada nesta saída, sendo contabilizadas exclusivamente as movimentações financeiras da empresa Agropecuária Aramburu Ltda.";
+  const notaObra     = overrides.nota_obra_sede ?? (obraTotal > 0
+    ? `O valor investido na obra da sede no mês corresponde a R$ ${fmt(obraTotal)}.`
+    : "");
+  const notaDespClass = overrides.nota_despesas_classif ?? "Despesas eventuais são gastos pontuais, como os custos da obra da sede. Despesas periódicas são aquelas realizadas em intervalos específicos, trimestral ou anual.";
+  const notaImpostos = overrides.nota_impostos ?? "Administrativas compreendem impostos periódicos, como tributos trimestrais, diferencial de ICMS, taxas, CCIR, ITR, entre outros. Impostos retidos sobre notas fiscais integram o valor da despesa de origem.";
+  const notaDistLucro = overrides.nota_distribuicao_lucro ?? "";
 
   return {
     fazenda: "ARAMBURU",
@@ -420,67 +801,46 @@ export async function buildRelatorioSocios(
       donut_r: 15.915,
       donut_cx: 21,
       donut_cy: 21,
-      saldo_inicial_texto: "Saldo inicial — atualizar conforme conciliação dos bancos do mês.",
+      saldo_inicial_texto: saldoInicialTexto,
     },
 
-    entradas: {
-      itens: [
-        { label: "Receita de Arrendamento de Terras - Soja",  valor: receita > 0 ? fmt(receita) : "-",     cor: "verde",    altura: receita > 0 ? 95 : 0 },
-        { label: "Receita de Arrendamento de Terras - Milho", valor: "-",                                  cor: "amarelo",  altura: 0 },
-        { label: "Estorno de Pagamento",                       valor: "-",                                  cor: "vermelho", altura: 0 },
-        { label: "Resgate de Aplicações",                      valor: resgate > 0 ? fmt(resgate) : "-",     cor: "azul",     altura: resgate > 0 ? 18 : 0 },
-        { label: "Outros Recebimentos *",                      valor: outros_recb > 0 ? fmt(outros_recb) : "-", cor: "roxo", altura: outros_recb > 0 ? 38 : 0 },
-      ],
-      nota: "Outros Recebimentos: entradas provenientes de transferências internas entre contas, sem impacto operacional.",
-    },
+    entradas: { itens: entradasItens, nota: notaEntradas },
 
-    receitas: [
-      { cultura: "Soja",  emoji: "🫛", valor: receita > 0 ? fmt(receita) : "-", sacas: "—", pct: receita > 0 ? 100 : 0,  pct_txt: receita > 0 ? "100%" : "0%", ring_dash: receita > 0 ? 263.8 : 0, cor: "#4ade80" },
-      { cultura: "Milho", emoji: "🌽", valor: "-",                              sacas: "0", pct: 0,                       pct_txt: "0%",                          ring_dash: 0,                        cor: "#fbbf24" },
-    ],
+    receitas,
 
-    saidas: {
-      itens: [],
-      nota: "Distribuição de Lucro não está considerada nesta saída.",
-    },
+    saidas: { itens: saidasItens, nota: notaSaidas },
 
-    obra_sede: {
-      categorias: [], barra: [],
-      nota: "",
-    },
+    obra_sede: { categorias: obraCategorias, barra: obraBarra, nota: notaObra },
 
     despesas_classificacao: {
-      fixas:      { valor: "0,00", pct: 0,    cor: "#fbbf24", dash: 0,    rot: 157.68 },
-      variaveis:  { valor: "0,00", pct: 0,    cor: "#cbd5e1", dash: 0,    rot: 253.8 },
-      eventuais:  { valor: "0,00", pct: 0,    cor: "#4ade80", dash: 0,    rot: -90 },
-      periodicas: { valor: "0,00", pct: 0,    cor: "#3b82f6", dash: 0,    rot: 269.64 },
-      realizado_pct: 0,
-      realizado_ring_dash: 0,
-      saldo: "0,00",
-      donut_segs: [],
-      nota: "",
+      fixas:      { valor: fmt(tipos.fixa),      pct: Number(pctFixas.toFixed(1)), cor: "#fbbf24", dash: fxSeg?.dash ?? 0, rot: fxSeg?.rot ?? 0 },
+      variaveis:  { valor: fmt(tipos.variavel),  pct: Number(pctVar.toFixed(1)),   cor: "#cbd5e1", dash: vrSeg?.dash ?? 0, rot: vrSeg?.rot ?? 0 },
+      eventuais:  { valor: fmt(tipos.eventual),  pct: Number(pctEvent.toFixed(1)), cor: "#4ade80", dash: evSeg?.dash ?? 0, rot: evSeg?.rot ?? 0 },
+      periodicas: { valor: fmt(tipos.periodica), pct: Number(pctPer.toFixed(1)),   cor: "#3b82f6", dash: prSeg?.dash ?? 0, rot: prSeg?.rot ?? 0 },
+      realizado_pct: realizadoPct,
+      realizado_ring_dash: Number((realizadoPct * 2.638).toFixed(1)),
+      saldo: fmt(Math.max(totalReceita - totalDespClass, 0)),
+      donut_segs: donutSegs,
+      nota: notaDespClass,
     },
 
     impostos: {
-      administrativa: { label: "Administrativa", sub: "Taxas e Impostos (ITR, INCRA, etc.)", valor: "0,00" },
-      folha:          { label: "Folha de Pagamento", sub: "Encargos Sociais (INSS, FGTS, etc.)", valor: "0,00" },
-      realizado: "0,00",
-      nota: "",
+      administrativa: { label: "Administrativa",     sub: "Taxas e Impostos (ITR, INCRA, etc.)", valor: fmt(impAdmin) },
+      folha:          { label: "Folha de Pagamento", sub: "Encargos Sociais (INSS, FGTS, etc.)", valor: fmt(impFolha) },
+      realizado: fmt(impAdmin + impFolha),
+      nota: notaImpostos,
     },
 
-    armazenagem: [
-      { cultura: "Soja",  emoji: "🫛", valor: "-", rotulo: "Armazém", cor: "#4ade80" },
-      { cultura: "Milho", emoji: "🌽", valor: "-", rotulo: "Armazém", cor: "#fbbf24" },
-    ],
+    armazenagem,
 
-    saidas_distribuicao: { itens: [] },
+    saidas_distribuicao: { itens: saidasDistItens },
 
     distribuicao_lucro: {
-      categorias: [],
+      categorias: distCategorias,
       meses: ["JAN","FEV","MAR","ABR","MAI","JUN","JUL","AGO","SET","OUT","NOV","DEZ"],
-      nota: "",
+      nota: notaDistLucro,
     },
 
-    distribuicao_aramburu: [],
+    distribuicao_aramburu: distribuicaoAramburu,
   };
 }
