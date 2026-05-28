@@ -40,6 +40,8 @@ export type DocumentoGeradoTipo =
   | "termo_transferencia_bancaria"
   | "contrato_prestacao_servicos";
 
+export type IAProvider = "gemini" | "openai";
+
 // ============================================================================
 // Tabelas
 // ============================================================================
@@ -351,6 +353,15 @@ export type DocumentoGeradoRow = {
   created_by: string | null;
 };
 
+export type ConfigIARow = {
+  id: number;                                // sempre 1 (singleton)
+  provider_ativo: IAProvider;
+  gemini_api_key: string | null;
+  openai_api_key: string | null;
+  updated_at: string;
+  updated_by: string | null;
+};
+
 // ============================================================================
 // Database type (formato esperado pelo @supabase/postgrest-js)
 // ============================================================================
@@ -463,6 +474,12 @@ export interface Database {
         Row: DocumentoGeradoRow;
         Insert: Omit<DocumentoGeradoRow, "id" | "created_at">;
         Update: Partial<Omit<DocumentoGeradoRow, "id" | "created_at">>;
+        Relationships: EmptyRels;
+      };
+      config_ia: {
+        Row: ConfigIARow;
+        Insert: Partial<ConfigIARow>;
+        Update: Partial<ConfigIARow>;
         Relationships: EmptyRels;
       };
     };

@@ -1,11 +1,13 @@
 "use client";
+import { useState } from "react";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { ConfigIAModal } from "@/components/assistentes/ConfigIAModal";
 import {
   Scale, Leaf, Calculator, FileSignature, DollarSign,
-  Receipt, Bot, MessageSquare, Clock,
+  Receipt, Bot, MessageSquare, Clock, Settings,
 } from "lucide-react";
 
 interface Agent {
@@ -39,12 +41,26 @@ const RECENTES = [
 ];
 
 export function AssistentesHub() {
+  const [configOpen, setConfigOpen] = useState(false);
   return (
     <div className="space-y-6 max-w-[1200px]">
-      <div>
-        <h1 className="text-xl font-bold text-[#0f1f1c]">Central de Assistentes IA</h1>
-        <p className="text-sm text-stone-500">Escolha um assistente para iniciar uma conversa</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold text-[#0f1f1c]">Central de Assistentes IA</h1>
+          <p className="text-sm text-stone-500">Escolha um assistente para iniciar uma conversa</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setConfigOpen(true)}
+          className="shrink-0 p-2 rounded-lg border border-stone-200 bg-white text-stone-500 hover:text-accent-500 hover:border-accent-500 transition"
+          title="Configurar chaves de API"
+          aria-label="Configurar chaves de API"
+        >
+          <Settings size={16} />
+        </button>
       </div>
+
+      <ConfigIAModal open={configOpen} onClose={() => setConfigOpen(false)} />
 
       {/* Agent grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

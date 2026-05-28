@@ -37,6 +37,8 @@ export type {
   PdfMonkeyGeracaoRow,
   DocumentoGeradoTipo,
   DocumentoGeradoRow,
+  IAProvider,
+  ConfigIARow,
 } from "./database";
 
 import type {
