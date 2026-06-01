@@ -338,6 +338,97 @@ export type PdfMonkeyGeracaoRow = {
   created_by: string | null;
 };
 
+export type EstoqueRow = {
+  id: string;
+  produto: string;
+  categoria: string | null;
+  quantidade: number;
+  unidade: string;
+  valor_unitario: number;
+  status: EstoqueStatus;
+  fornecedor_id: string | null;
+  fornecedor_nome: string | null;
+  observacao: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+};
+
+export type DocumentoRow = {
+  id: string;
+  nome: string;
+  tipo: string | null;
+  tamanho_bytes: number | null;
+  storage_path: string | null;
+  url_publica: string | null;
+  mes_referencia: string | null;
+  numero_nota: string | null;
+  descricao: string | null;
+  vinculado_a_transacao_empresa_id: string | null;
+  vinculado_a_transacao_socio_id: string | null;
+  vinculado_a_obra_lts_item_id: string | null;
+  observacao: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+};
+
+export type ObraLtsItemRow = {
+  id: string;
+  oc_numero: string | null;
+  data_compra: string | null;
+  loja: string | null;
+  nf: string | null;
+  forma_pagamento: string | null;
+  valor: number;
+  vencimento: string | null;
+  status: LtsStatus;
+  contrato: string | null;
+  parcela: string | null;
+  observacao: string | null;
+  origem_planilha: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ObraPendenciaRow = {
+  id: string;
+  categoria: string | null;
+  subcategoria: string | null;
+  descricao: string;
+  empresa: string | null;
+  condicao_pgto: string | null;
+  valor: number | null;
+  observacao: string | null;
+  resolvida: boolean;
+  resolvida_at: string | null;
+  ordem: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NotaEmGrupoRow = {
+  id: string;
+  data: string | null;
+  mes_referencia: string | null;
+  referencia: string | null;
+  valor: number | null;
+  parcelas: string | null;
+  conta_bancaria_id: string | null;
+  observacao: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ObraParametroRow = {
+  chave: string;
+  valor_numerico: number | null;
+  valor_texto: string | null;
+  data_referencia: string | null;
+  observacao: string | null;
+  updated_at: string;
+};
+
 export type DocumentoGeradoRow = {
   id: string;
   tipo: DocumentoGeradoTipo;
@@ -479,6 +570,42 @@ export interface Database {
         Row: FornecedorRow;
         Insert: Omit<FornecedorRow, "id" | "created_at" | "updated_at">;
         Update: Partial<Omit<FornecedorRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      estoque: {
+        Row: EstoqueRow;
+        Insert: Omit<EstoqueRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<EstoqueRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      documentos: {
+        Row: DocumentoRow;
+        Insert: Omit<DocumentoRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<DocumentoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      obra_lts_itens: {
+        Row: ObraLtsItemRow;
+        Insert: Omit<ObraLtsItemRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<ObraLtsItemRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      obra_pendencias: {
+        Row: ObraPendenciaRow;
+        Insert: Omit<ObraPendenciaRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<ObraPendenciaRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      notas_em_grupo: {
+        Row: NotaEmGrupoRow;
+        Insert: Omit<NotaEmGrupoRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<NotaEmGrupoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      obra_parametros: {
+        Row: ObraParametroRow;
+        Insert: Omit<ObraParametroRow, "updated_at">;
+        Update: Partial<Omit<ObraParametroRow, "chave" | "updated_at">>;
         Relationships: EmptyRels;
       };
       transacoes_empresa: {
@@ -681,6 +808,18 @@ export interface Database {
       };
       v_agente_prompts_publico: {
         Row: AgentePromptPublicoRow;
+        Relationships: EmptyRels;
+      };
+      v_obra_totais: {
+        Row: {
+          pago_oc_projeto: number | null;
+          pago_medicoes: number | null;
+          pago_outras: number | null;
+          a_pagar_outras: number | null;
+          provisionado_medicoes: number | null;
+          provisionado_outras: number | null;
+          provisionado_retencao: number | null;
+        };
         Relationships: EmptyRels;
       };
     };

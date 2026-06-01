@@ -27,6 +27,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { callProvider, modelForProvider, type AIMensagem } from "@/lib/ai/providers";
+import { toolsParaAgente, executarTool } from "@/lib/ai/tools";
 import type { IAProvider } from "@/types";
 
 interface ChatRequestBody {
@@ -193,13 +194,20 @@ export async function POST(req: NextRequest) {
     .reverse()
     .map((m) => ({ role: m.role, content: m.conteudo }));
 
-  // ---- 7) Chama o provedor (com cancelamento se o request foi abortado) --
+  // ---- 7) Chama o provedor com tools do agente -----------------------------
+  const tools = toolsParaAgente(agenteId);
   let resposta;
   try {
     if (req.signal.aborted) throw new DOMException("Request cancelado.", "AbortError");
     resposta = await callProvider(provider, apiKey, historico, {
       systemPrompt: prompt.system_prompt ?? "",
       temperatura:  Number(prompt.temperatura ?? 0.3),
+      tools,
+      onToolCall: async (name, args) => {
+        const res = await executarTool(tools, name, args, { admin, userId: user.id });
+        // O LLM lê o objeto inteiro — incluindo { ok, error } no caso de falha.
+        return res;
+      },
     });
   } catch (e) {
     // Compensa o INSERT do user — assim a próxima conversa não fica com
