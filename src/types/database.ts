@@ -373,6 +373,54 @@ export type AgentePromptRow = {
   updated_by: string | null;
 };
 
+export type ChatSessionRow = {
+  id: string;
+  agente_id: string;
+  agente_nome: string;
+  usuario_id: string;
+  usuario_nome: string;
+  titulo: string | null;
+  fechada: boolean;
+  metadata: Json | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatMensagemRow = {
+  id: string;
+  session_id: string;
+  role: ChatRole;
+  conteudo: string;
+  anexos: Json | null;
+  tokens: number | null;             // = tokens_output (mantido por compat com migration 0007)
+  tokens_input: number | null;
+  model: string | null;
+  provider: IAProvider | null;
+  created_at: string;
+};
+
+export type AgentePromptPublicoRow = {
+  agente_id: string;
+  nome: string;
+  mensagem_boas_vindas: string | null;
+  ativo: boolean;
+};
+
+export type ChatSessaoRecenteRow = {
+  session_id: string;
+  agente_id: string;
+  agente_nome: string;
+  usuario_id: string;
+  usuario_nome: string;
+  titulo: string | null;
+  fechada: boolean;
+  created_at: string;
+  updated_at: string;
+  ultima_mensagem: string | null;
+  ultima_mensagem_role: ChatRole | null;
+  ultima_mensagem_at: string | null;
+};
+
 // ============================================================================
 // Database type (formato esperado pelo @supabase/postgrest-js)
 // ============================================================================
@@ -503,6 +551,22 @@ export interface Database {
         Update: Partial<Omit<AgentePromptRow, "agente_id">>;
         Relationships: EmptyRels;
       };
+      chat_sessions: {
+        Row: ChatSessionRow;
+        Insert:
+          Pick<ChatSessionRow, "agente_id" | "agente_nome" | "usuario_id" | "usuario_nome"> &
+          Partial<Omit<ChatSessionRow, "agente_id" | "agente_nome" | "usuario_id" | "usuario_nome">>;
+        Update: Partial<Omit<ChatSessionRow, "id" | "created_at">>;
+        Relationships: EmptyRels;
+      };
+      chat_mensagens: {
+        Row: ChatMensagemRow;
+        Insert:
+          Pick<ChatMensagemRow, "session_id" | "role" | "conteudo"> &
+          Partial<Omit<ChatMensagemRow, "session_id" | "role" | "conteudo">>;
+        Update: Partial<Omit<ChatMensagemRow, "id" | "created_at">>;
+        Relationships: EmptyRels;
+      };
     };
     Views: {
       v_kpi_mensal: {
@@ -609,6 +673,14 @@ export interface Database {
           classificacao_nome: string;
           valor_total: number;
         };
+        Relationships: EmptyRels;
+      };
+      v_chat_sessoes_recentes: {
+        Row: ChatSessaoRecenteRow;
+        Relationships: EmptyRels;
+      };
+      v_agente_prompts_publico: {
+        Row: AgentePromptPublicoRow;
         Relationships: EmptyRels;
       };
     };

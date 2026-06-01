@@ -1,12 +1,15 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import { ConfigIAModal } from "@/components/assistentes/ConfigIAModal";
+import { createClient } from "@/lib/supabase/client";
+import type { ChatSessaoRecenteRow } from "@/types";
 import {
-  Scale, Leaf, Calculator, FileSignature, DollarSign,
+  Scale, Leaf, Calculator, FileSignature,
   Receipt, Bot, MessageSquare, Clock, Settings,
 } from "lucide-react";
 
@@ -25,23 +28,73 @@ interface Agent {
 // definição comentada para reativar quando o pipeline estiver pronto.
 //   { id: "financeiro", nome: "Assistente Financeiro", ... }
 const AGENTS: Agent[] = [
-  { id: "contabilidade", nome: "Assistente de Contabilidade", descricao: "Auxílio contábil, lançamentos e conciliação bancária.", icon: <Calculator size={22}/>, color: "bg-blue-700", area: "Contabilidade", status: "ativo" },
-  { id: "adv-trabalhista", nome: "Assistente Adv. Trabalhista", descricao: "Suporte jurídico trabalhista, contratos CLT e legislação.", icon: <Scale size={22}/>, color: "bg-purple-700", area: "Jurídico", status: "ativo" },
-  { id: "adv-ambiental", nome: "Assistente Adv. Ambiental", descricao: "Legislação ambiental, licenciamentos e conformidade.", icon: <Leaf size={22}/>, color: "bg-green-700", area: "Jurídico", status: "ativo" },
-  { id: "adv-tributarista", nome: "Assistente Adv. Tributarista", descricao: "Impostos, tributos, otimização fiscal e planejamento.", icon: <Receipt size={22}/>, color: "bg-amber-700", area: "Jurídico", status: "ativo" },
-  { id: "adv-contratual", nome: "Assistente Adv. Contratual", descricao: "Elaboração e revisão de contratos empresariais.", icon: <FileSignature size={22}/>, color: "bg-rose-700", area: "Jurídico", status: "ativo" },
-  { id: "fiscal-notas", nome: "Assistente Fiscal / NF-e", descricao: "Emissão de notas fiscais, SPED e obrigações acessórias.", icon: <Bot size={22}/>, color: "bg-cyan-700", area: "Fiscal", status: "ativo" },
-  { id: "estoque", nome: "Assistente de Estoque", descricao: "Controle de inventário, alertas de baixo estoque e consultas.", icon: <Bot size={22}/>, color: "bg-orange-700", area: "Operacional", status: "ativo" },
+  { id: "contabilidade",     nome: "Assistente de Contabilidade",  descricao: "Auxílio contábil, lançamentos e conciliação bancária.",          icon: <Calculator size={22}/>,     color: "bg-blue-700",   area: "Contabilidade", status: "ativo" },
+  { id: "adv-trabalhista",   nome: "Assistente Adv. Trabalhista",  descricao: "Suporte jurídico trabalhista, contratos CLT e legislação.",      icon: <Scale size={22}/>,          color: "bg-purple-700", area: "Jurídico",      status: "ativo" },
+  { id: "adv-ambiental",     nome: "Assistente Adv. Ambiental",    descricao: "Legislação ambiental, licenciamentos e conformidade.",           icon: <Leaf size={22}/>,           color: "bg-green-700",  area: "Jurídico",      status: "ativo" },
+  { id: "adv-tributarista",  nome: "Assistente Adv. Tributarista", descricao: "Impostos, tributos, otimização fiscal e planejamento.",          icon: <Receipt size={22}/>,        color: "bg-amber-700",  area: "Jurídico",      status: "ativo" },
+  { id: "adv-contratual",    nome: "Assistente Adv. Contratual",   descricao: "Elaboração e revisão de contratos empresariais.",                icon: <FileSignature size={22}/>,  color: "bg-rose-700",   area: "Jurídico",      status: "ativo" },
+  { id: "fiscal-notas",      nome: "Assistente Fiscal / NF-e",     descricao: "Emissão de notas fiscais, SPED e obrigações acessórias.",        icon: <Bot size={22}/>,            color: "bg-cyan-700",   area: "Fiscal",        status: "ativo" },
+  { id: "estoque",           nome: "Assistente de Estoque",        descricao: "Controle de inventário, alertas de baixo estoque e consultas.",  icon: <Bot size={22}/>,            color: "bg-orange-700", area: "Operacional",   status: "ativo" },
 ];
 
-const RECENTES = [
-  { session: "joao-adv-trabalhista", agente: "Adv. Trabalhista", ultima: "Qual o prazo para homologação?", tempo: "há 2h" },
-  { session: "maria-contabilidade", agente: "Contabilidade", ultima: "Como lançar essa despesa?", tempo: "há 1 dia" },
-  { session: "lola-fiscal", agente: "Fiscal / NF-e", ultima: "Confirmando a emissão da NF 256.", tempo: "há 2 dias" },
-];
+const LIMITE_RECENTES = 10;
+
+function tempoRelativo(iso: string): string {
+  const d = new Date(iso);
+  const diffMs = Date.now() - d.getTime();
+  if (diffMs < 0) return "agora";
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1)  return "agora";
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24)   return `há ${h}h`;
+  const dias = Math.floor(h / 24);
+  if (dias < 7) return `há ${dias} ${dias === 1 ? "dia" : "dias"}`;
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+}
 
 export function AssistentesHub() {
+  const toast = useToast();
   const [configOpen, setConfigOpen] = useState(false);
+  const [recentes, setRecentes] = useState<ChatSessaoRecenteRow[]>([]);
+  const [carregandoRecentes, setCarregandoRecentes] = useState(true);
+
+  useEffect(() => {
+    let cancelado = false;
+    const supabase = createClient();
+    (async () => {
+      // Só mostra conversas do PRÓPRIO usuário: o link 'Abrir' leva pro chat
+      // dele com aquele agente, e o ChatPage só carrega sessões do auth.uid()
+      // (RLS de escrita também é por dono). Mostrar conversas de outros aqui
+      // só causava cliques perdidos.
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id ?? null;
+      if (!userId) {
+        if (!cancelado) {
+          setRecentes([]);
+          setCarregandoRecentes(false);
+        }
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("v_chat_sessoes_recentes")
+        .select("*")
+        .eq("usuario_id", userId)
+        .order("updated_at", { ascending: false })
+        .limit(LIMITE_RECENTES);
+      if (cancelado) return;
+      if (error) {
+        toast.error("Erro ao carregar conversas recentes", error.message);
+        setRecentes([]);
+      } else {
+        setRecentes(data ?? []);
+      }
+      setCarregandoRecentes(false);
+    })();
+    return () => { cancelado = true; };
+  }, [toast]);
+
   return (
     <div className="space-y-6 max-w-[1200px]">
       <div className="flex items-start justify-between gap-4">
@@ -101,22 +154,40 @@ export function AssistentesHub() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-100">
-                  {["Sessão","Agente","Última mensagem","Tempo","Ação"].map(h => (
+                  {["Usuário", "Agente", "Última mensagem", "Tempo", "Ação"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {RECENTES.map((r) => (
-                  <tr key={r.session} className="border-b border-stone-50 hover:bg-stone-50 transition table-row-alt">
-                    <td className="px-4 py-3 text-stone-700 font-mono text-xs">{r.session}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant="info">{r.agente}</Badge>
+                {carregandoRecentes && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-6 text-center text-xs text-stone-400">
+                      Carregando…
                     </td>
-                    <td className="px-4 py-3 text-stone-500 text-xs truncate max-w-[200px]">{r.ultima}</td>
-                    <td className="px-4 py-3 text-stone-400 text-xs">{r.tempo}</td>
+                  </tr>
+                )}
+                {!carregandoRecentes && recentes.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-6 text-center text-xs text-stone-400">
+                      Nenhuma conversa ainda. Escolha um assistente acima para começar.
+                    </td>
+                  </tr>
+                )}
+                {recentes.map((r) => (
+                  <tr key={r.session_id} className="border-b border-stone-50 hover:bg-stone-50 transition table-row-alt">
+                    <td className="px-4 py-3 text-stone-700 text-xs">{r.usuario_nome}</td>
                     <td className="px-4 py-3">
-                      <Link href={`/dashboard/assistentes/contabilidade`}>
+                      <Badge variant="info">{r.agente_nome}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-stone-500 text-xs truncate max-w-[260px]">
+                      {r.ultima_mensagem ?? <span className="italic text-stone-300">sem mensagens</span>}
+                    </td>
+                    <td className="px-4 py-3 text-stone-400 text-xs whitespace-nowrap">
+                      {tempoRelativo(r.updated_at)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link href={`/dashboard/assistentes/${r.agente_id}`}>
                         <Button variant="ghost" size="sm">Abrir</Button>
                       </Link>
                     </td>

@@ -1,80 +1,122 @@
 // POST /api/assistentes/chat
 //
-// Encaminha uma mensagem do usuário para o provedor de IA configurado
-// (Gemini ou OpenAI), lendo a chave de API server-side em public.config_ia.
-// O front nunca enxerga a chave: só envia mensagem + agente e recebe a resposta.
+// Envia uma mensagem para o assistente, persiste user+assistant no banco e
+// devolve a resposta. Mantém UMA sessão "viva" por (usuario, agente) — o índice
+// único parcial uniq_cs_open na migration 0020 garante isso a nível de DB.
 //
 // Body:
 //   {
 //     "agente_id":  "contabilidade",
-//     "mensagens": [
-//       { "role": "user" | "assistant" | "system", "content": "..." }
-//     ]
+//     "content":    "Como lanço esta despesa?",
+//     "session_id": "<uuid opcional — força reuso de uma sessão específica do próprio usuário>"
 //   }
 //
 // Response 200:
 //   {
-//     "provider": "gemini" | "openai",
-//     "content":  "<resposta do assistente>"
+//     "session_id":        "<uuid>",
+//     "provider":          "gemini" | "openai",
+//     "user_message":      { id, role, conteudo, created_at },
+//     "assistant_message": { id, role, conteudo, created_at }
 //   }
 //
-// ⚠️  Esqueleto: a chamada efetiva ao Gemini/OpenAI ainda não foi plugada.
-//     Hoje devolve 501 quando há chave configurada e 400/424 quando não há.
-//     Quando for tirar o mock do ChatPage:
-//       1. Adicionar o SDK do provedor (@google/genai e/ou openai)
-//       2. Implementar callGemini() / callOpenAI() abaixo
-//       3. Trocar o 501 por NextResponse.json({ provider, content })
+// Erros:
+//   400 (body) · 401 (não autenticado) · 424 (chave/treinamento ausente)
+//   500 (Supabase) · 502 (provedor IA falhou) · 504 (request abortado)
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import type { ChatRole, IAProvider } from "@/types";
-
-interface ChatMensagemIn {
-  role: ChatRole;
-  content: string;
-}
+import { createAdminClient } from "@/lib/supabase/admin";
+import { callProvider, modelForProvider, type AIMensagem } from "@/lib/ai/providers";
+import type { IAProvider } from "@/types";
 
 interface ChatRequestBody {
   agente_id?: string;
-  mensagens?: ChatMensagemIn[];
+  content?: string;
+  session_id?: string;
+}
+
+const MAX_HISTORICO     = 30;       // mensagens enviadas ao LLM como contexto
+const MAX_CONTENT_CHARS = 8000;     // proteção básica contra payloads gigantes
+
+// Mapeamento de erros conhecidos do SDK para mensagens amigáveis em PT-BR.
+// Roda contra `e.message` (case-insensitive).
+function friendlyProviderError(provider: IAProvider, raw: string): string {
+  const m = raw.toLowerCase();
+  const nomeProv = provider === "gemini" ? "Google Gemini" : "OpenAI";
+  if (m.includes("api key") || m.includes("invalid_api_key") || m.includes("api_key_invalid") || m.includes("permission") || m.includes("unauthorized") || m.includes("401")) {
+    return `A chave de API do ${nomeProv} foi recusada. Abra Assistentes → engrenagem e revise.`;
+  }
+  if (m.includes("quota") || m.includes("rate") || m.includes("429") || m.includes("resource_exhausted")) {
+    return `Cota do ${nomeProv} esgotada ou muitas requisições em pouco tempo. Tente novamente em instantes.`;
+  }
+  if (m.includes("timeout") || m.includes("etimedout") || m.includes("network") || m.includes("fetch failed")) {
+    return `Não foi possível alcançar o ${nomeProv} agora. Verifique a conexão e tente novamente.`;
+  }
+  if (m.includes("model") && (m.includes("not found") || m.includes("not_found"))) {
+    return `Modelo configurado para o ${nomeProv} não está disponível. Avise o admin.`;
+  }
+  if (m.includes("safety") || m.includes("blocked")) {
+    return `A resposta foi bloqueada pelo filtro de segurança do ${nomeProv}.`;
+  }
+  return `Não foi possível obter resposta do ${nomeProv} agora. Tente novamente em instantes.`;
 }
 
 export async function POST(req: NextRequest) {
+  // ---- 1) Body validation -------------------------------------------------
   let body: ChatRequestBody;
   try {
     body = (await req.json()) as ChatRequestBody;
   } catch {
-    return NextResponse.json({ error: "Body JSON inválido" }, { status: 400 });
+    return NextResponse.json({ error: "Body JSON inválido." }, { status: 400 });
   }
 
-  if (!body.agente_id || typeof body.agente_id !== "string") {
-    return NextResponse.json({ error: "agente_id obrigatório" }, { status: 400 });
-  }
-  if (!Array.isArray(body.mensagens) || body.mensagens.length === 0) {
-    return NextResponse.json({ error: "mensagens (array não vazio) obrigatório" }, { status: 400 });
-  }
+  const agenteId = body.agente_id?.trim();
+  const content  = body.content?.trim();
+  const sessionIdHint = body.session_id?.trim() || null;
 
-  const supabase = await createClient();
-
-  // 1) Auth
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
-
-  // 2) Lê config_ia (RLS permite SELECT para qualquer autenticado)
-  const { data: cfg, error: cfgErr } = await supabase
-    .from("config_ia")
-    .select("provider_ativo, gemini_api_key, openai_api_key")
-    .eq("id", 1)
-    .maybeSingle();
-
-  if (cfgErr) {
+  if (!agenteId) return NextResponse.json({ error: "agente_id obrigatório." }, { status: 400 });
+  if (!content)  return NextResponse.json({ error: "content obrigatório." },   { status: 400 });
+  if (content.length > MAX_CONTENT_CHARS) {
     return NextResponse.json(
-      { error: `Falha ao ler configuração das IAs: ${cfgErr.message}` },
-      { status: 500 },
+      { error: `Mensagem muito longa (máx. ${MAX_CONTENT_CHARS} caracteres).` },
+      { status: 400 },
     );
   }
+
+  // ---- 2) Auth + perfil do usuário ----------------------------------------
+  const supabase = await createClient();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !user) {
+    return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+  }
+
+  // ---- 3) Lê config_ia (admin, bypass RLS) + agente_prompt + perfil ------
+  // config_ia tem SELECT restrito a admin/editor (migration 0020). Aqui
+  // usamos o admin client porque o callante pode ser um sócio (role=socio).
+  const admin = createAdminClient();
+
+  const [cfgRes, promptRes, userRowRes] = await Promise.all([
+    admin
+      .from("config_ia")
+      .select("provider_ativo, gemini_api_key, openai_api_key")
+      .eq("id", 1)
+      .maybeSingle(),
+    admin
+      .from("agente_prompts")
+      .select("nome, system_prompt, temperatura, ativo")
+      .eq("agente_id", agenteId)
+      .maybeSingle(),
+    supabase
+      .from("users")
+      .select("full_name, email")
+      .eq("id", user.id)
+      .maybeSingle(),
+  ]);
+
+  if (cfgRes.error)    return NextResponse.json({ error: `Falha ao ler configuração das IAs: ${cfgRes.error.message}` },    { status: 500 });
+  if (promptRes.error) return NextResponse.json({ error: `Falha ao ler treinamento do agente: ${promptRes.error.message}` }, { status: 500 });
+
+  const cfg = cfgRes.data;
   if (!cfg) {
     return NextResponse.json(
       { error: "Configuração das IAs não encontrada. Abra Assistentes → engrenagem e cadastre uma chave." },
@@ -86,87 +128,210 @@ export async function POST(req: NextRequest) {
   const apiKey = provider === "gemini" ? cfg.gemini_api_key : cfg.openai_api_key;
   if (!apiKey) {
     return NextResponse.json(
-      {
-        error: `Provedor ativo é "${provider}" mas a chave correspondente não foi cadastrada. Abra Assistentes → engrenagem.`,
-      },
+      { error: `Provedor ativo é "${provider}" mas a chave correspondente não foi cadastrada. Abra Assistentes → engrenagem.` },
       { status: 424 },
     );
   }
 
-  // 3) Lê o treinamento do agente (system_prompt + temperatura)
-  const { data: prompt, error: promptErr } = await supabase
-    .from("agente_prompts")
-    .select("system_prompt, temperatura, ativo")
-    .eq("agente_id", body.agente_id)
-    .maybeSingle();
-
-  if (promptErr) {
+  const prompt = promptRes.data;
+  if (!prompt) {
     return NextResponse.json(
-      { error: `Falha ao ler treinamento do agente: ${promptErr.message}` },
+      { error: `Agente "${agenteId}" não tem treinamento cadastrado. Abra o chat dele → engrenagem.` },
+      { status: 424 },
+    );
+  }
+  if (!prompt.ativo) {
+    return NextResponse.json(
+      { error: `O assistente "${prompt.nome}" está em manutenção (inativo).` },
+      { status: 424 },
+    );
+  }
+
+  const usuarioNome =
+    userRowRes.data?.full_name ??
+    userRowRes.data?.email?.split("@")[0] ??
+    user.email?.split("@")[0] ??
+    "Usuário";
+
+  // ---- 4) Resolve sessão (own + open) -------------------------------------
+  const sessionId = await resolveSessionId({
+    supabase, admin,
+    userId: user.id, usuarioNome,
+    agenteId, agenteNome: prompt.nome,
+    sessionIdHint, primeiroConteudo: content,
+  });
+
+  if (!sessionId.ok) return NextResponse.json({ error: sessionId.error }, { status: 500 });
+
+  // ---- 5) Persiste a mensagem do usuário ----------------------------------
+  const { data: userMsg, error: userMsgErr } = await supabase
+    .from("chat_mensagens")
+    .insert({ session_id: sessionId.id, role: "user", conteudo: content })
+    .select("id, session_id, role, conteudo, created_at")
+    .single();
+  if (userMsgErr || !userMsg) {
+    return NextResponse.json(
+      { error: `Falha ao salvar mensagem: ${userMsgErr?.message ?? "desconhecido"}` },
       { status: 500 },
     );
   }
-  if (!prompt || !prompt.ativo) {
+
+  // ---- 6) Carrega histórico (com a msg recém-inserida no final) -----------
+  const { data: historicoDesc, error: histErr } = await supabase
+    .from("chat_mensagens")
+    .select("role, conteudo, created_at")
+    .eq("session_id", sessionId.id)
+    .order("created_at", { ascending: false })
+    .limit(MAX_HISTORICO);
+  if (histErr) {
+    // Rollback da mensagem que acabou de entrar pra não ficar órfã.
+    await supabase.from("chat_mensagens").delete().eq("id", userMsg.id);
+    return NextResponse.json({ error: `Falha ao ler histórico: ${histErr.message}` }, { status: 500 });
+  }
+  const historico: AIMensagem[] = (historicoDesc ?? [])
+    .slice()
+    .reverse()
+    .map((m) => ({ role: m.role, content: m.conteudo }));
+
+  // ---- 7) Chama o provedor (com cancelamento se o request foi abortado) --
+  let resposta;
+  try {
+    if (req.signal.aborted) throw new DOMException("Request cancelado.", "AbortError");
+    resposta = await callProvider(provider, apiKey, historico, {
+      systemPrompt: prompt.system_prompt ?? "",
+      temperatura:  Number(prompt.temperatura ?? 0.3),
+    });
+  } catch (e) {
+    // Compensa o INSERT do user — assim a próxima conversa não fica com
+    // mensagem solta sem resposta correspondente.
+    await supabase.from("chat_mensagens").delete().eq("id", userMsg.id);
+
+    if (e instanceof DOMException && e.name === "AbortError") {
+      return NextResponse.json({ error: "Envio cancelado." }, { status: 504 });
+    }
+    const rawMsg = e instanceof Error ? e.message : String(e);
+    console.error(`[chat] provider ${provider} falhou: ${rawMsg}`);
     return NextResponse.json(
-      {
-        error: `Agente "${body.agente_id}" não tem treinamento cadastrado ou está inativo. Abra o chat dele → engrenagem.`,
-      },
-      { status: 424 },
+      { error: friendlyProviderError(provider, rawMsg) },
+      { status: 502 },
     );
   }
 
-  const systemPrompt: string = prompt.system_prompt ?? "";
-  const temperatura: number = Number(prompt.temperatura ?? 0.3);
+  const conteudoResposta = resposta.content || "(O modelo não retornou texto.)";
 
-  // 4) TODO: chamar o provedor. Por enquanto devolve 501 informando o que falta.
-  return NextResponse.json(
-    {
-      error: "Integração com o provedor ainda não foi plugada. Veja TODO em src/app/api/assistentes/chat/route.ts.",
+  // ---- 8) Persiste a resposta --------------------------------------------
+  const { data: assistantMsg, error: asstErr } = await supabase
+    .from("chat_mensagens")
+    .insert({
+      session_id:   sessionId.id,
+      role:         "assistant",
+      conteudo:     conteudoResposta,
+      tokens:       resposta.tokens_output ?? null,
+      tokens_input: resposta.tokens_input  ?? null,
       provider,
-      agente_id: body.agente_id,
-      // Eco do que será enviado ao provedor quando a integração for plugada — útil pra debug.
-      debug: {
-        system_prompt_len: systemPrompt.length,
-        temperatura,
-      },
-    },
-    { status: 501 },
-  );
+      model:        modelForProvider(provider),
+    })
+    .select("id, session_id, role, conteudo, created_at")
+    .single();
 
-  // ---------------------------------------------------------------------------
-  // Esqueleto das implementações — descomentar quando for tirar o mock.
-  // ---------------------------------------------------------------------------
-  //
-  // const content = provider === "gemini"
-  //   ? await callGemini(apiKey, systemPrompt, temperatura, body.mensagens)
-  //   : await callOpenAI(apiKey, systemPrompt, temperatura, body.mensagens);
-  //
-  // return NextResponse.json({ provider, content });
+  if (asstErr || !assistantMsg) {
+    // Rollback do user para manter o histórico consistente.
+    await supabase.from("chat_mensagens").delete().eq("id", userMsg.id);
+    console.error(`[chat] falha ao salvar resposta: ${asstErr?.message}`);
+    return NextResponse.json(
+      { error: "Falha ao salvar a resposta do assistente." },
+      { status: 500 },
+    );
+  }
+
+  // (chat_sessions.updated_at agora é atualizado por trigger AFTER INSERT.)
+
+  return NextResponse.json({
+    session_id: sessionId.id,
+    provider,
+    user_message:      userMsg,
+    assistant_message: assistantMsg,
+  });
 }
 
-// ---------------------------------------------------------------------------
-// async function callGemini(apiKey: string, systemPrompt: string, temperatura: number, msgs: ChatMensagemIn[]): Promise<string> {
-//   // npm i @google/genai
-//   // import { GoogleGenAI } from "@google/genai";
-//   // const ai = new GoogleGenAI({ apiKey });
-//   // const r = await ai.models.generateContent({
-//   //   model: "gemini-2.0-flash",
-//   //   contents: msgs.map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
-//   //   config: { systemInstruction: systemPrompt, temperature: temperatura },
-//   // });
-//   // return r.text ?? "";
-//   throw new Error("not implemented");
-// }
-//
-// async function callOpenAI(apiKey: string, systemPrompt: string, temperatura: number, msgs: ChatMensagemIn[]): Promise<string> {
-//   // npm i openai
-//   // import OpenAI from "openai";
-//   // const client = new OpenAI({ apiKey });
-//   // const r = await client.chat.completions.create({
-//   //   model: "gpt-4o-mini",
-//   //   temperature: temperatura,
-//   //   messages: [{ role: "system", content: systemPrompt }, ...msgs],
-//   // });
-//   // return r.choices[0]?.message?.content ?? "";
-//   throw new Error("not implemented");
-// }
+// ============================================================================
+// Helpers
+// ============================================================================
+
+type SessionResolution = { ok: true; id: string } | { ok: false; error: string };
+
+interface ResolveArgs {
+  supabase:     Awaited<ReturnType<typeof createClient>>;
+  admin:        ReturnType<typeof createAdminClient>;
+  userId:       string;
+  usuarioNome:  string;
+  agenteId:     string;
+  agenteNome:   string;
+  sessionIdHint: string | null;
+  primeiroConteudo: string;
+}
+
+async function resolveSessionId(a: ResolveArgs): Promise<SessionResolution> {
+  // 1) Se o cliente sugeriu uma session_id, só aceita se for do PRÓPRIO usuário
+  //    E do MESMO agente. Caso contrário, ignora e segue o fluxo normal.
+  if (a.sessionIdHint) {
+    const { data: forced } = await a.supabase
+      .from("chat_sessions")
+      .select("id, fechada, usuario_id, agente_id")
+      .eq("id", a.sessionIdHint)
+      .maybeSingle();
+    if (
+      forced &&
+      !forced.fechada &&
+      forced.usuario_id === a.userId &&
+      forced.agente_id === a.agenteId
+    ) {
+      return { ok: true, id: forced.id };
+    }
+    // hint inválido → cai pro fluxo normal (sem erro)
+  }
+
+  // 2) Procura sessão viva existente.
+  const { data: existing } = await a.supabase
+    .from("chat_sessions")
+    .select("id")
+    .eq("usuario_id", a.userId)
+    .eq("agente_id", a.agenteId)
+    .eq("fechada", false)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existing) return { ok: true, id: existing.id };
+
+  // 3) Tenta criar — o índice único parcial uniq_cs_open evita corrida.
+  const { data: created, error: createErr } = await a.supabase
+    .from("chat_sessions")
+    .insert({
+      agente_id:    a.agenteId,
+      agente_nome:  a.agenteNome,
+      usuario_id:   a.userId,
+      usuario_nome: a.usuarioNome,
+      titulo:       a.primeiroConteudo.slice(0, 60),
+    })
+    .select("id")
+    .single();
+
+  if (!createErr && created) return { ok: true, id: created.id };
+
+  // 4) Se duplicou (código Postgres 23505 — unique_violation), outro request
+  //    do mesmo usuário/agente já criou a sessão; relê e retorna.
+  if (createErr?.code === "23505") {
+    const { data: retry } = await a.supabase
+      .from("chat_sessions")
+      .select("id")
+      .eq("usuario_id", a.userId)
+      .eq("agente_id", a.agenteId)
+      .eq("fechada", false)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (retry) return { ok: true, id: retry.id };
+  }
+
+  return { ok: false, error: `Falha ao criar sessão de chat: ${createErr?.message ?? "desconhecido"}` };
+}

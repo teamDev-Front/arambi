@@ -40,6 +40,10 @@ export type {
   IAProvider,
   ConfigIARow,
   AgentePromptRow,
+  ChatSessionRow,
+  ChatMensagemRow,
+  ChatSessaoRecenteRow,
+  AgentePromptPublicoRow,
 } from "./database";
 
 import type {

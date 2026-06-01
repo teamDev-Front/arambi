@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CheckCircle2, AlertTriangle, AlertCircle, Info, X } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -65,14 +65,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     return () => { timers.forEach((tm) => clearTimeout(tm)); timers.clear(); };
   }, []);
 
-  const value: ToastContextValue = {
-    show,
-    dismiss,
-    success: (title, description) => show({ kind: "success", title, description }),
-    error:   (title, description) => show({ kind: "error",   title, description, duration: 7000 }),
-    warning: (title, description) => show({ kind: "warning", title, description }),
-    info:    (title, description) => show({ kind: "info",    title, description }),
-  };
+  // Atalhos estáveis — não recriar referência a cada render, senão consumidores
+  // que listam `toast` em deps de useEffect/useCallback ficam refazendo o
+  // trabalho a cada toast disparado em outro lugar.
+  const success = useCallback((title: string, description?: string) => show({ kind: "success", title, description }), [show]);
+  const error   = useCallback((title: string, description?: string) => show({ kind: "error",   title, description, duration: 7000 }), [show]);
+  const warning = useCallback((title: string, description?: string) => show({ kind: "warning", title, description }), [show]);
+  const info    = useCallback((title: string, description?: string) => show({ kind: "info",    title, description }), [show]);
+
+  const value = useMemo<ToastContextValue>(
+    () => ({ show, dismiss, success, error, warning, info }),
+    [show, dismiss, success, error, warning, info],
+  );
 
   return (
     <ToastContext.Provider value={value}>

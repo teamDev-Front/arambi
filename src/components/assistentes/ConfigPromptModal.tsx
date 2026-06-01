@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
 import { createClient } from "@/lib/supabase/client";
-import type { AgentePromptRow } from "@/types";
+import type { AgentePromptPublicoRow, AgentePromptRow } from "@/types";
 import { BookOpen, MessageCircle, Save, Sliders, Sparkles } from "lucide-react";
 
 export interface AgentePromptEditavel {
@@ -33,14 +33,29 @@ function rowToEdit(row: AgentePromptRow | null): AgentePromptEditavel {
 }
 
 /**
- * Lê o "treinamento" de um assistente. Retorna null se ainda não houver registro.
- * Usado pelo ChatPage para puxar a mensagem de boas-vindas real.
+ * Lê o "treinamento" completo (com system_prompt + temperatura).
+ * Só admin/editor — RLS bloqueia outros papéis. Usado por esta modal.
  */
 export async function loadAgentePrompt(agenteId: string): Promise<AgentePromptRow | null> {
   const supabase = createClient();
   const { data } = await supabase
     .from("agente_prompts")
     .select("*")
+    .eq("agente_id", agenteId)
+    .maybeSingle();
+  return data;
+}
+
+/**
+ * Lê só os metadados públicos (nome, boas-vindas, ativo) — acessível a
+ * qualquer usuário autenticado via view v_agente_prompts_publico.
+ * Usado pelo ChatPage no carregamento da tela.
+ */
+export async function loadAgentePromptPublico(agenteId: string): Promise<AgentePromptPublicoRow | null> {
+  const supabase = createClient();
+  const { data } = await supabase
+    .from("v_agente_prompts_publico")
+    .select("agente_id, nome, mensagem_boas_vindas, ativo")
     .eq("agente_id", agenteId)
     .maybeSingle();
   return data;
