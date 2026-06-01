@@ -91,8 +91,7 @@ export function ConfigPromptModal({ open, agenteId, nomeFallback, onClose, onSav
   async function handleSalvar() {
     setSaving(true);
     const supabase = createClient();
-    const payload = {
-      agente_id: agenteId,
+    const camposEditaveis = {
       nome: edit.nome.trim() || nomeFallback,
       system_prompt: edit.system_prompt,
       mensagem_boas_vindas: edit.mensagem_boas_vindas.trim() || null,
@@ -101,18 +100,21 @@ export function ConfigPromptModal({ open, agenteId, nomeFallback, onClose, onSav
       updated_at: new Date().toISOString(),
     };
 
-    const query = existe
-      ? supabase.from("agente_prompts").update(payload).eq("agente_id", agenteId)
-      : supabase.from("agente_prompts").insert(payload);
-
-    const { error } = await query;
+    const { error } = existe
+      ? await supabase
+          .from("agente_prompts")
+          .update(camposEditaveis)
+          .eq("agente_id", agenteId)
+      : await supabase
+          .from("agente_prompts")
+          .insert({ agente_id: agenteId, ...camposEditaveis });
     setSaving(false);
 
     if (error) {
       toast.error("Erro ao salvar", error.message);
       return;
     }
-    toast.success("Treinamento salvo", `Atualizado para ${payload.nome}.`);
+    toast.success("Treinamento salvo", `Atualizado para ${camposEditaveis.nome}.`);
     setExiste(true);
     onSaved?.(edit);
     onClose();
