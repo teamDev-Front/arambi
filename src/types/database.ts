@@ -497,6 +497,65 @@ export type AgentePromptPublicoRow = {
   ativo: boolean;
 };
 
+export type OrcamentoMensalRow = {
+  id: string;
+  mes_referencia: string;                    // "YYYY-MM"
+  tipo_despesa: TipoDespesa;
+  valor_orcado: number;
+  observacao: string | null;
+  created_at: string;
+  updated_at: string;
+  updated_by: string | null;
+};
+
+export type ObraLtsStatusCalculadoRow = {
+  id: string;
+  oc_numero: string | null;
+  data_compra: string | null;
+  loja: string | null;
+  nf: string | null;
+  forma_pagamento: string | null;
+  valor: number;
+  vencimento: string | null;
+  status_cadastrado: LtsStatus;
+  status_calculado: LtsStatus;
+  contrato: string | null;
+  parcela: string | null;
+  observacao: string | null;
+  origem_planilha: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DistribuicaoLucroYtdRow = {
+  ano: number;
+  classificacao_pessoal: string;
+  classificacao_nome: string;
+  socio_id: string;
+  socio_nome: string;
+  socio_apelido: string | null;
+  valor_acumulado: number;
+  qtd_lancamentos: number;
+};
+
+export type FazendaAramburuYtdRow = {
+  ano: number;
+  socio_id: string;
+  socio_nome: string;
+  valor_acumulado: number;
+  qtd_lancamentos: number;
+};
+
+export type ValidacaoConsistenciaRow = {
+  codigo: string;
+  descricao: string;
+  severidade: "aviso" | "erro";
+  esperado: number | null;
+  realizado: number | null;
+  diferenca: number | null;
+  detalhes: string | null;
+};
+
 export type ChatSessaoRecenteRow = {
   session_id: string;
   agente_id: string;
@@ -694,6 +753,14 @@ export interface Database {
         Update: Partial<Omit<ChatMensagemRow, "id" | "created_at">>;
         Relationships: EmptyRels;
       };
+      orcamentos_mensais: {
+        Row: OrcamentoMensalRow;
+        Insert:
+          Pick<OrcamentoMensalRow, "mes_referencia" | "tipo_despesa" | "valor_orcado"> &
+          Partial<Omit<OrcamentoMensalRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<OrcamentoMensalRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
     };
     Views: {
       v_kpi_mensal: {
@@ -820,6 +887,22 @@ export interface Database {
           provisionado_outras: number | null;
           provisionado_retencao: number | null;
         };
+        Relationships: EmptyRels;
+      };
+      v_memoria_calculo_mensal: {
+        Row: TransacaoEmpresaRow;
+        Relationships: EmptyRels;
+      };
+      v_obra_lts_status_calculado: {
+        Row: ObraLtsStatusCalculadoRow;
+        Relationships: EmptyRels;
+      };
+      v_distribuicao_lucro_ytd: {
+        Row: DistribuicaoLucroYtdRow;
+        Relationships: EmptyRels;
+      };
+      v_fazenda_aramburu_ytd: {
+        Row: FazendaAramburuYtdRow;
         Relationships: EmptyRels;
       };
     };

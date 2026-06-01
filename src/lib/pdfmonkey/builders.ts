@@ -1,11 +1,11 @@
 // Builders que transformam dados crus do Supabase em payload dos templates
 // do PDFMonkey.
 //
-// IMPORTANTE: estes builders são "stubs" iniciais — devolvem um payload de
-// referência (mesmo conteúdo dos JSONs em /jsons-pdf-monkey/*) preenchido com
-// os dados que conseguimos extrair do mês selecionado. À medida que as
-// queries do mês (v_kpi_mensal, v_por_conta_contabil_mensal, etc.) cobrirem
-// todas as métricas, troque os campos hardcoded por valores derivados.
+// Status: a maioria dos campos já vem de views/tabelas reais. Os DEFAULTS
+// abaixo (CNPJ, nome da empresa, "preparado por") podem ser sobrescritos:
+//   • CNPJ e nome da empresa → leem de obra_parametros (chaves empresa_cnpj,
+//     empresa_nome). Se não existir lá, cai no literal histórico.
+//   • preparado_por → o caller pode passar args.preparadoPor.
 
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -46,6 +46,26 @@ export function mesReferenciaToFraseSocio(mesRef: string): string {
 }
 
 // ----------------------------------------------------------------------------
+// Perfil da empresa (CNPJ + nome) — busca em obra_parametros com fallback
+// ----------------------------------------------------------------------------
+const EMPRESA_NOME_FALLBACK = "Agropecuária Aramburu Ltda";
+const EMPRESA_CNPJ_FALLBACK = "30.921.299/0001-88";
+
+async function lerPerfilEmpresa(
+  supabase: SupabaseClient<Database>,
+): Promise<{ nome: string; cnpj: string }> {
+  const { data } = await supabase
+    .from("obra_parametros")
+    .select("chave, valor_texto")
+    .in("chave", ["empresa_nome", "empresa_cnpj"]);
+  const m = new Map((data ?? []).map((r) => [r.chave, r.valor_texto ?? ""]));
+  return {
+    nome: m.get("empresa_nome")?.trim() || EMPRESA_NOME_FALLBACK,
+    cnpj: m.get("empresa_cnpj")?.trim() || EMPRESA_CNPJ_FALLBACK,
+  };
+}
+
+// ----------------------------------------------------------------------------
 // Capa Empresa
 // ----------------------------------------------------------------------------
 export interface BuildCapaEmpresaArgs {
@@ -60,9 +80,10 @@ export async function buildCapaEmpresa(
   const { mes, numero_mes } = mesReferenciaToHuman(args.mesReferencia);
 
   // Saldos por banco no mês (vw existente) + cadastros para enriquecer apelido/banco
-  const [porBancoRes, contasRes] = await Promise.all([
+  const [porBancoRes, contasRes, perfilEmpresa] = await Promise.all([
     supabase.from("v_saldo_por_banco_mensal").select("*").eq("mes_referencia", args.mesReferencia),
     supabase.from("contas_bancarias_empresa").select("id, nome, apelido, banco, ordem, ativa").eq("ativa", true).order("ordem", { ascending: true, nullsFirst: false }),
+    lerPerfilEmpresa(supabase),
   ]);
   const porBanco = porBancoRes.data;
   const contasCadastradas = contasRes.data ?? [];
@@ -132,8 +153,8 @@ export async function buildCapaEmpresa(
   }
 
   return {
-    empresa: "Agropecuária Aramburu Ltda",
-    cnpj: "30.921.299/0001-88",
+    empresa: perfilEmpresa.nome,
+    cnpj: perfilEmpresa.cnpj,
     fazenda: "FAZENDA ARAMBURU",
     mes_referencia: mes.split(" ")[0],
     numero_mes,

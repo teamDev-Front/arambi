@@ -44,6 +44,11 @@ export type {
   ChatMensagemRow,
   ChatSessaoRecenteRow,
   AgentePromptPublicoRow,
+  OrcamentoMensalRow,
+  ObraLtsStatusCalculadoRow,
+  DistribuicaoLucroYtdRow,
+  FazendaAramburuYtdRow,
+  ValidacaoConsistenciaRow,
 } from "./database";
 
 import type {

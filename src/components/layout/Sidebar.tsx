@@ -16,6 +16,8 @@ import {
   Landmark,
   HandCoins,
   FileBarChart,
+  Wallet,
+  PiggyBank,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -23,6 +25,8 @@ const navItems = [
   { label: "Home", href: "/dashboard", icon: LayoutDashboard },
   { label: "Financeiro", href: "/dashboard/financeiro", icon: TrendingUp },
   { label: "Bancos", href: "/dashboard/bancos", icon: Landmark },
+  { label: "Saldos Mensais", href: "/dashboard/saldos", icon: Wallet },
+  { label: "Orçamentos", href: "/dashboard/orcamentos", icon: PiggyBank },
   { label: "Vendas Futuras", href: "/dashboard/vendas-futuras", icon: HandCoins },
   { label: "Estoque & Safra", href: "/dashboard/estoque", icon: Sprout },
   { label: "Relatórios PDF", href: "/dashboard/relatorios", icon: FileBarChart },
