@@ -1,10 +1,12 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
-import { Send, Bot, User, ArrowLeft, Settings, Plus, X, AlertTriangle } from "lucide-react";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Send, Bot, User, ArrowLeft, Settings, Plus, X, AlertTriangle, Info } from "lucide-react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { ConfigPromptModal, loadAgentePromptPublico } from "@/components/assistentes/ConfigPromptModal";
@@ -26,7 +28,7 @@ const AGENT_INFO: Record<string, { nome: string; descricao: string; color: strin
   "adv-tributarista":{ nome: "Adv. Tributarista",            descricao: "Impostos e tributos",              color: "bg-amber-700" },
   "adv-contratual":  { nome: "Adv. Contratual",              descricao: "Contratos empresariais",           color: "bg-rose-700" },
   "fiscal-notas":    { nome: "Assistente Fiscal",            descricao: "Emissão de NF-e",                  color: "bg-cyan-700" },
-  estoque:           { nome: "Assistente de Estoque",        descricao: "Controle de inventário",           color: "bg-orange-700" },
+  estoque:           { nome: "Assistente de Estoque & Safra", descricao: "Insumos, safra armazenada e vendas futuras", color: "bg-orange-700" },
 };
 
 const FALLBACK_WELCOME = "Olá! Como posso ajudá-lo hoje?";
@@ -68,15 +70,19 @@ interface APIResponseError { error: string }
 
 export function ChatPage({ agentId }: { agentId: string }) {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const sessionParam = searchParams.get("session");
   const agentFallback = AGENT_INFO[agentId] ?? { nome: agentId, descricao: "Assistente IA", color: "bg-stone-700" };
 
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessaoFechada, setSessaoFechada] = useState(false);
   const [welcome, setWelcome] = useState<string>(FALLBACK_WELCOME);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [historicoCarregando, setHistoricoCarregando] = useState(true);
   const [configOpen, setConfigOpen] = useState(false);
+  const [confirmNovaConversa, setConfirmNovaConversa] = useState(false);
   const [agenteAtivo, setAgenteAtivo] = useState<boolean>(true);
   const [agenteNome, setAgenteNome]  = useState<string>(agentFallback.nome);
   const [podeEditar, setPodeEditar]  = useState<boolean>(false);
@@ -113,25 +119,44 @@ export function ChatPage({ agentId }: { agentId: string }) {
       .maybeSingle();
     setPodeEditar(PODE_EDITAR_PROMPT.has((perfil?.role as UserRole) ?? "viewer"));
 
-    // Sessão viva (do PRÓPRIO usuário).
-    const { data: sess } = await supabase
-      .from("chat_sessions")
-      .select("id")
-      .eq("usuario_id", user.id)
-      .eq("agente_id", agentId)
-      .eq("fechada", false)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // Resolve a sessão: 1º tenta o ?session=<uuid> da URL (qualquer status,
+    // desde que pertença ao usuário e ao agente); senão pega a sessão viva.
+    let sess: { id: string; fechada: boolean } | null = null;
+
+    if (sessionParam) {
+      const { data } = await supabase
+        .from("chat_sessions")
+        .select("id, fechada, usuario_id, agente_id")
+        .eq("id", sessionParam)
+        .maybeSingle();
+      if (data && data.usuario_id === user.id && data.agente_id === agentId) {
+        sess = { id: data.id, fechada: data.fechada };
+      }
+    }
+
+    if (!sess) {
+      const { data } = await supabase
+        .from("chat_sessions")
+        .select("id, fechada")
+        .eq("usuario_id", user.id)
+        .eq("agente_id", agentId)
+        .eq("fechada", false)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (data) sess = data;
+    }
 
     if (!sess) {
       setSessionId(null);
+      setSessaoFechada(false);
       setMessages([]);
       setHistoricoCarregando(false);
       return;
     }
 
     setSessionId(sess.id);
+    setSessaoFechada(sess.fechada);
     const { data: msgs, error: msgsErr } = await supabase
       .from("chat_mensagens")
       .select("id, role, conteudo, created_at")
@@ -146,7 +171,7 @@ export function ChatPage({ agentId }: { agentId: string }) {
       setMessages((msgs ?? []).filter((m) => isUserOrAssistant(m.role)).map(rowToDisplay));
     }
     setHistoricoCarregando(false);
-  }, [agentId, agentFallback.nome, toast]);
+  }, [agentId, agentFallback.nome, sessionParam, toast]);
 
   useEffect(() => { void carregarHistorico(); }, [carregarHistorico]);
 
@@ -222,28 +247,32 @@ export function ChatPage({ agentId }: { agentId: string }) {
   }
 
   // --------- Nova conversa --------------------------------------------------
-  async function handleNovaConversa() {
+  function pedirNovaConversa() {
     if (loading) return;
-    if (!sessionId || messages.length === 0) {
-      toast.info("Já é uma nova conversa", "Não há histórico para arquivar.");
+    if (!sessionId || messages.length === 0 || sessaoFechada) {
+      toast.info("Já é uma nova conversa", "Não há conversa ativa para arquivar.");
       return;
     }
-    if (typeof window !== "undefined") {
-      const ok = window.confirm(
-        "Encerrar este chat e começar um novo? O histórico fica acessível em Conversas Recentes.",
-      );
-      if (!ok) return;
+    setConfirmNovaConversa(true);
+  }
+
+  async function confirmarNovaConversa() {
+    if (!sessionId) {
+      setConfirmNovaConversa(false);
+      return;
     }
     const supabase = createClient();
     const { error } = await supabase
       .from("chat_sessions")
       .update({ fechada: true })
       .eq("id", sessionId);
+    setConfirmNovaConversa(false);
     if (error) {
       toast.error("Não foi possível encerrar a conversa", error.message);
       return;
     }
     setSessionId(null);
+    setSessaoFechada(false);
     setMessages([]);
     toast.info("Nova conversa", "A conversa anterior fica salva em Conversas Recentes.");
   }
@@ -257,7 +286,7 @@ export function ChatPage({ agentId }: { agentId: string }) {
 
   // --------- Render ---------------------------------------------------------
   const mostrarBoasVindas = !historicoCarregando && messages.length === 0 && agenteAtivo;
-  const podeFazerNovaConversa = !!sessionId && messages.length > 0 && !loading;
+  const podeFazerNovaConversa = !!sessionId && !sessaoFechada && messages.length > 0 && !loading;
 
   return (
     <div className="flex flex-col h-full max-h-[calc(100vh-8rem)] max-w-[900px]">
@@ -278,7 +307,7 @@ export function ChatPage({ agentId }: { agentId: string }) {
           : <Badge variant="warning" className="ml-auto">Inativo</Badge>}
         <button
           type="button"
-          onClick={handleNovaConversa}
+          onClick={pedirNovaConversa}
           disabled={!podeFazerNovaConversa}
           className="p-2 rounded-lg border border-stone-200 bg-white text-stone-500 hover:text-accent-500 hover:border-accent-500 transition disabled:opacity-40 disabled:cursor-not-allowed"
           title={podeFazerNovaConversa ? "Encerrar este chat e começar um novo" : "Já é uma nova conversa"}
@@ -323,6 +352,27 @@ export function ChatPage({ agentId }: { agentId: string }) {
           </p>
         </div>
       )}
+
+      {sessaoFechada && agenteAtivo && !historicoCarregando && (
+        <div className="mb-3 rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 flex items-start gap-2 text-stone-700">
+          <Info size={16} className="mt-0.5 shrink-0 text-stone-400" />
+          <p className="text-xs leading-relaxed">
+            Você está visualizando uma <strong>conversa arquivada</strong>. Se enviar uma nova mensagem,
+            uma <strong>conversa nova</strong> será iniciada automaticamente.
+          </p>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmNovaConversa}
+        title="Encerrar este chat e começar um novo?"
+        description="A conversa atual fica salva e acessível em Conversas Recentes. Você pode reabrir a qualquer momento — mas a partir dessa nova conversa o histórico do assistente recomeça do zero."
+        confirmText="Encerrar e começar novo"
+        cancelText="Continuar nesta"
+        tone="warning"
+        onConfirm={confirmarNovaConversa}
+        onCancel={() => setConfirmNovaConversa(false)}
+      />
 
       {/* Messages */}
       <Card className="flex-1 flex flex-col min-h-0">

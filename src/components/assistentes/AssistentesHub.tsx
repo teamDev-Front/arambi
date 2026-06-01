@@ -34,7 +34,7 @@ const AGENTS: Agent[] = [
   { id: "adv-tributarista",  nome: "Assistente Adv. Tributarista", descricao: "Impostos, tributos, otimização fiscal e planejamento.",          icon: <Receipt size={22}/>,        color: "bg-amber-700",  area: "Jurídico",      status: "ativo" },
   { id: "adv-contratual",    nome: "Assistente Adv. Contratual",   descricao: "Elaboração e revisão de contratos empresariais.",                icon: <FileSignature size={22}/>,  color: "bg-rose-700",   area: "Jurídico",      status: "ativo" },
   { id: "fiscal-notas",      nome: "Assistente Fiscal / NF-e",     descricao: "Emissão de notas fiscais, SPED e obrigações acessórias.",        icon: <Bot size={22}/>,            color: "bg-cyan-700",   area: "Fiscal",        status: "ativo" },
-  { id: "estoque",           nome: "Assistente de Estoque",        descricao: "Controle de inventário, alertas de baixo estoque e consultas.",  icon: <Bot size={22}/>,            color: "bg-orange-700", area: "Operacional",   status: "ativo" },
+  { id: "estoque",           nome: "Assistente de Estoque & Safra", descricao: "Insumos, depósitos de grãos por armazém e vendas futuras firmadas.", icon: <Bot size={22}/>,            color: "bg-orange-700", area: "Operacional",   status: "ativo" },
 ];
 
 const LIMITE_RECENTES = 10;
@@ -178,7 +178,10 @@ export function AssistentesHub() {
                   <tr key={r.session_id} className="border-b border-stone-50 hover:bg-stone-50 transition table-row-alt">
                     <td className="px-4 py-3 text-stone-700 text-xs">{r.usuario_nome}</td>
                     <td className="px-4 py-3">
-                      <Badge variant="info">{r.agente_nome}</Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="info">{r.agente_nome}</Badge>
+                        {r.fechada && <Badge variant="neutral">Arquivada</Badge>}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-stone-500 text-xs truncate max-w-[260px]">
                       {r.ultima_mensagem ?? <span className="italic text-stone-300">sem mensagens</span>}
@@ -187,7 +190,7 @@ export function AssistentesHub() {
                       {tempoRelativo(r.updated_at)}
                     </td>
                     <td className="px-4 py-3">
-                      <Link href={`/dashboard/assistentes/${r.agente_id}`}>
+                      <Link href={`/dashboard/assistentes/${r.agente_id}?session=${r.session_id}`}>
                         <Button variant="ghost" size="sm">Abrir</Button>
                       </Link>
                     </td>

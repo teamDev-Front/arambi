@@ -7,6 +7,8 @@ import { FINANCEIRO_TOOLS } from "./financeiro";
 import { FISCAL_TOOLS } from "./fiscal";
 import { ESTOQUE_TOOLS } from "./estoque";
 import { OBRA_TOOLS } from "./obra";
+import { SAFRA_TOOLS } from "./safra";
+import { VENDAS_TOOLS } from "./vendas";
 import type { ToolContext, ToolDefinition, ToolExecutionResult } from "./types";
 
 export type { ToolContext, ToolDefinition, ToolExecutionResult } from "./types";
@@ -33,13 +35,19 @@ const TOOLS_POR_AGENTE: Record<string, ToolDefinition[]> = {
   contabilidade:     unirTools(COMMON_TOOLS, FINANCEIRO_TOOLS),
   "adv-tributarista":unirTools(COMMON_TOOLS, FINANCEIRO_TOOLS),
   "fiscal-notas":    unirTools(COMMON_TOOLS, FISCAL_TOOLS, FINANCEIRO_TOOLS),
-  estoque:           unirTools(COMMON_TOOLS, ESTOQUE_TOOLS, [
-                       // Estoque também precisa investigar compras → permite tools financeiras relevantes
-                       ...FINANCEIRO_TOOLS.filter(t =>
-                         t.name === "listar_fornecedores" ||
-                         t.name === "lancamentos_por_fornecedor"
-                       ),
-                     ]),
+  estoque:           unirTools(
+                       COMMON_TOOLS,
+                       ESTOQUE_TOOLS,
+                       SAFRA_TOOLS,    // depósitos / armazéns / cálculo consolidado / parâmetros
+                       VENDAS_TOOLS,   // vendas provisionadas (entradas futuras de venda de safra)
+                       [
+                         // Compras recentes pra investigar reposição
+                         ...FINANCEIRO_TOOLS.filter(t =>
+                           t.name === "listar_fornecedores" ||
+                           t.name === "lancamentos_por_fornecedor"
+                         ),
+                       ],
+                     ),
   "adv-contratual":  unirTools(COMMON_TOOLS, OBRA_TOOLS),
   "adv-trabalhista": unirTools(COMMON_TOOLS),
   "adv-ambiental":   unirTools(COMMON_TOOLS),
