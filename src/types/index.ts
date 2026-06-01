@@ -39,6 +39,7 @@ export type {
   DocumentoGeradoRow,
   IAProvider,
   ConfigIARow,
+  AgentePromptRow,
 } from "./database";
 
 import type {

@@ -3,8 +3,9 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { Send, Paperclip, Bot, User, ArrowLeft } from "lucide-react";
+import { Send, Paperclip, Bot, User, ArrowLeft, Settings } from "lucide-react";
 import Link from "next/link";
+import { ConfigPromptModal, loadAgentePrompt } from "@/components/assistentes/ConfigPromptModal";
 
 interface Message {
   id: string;
@@ -33,17 +34,34 @@ function genId() { return Math.random().toString(36).slice(2); }
 
 export function ChatPage({ agentId }: { agentId: string }) {
   const agent = AGENT_INFO[agentId] ?? AGENT_INFO["financeiro"];
+  const fallbackWelcome = WELCOME[agentId] ?? WELCOME.default;
   const [messages, setMessages] = useState<Message[]>([
     {
       id: genId(),
       role: "assistant",
-      content: WELCOME[agentId] ?? WELCOME.default,
+      content: fallbackWelcome,
       timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Carrega a mensagem de boas-vindas do DB (sobrescreve o mock) — só uma vez por agente.
+  useEffect(() => {
+    let cancelado = false;
+    loadAgentePrompt(agentId).then((row) => {
+      if (cancelado) return;
+      const vinda = row?.mensagem_boas_vindas?.trim();
+      if (!vinda) return;
+      setMessages((prev) => {
+        if (prev.length !== 1 || prev[0].role !== "assistant") return prev;
+        return [{ ...prev[0], content: vinda }];
+      });
+    });
+    return () => { cancelado = true; };
+  }, [agentId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -92,7 +110,31 @@ export function ChatPage({ agentId }: { agentId: string }) {
           <p className="text-xs text-stone-500">{agent.descricao}</p>
         </div>
         <Badge variant="success" className="ml-auto">Conectado</Badge>
+        <button
+          type="button"
+          onClick={() => setConfigOpen(true)}
+          className="p-2 rounded-lg border border-stone-200 bg-white text-stone-500 hover:text-accent-500 hover:border-accent-500 transition"
+          title="Configurar treinamento deste assistente"
+          aria-label="Configurar treinamento deste assistente"
+        >
+          <Settings size={14} />
+        </button>
       </div>
+
+      <ConfigPromptModal
+        open={configOpen}
+        agenteId={agentId}
+        nomeFallback={agent.nome}
+        onClose={() => setConfigOpen(false)}
+        onSaved={(saved) => {
+          const vinda = saved.mensagem_boas_vindas.trim();
+          if (!vinda) return;
+          setMessages((prev) => {
+            if (prev.length !== 1 || prev[0].role !== "assistant") return prev;
+            return [{ ...prev[0], content: vinda }];
+          });
+        }}
+      />
 
       {/* Messages */}
       <Card className="flex-1 flex flex-col min-h-0">

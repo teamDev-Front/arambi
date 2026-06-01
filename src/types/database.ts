@@ -362,6 +362,17 @@ export type ConfigIARow = {
   updated_by: string | null;
 };
 
+export type AgentePromptRow = {
+  agente_id: string;                         // slug — "contabilidade", "adv-trabalhista"
+  nome: string;
+  system_prompt: string;
+  mensagem_boas_vindas: string | null;
+  temperatura: number;                       // 0.00 .. 1.00
+  ativo: boolean;
+  updated_at: string;
+  updated_by: string | null;
+};
+
 // ============================================================================
 // Database type (formato esperado pelo @supabase/postgrest-js)
 // ============================================================================
@@ -480,6 +491,12 @@ export interface Database {
         Row: ConfigIARow;
         Insert: Partial<ConfigIARow>;
         Update: Partial<ConfigIARow>;
+        Relationships: EmptyRels;
+      };
+      agente_prompts: {
+        Row: AgentePromptRow;
+        Insert: Omit<AgentePromptRow, "updated_at">;
+        Update: Partial<Omit<AgentePromptRow, "agente_id">>;
         Relationships: EmptyRels;
       };
     };

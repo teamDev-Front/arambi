@@ -93,12 +93,42 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3) TODO: chamar o provedor. Por enquanto devolve 501 informando o que falta.
+  // 3) Lê o treinamento do agente (system_prompt + temperatura)
+  const { data: prompt, error: promptErr } = await supabase
+    .from("agente_prompts")
+    .select("system_prompt, temperatura, ativo")
+    .eq("agente_id", body.agente_id)
+    .maybeSingle();
+
+  if (promptErr) {
+    return NextResponse.json(
+      { error: `Falha ao ler treinamento do agente: ${promptErr.message}` },
+      { status: 500 },
+    );
+  }
+  if (!prompt || !prompt.ativo) {
+    return NextResponse.json(
+      {
+        error: `Agente "${body.agente_id}" não tem treinamento cadastrado ou está inativo. Abra o chat dele → engrenagem.`,
+      },
+      { status: 424 },
+    );
+  }
+
+  const systemPrompt: string = prompt.system_prompt ?? "";
+  const temperatura: number = Number(prompt.temperatura ?? 0.3);
+
+  // 4) TODO: chamar o provedor. Por enquanto devolve 501 informando o que falta.
   return NextResponse.json(
     {
       error: "Integração com o provedor ainda não foi plugada. Veja TODO em src/app/api/assistentes/chat/route.ts.",
       provider,
       agente_id: body.agente_id,
+      // Eco do que será enviado ao provedor quando a integração for plugada — útil pra debug.
+      debug: {
+        system_prompt_len: systemPrompt.length,
+        temperatura,
+      },
     },
     { status: 501 },
   );
@@ -108,33 +138,34 @@ export async function POST(req: NextRequest) {
   // ---------------------------------------------------------------------------
   //
   // const content = provider === "gemini"
-  //   ? await callGemini(apiKey, body.agente_id, body.mensagens)
-  //   : await callOpenAI(apiKey, body.agente_id, body.mensagens);
+  //   ? await callGemini(apiKey, systemPrompt, temperatura, body.mensagens)
+  //   : await callOpenAI(apiKey, systemPrompt, temperatura, body.mensagens);
   //
   // return NextResponse.json({ provider, content });
 }
 
 // ---------------------------------------------------------------------------
-// async function callGemini(apiKey: string, agenteId: string, msgs: ChatMensagemIn[]): Promise<string> {
+// async function callGemini(apiKey: string, systemPrompt: string, temperatura: number, msgs: ChatMensagemIn[]): Promise<string> {
 //   // npm i @google/genai
 //   // import { GoogleGenAI } from "@google/genai";
 //   // const ai = new GoogleGenAI({ apiKey });
 //   // const r = await ai.models.generateContent({
 //   //   model: "gemini-2.0-flash",
 //   //   contents: msgs.map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
-//   //   config: { systemInstruction: SYSTEM_PROMPT[agenteId] },
+//   //   config: { systemInstruction: systemPrompt, temperature: temperatura },
 //   // });
 //   // return r.text ?? "";
 //   throw new Error("not implemented");
 // }
 //
-// async function callOpenAI(apiKey: string, agenteId: string, msgs: ChatMensagemIn[]): Promise<string> {
+// async function callOpenAI(apiKey: string, systemPrompt: string, temperatura: number, msgs: ChatMensagemIn[]): Promise<string> {
 //   // npm i openai
 //   // import OpenAI from "openai";
 //   // const client = new OpenAI({ apiKey });
 //   // const r = await client.chat.completions.create({
 //   //   model: "gpt-4o-mini",
-//   //   messages: [{ role: "system", content: SYSTEM_PROMPT[agenteId] }, ...msgs],
+//   //   temperature: temperatura,
+//   //   messages: [{ role: "system", content: systemPrompt }, ...msgs],
 //   // });
 //   // return r.choices[0]?.message?.content ?? "";
 //   throw new Error("not implemented");
