@@ -495,7 +495,11 @@ export interface Database {
       };
       agente_prompts: {
         Row: AgentePromptRow;
-        Insert: Omit<AgentePromptRow, "updated_at">;
+        // Obrigatórios no schema: agente_id, nome, system_prompt.
+        // Demais campos têm default/permitem null no Postgres.
+        Insert:
+          Pick<AgentePromptRow, "agente_id" | "nome" | "system_prompt"> &
+          Partial<Omit<AgentePromptRow, "agente_id" | "nome" | "system_prompt">>;
         Update: Partial<Omit<AgentePromptRow, "agente_id">>;
         Relationships: EmptyRels;
       };
