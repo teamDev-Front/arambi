@@ -152,58 +152,100 @@ const lancamentosPorCentroCustoMensal: ToolDefinition = {
 const topLancamentos: ToolDefinition = {
   name: "top_lancamentos",
   description:
-    "Top N lançamentos da empresa filtrados/ordenados. Default: ordenado por valor absoluto descendente. " +
-    "Use quando o usuário pede 'maiores lançamentos', 'maiores despesas', 'principais entradas do mês'.",
+    "Lista lançamentos da empresa com filtros e ordenação flexíveis. " +
+    "Use para perguntas tipo 'maiores despesas do mês', 'lançamento mais recente da conta X', " +
+    "'últimas movimentações do banco Y', 'qual o lançamento da conta 2.3.6'. " +
+    "Os filtros de código contábil aceitam PREFIXO: passar '2.3' já encontra '2.3.1', '2.3.6.1', etc.",
   parameters: {
     type: "object",
     properties: {
-      mes_referencia: { type: "string", description: "YYYY-MM. Opcional." },
-      natureza:       { type: "string", enum: ["entrada", "saida"], description: "Filtra entradas ou saídas (deriva pelo sinal do valor: entrada > 0, saída < 0). Opcional." },
-      status:         { type: "string", description: "Filtra por status (ex.: 'pago', 'a_pagar', 'recebido', 'a_receber'). Opcional." },
-      busca:          { type: "string", description: "Substring na descrição OU no nome do fornecedor. Opcional." },
-      limit:          { type: "integer", minimum: 1, maximum: 200, description: "Default 10." },
+      mes_referencia:     { type: "string", description: "YYYY-MM. SÓ informe se o usuário pediu explicitamente um mês. Para 'mais recente' deixe vazio e use ordenar_por='data_desc'." },
+      conta_contabil_cod: { type: "string", description: "Filtra pelo código da conta contábil (prefix match — '2.3' inclui '2.3.6'). Opcional." },
+      centro_custo_cod:   { type: "string", description: "Filtra pelo código do centro de custo (prefix match — '2.7' inclui '2.7.2'). Opcional." },
+      natureza:           { type: "string", enum: ["entrada", "saida"], description: "Entradas (valor > 0) ou saídas (valor < 0). Opcional." },
+      status:             { type: "string", description: "Filtra por status snake_case ('pago', 'a_pagar', 'recebido', 'a_receber', 'provisionado'…). Opcional." },
+      conta_bancaria_id:  { type: "string", description: "UUID da conta bancária (use listar_bancos_empresa para obter)." },
+      fornecedor:         { type: "string", description: "Substring case-insensitive no nome do fornecedor." },
+      busca:              { type: "string", description: "Substring na descrição (ou no nome do fornecedor se 'fornecedor' não for usado)." },
+      ordenar_por:        {
+        type: "string",
+        enum: ["valor_abs_desc", "data_desc", "data_asc", "valor_desc", "valor_asc"],
+        description: "Critério de ordenação. Default 'valor_abs_desc' (maiores em módulo). Use 'data_desc' para 'mais recente'.",
+      },
+      limit:              { type: "integer", minimum: 1, maximum: 200, description: "Default 10." },
     },
     additionalProperties: false,
   },
   handler: async (args, { admin }) => {
-    const limit = clampLimit(args.limit, 10);
+    const limit  = clampLimit(args.limit, 10);
+    const ordem  = String(args.ordenar_por ?? "valor_abs_desc");
+
     let q = admin
       .from("transacoes_empresa")
-      .select("id, data, mes_referencia, conta_contabil_cod, centro_custo_cod, fornecedor_nome, descricao, status, valor, ref, forma_pgto");
+      .select("id, data, mes_referencia, conta_contabil_cod, centro_custo_cod, conta_bancaria_id, fornecedor_nome, descricao, status, valor, ref, forma_pgto");
+
     if (typeof args.mes_referencia === "string" && args.mes_referencia.match(/^\d{4}-\d{2}$/)) {
       q = q.eq("mes_referencia", args.mes_referencia);
+    }
+    if (typeof args.conta_contabil_cod === "string" && args.conta_contabil_cod.trim()) {
+      const c = args.conta_contabil_cod.trim();
+      q = q.like("conta_contabil_cod", `${c}%`);
+    }
+    if (typeof args.centro_custo_cod === "string" && args.centro_custo_cod.trim()) {
+      const c = args.centro_custo_cod.trim();
+      q = q.like("centro_custo_cod", `${c}%`);
     }
     if (args.natureza === "entrada") q = q.gt("valor", 0);
     if (args.natureza === "saida")   q = q.lt("valor", 0);
     if (typeof args.status === "string" && args.status.trim()) {
-      // status é enum; assume snake_case do schema
       q = q.eq("status", args.status.trim() as never);
+    }
+    if (typeof args.conta_bancaria_id === "string" && args.conta_bancaria_id.trim()) {
+      q = q.eq("conta_bancaria_id", args.conta_bancaria_id.trim());
+    }
+    if (typeof args.fornecedor === "string" && args.fornecedor.trim()) {
+      q = q.ilike("fornecedor_nome", `%${args.fornecedor.trim()}%`);
     }
     if (typeof args.busca === "string" && args.busca.trim()) {
       const t = args.busca.trim().replace(/[%]/g, "");
       q = q.or(`descricao.ilike.%${t}%,fornecedor_nome.ilike.%${t}%`);
     }
-    // PostgREST não suporta order by abs(valor) — ordenamos no app.
-    const { data, error } = await q.limit(Math.min(limit * 4, 200));
+
+    // Ordenação: data e valor (asc/desc) podem ser feitas em SQL.
+    // valor_abs_desc precisa de sort em JS — buscamos mais linhas e cortamos.
+    if (ordem === "data_desc")   q = q.order("data", { ascending: false }).limit(limit);
+    else if (ordem === "data_asc")  q = q.order("data", { ascending: true }).limit(limit);
+    else if (ordem === "valor_desc") q = q.order("valor", { ascending: false }).limit(limit);
+    else if (ordem === "valor_asc")  q = q.order("valor", { ascending: true }).limit(limit);
+    else q = q.limit(Math.min(limit * 4, 200));  // valor_abs_desc → busca mais e ordena no app
+
+    const { data, error } = await q;
     if (error) throw new Error(error.message);
-    const ordenados = (data ?? [])
-      .map(r => ({ ...r, _abs: Math.abs(num(r.valor) ?? 0) }))
-      .sort((a, b) => b._abs - a._abs)
-      .slice(0, limit)
-      .map(({ _abs: _, ...r }) => ({
-        id:             r.id,
-        data:           r.data,
-        mes_referencia: r.mes_referencia,
-        conta_contabil: r.conta_contabil_cod,
-        centro_custo:   r.centro_custo_cod,
-        fornecedor:     r.fornecedor_nome,
-        descricao:      r.descricao,
-        status:         r.status,
-        forma_pgto:     r.forma_pgto,
-        ref:            r.ref,
-        valor:          num(r.valor),
-      }));
-    return { lancamentos: ordenados };
+
+    let rows = (data ?? []).map(r => ({
+      id:             r.id,
+      data:           r.data,
+      mes_referencia: r.mes_referencia,
+      conta_contabil: r.conta_contabil_cod,
+      centro_custo:   r.centro_custo_cod,
+      banco_id:       r.conta_bancaria_id,
+      fornecedor:     r.fornecedor_nome,
+      descricao:      r.descricao,
+      status:         r.status,
+      forma_pgto:     r.forma_pgto,
+      ref:            r.ref,
+      valor:          num(r.valor),
+    }));
+
+    if (ordem === "valor_abs_desc") {
+      rows = rows
+        .map(r => ({ r, abs: Math.abs(r.valor ?? 0) }))
+        .sort((a, b) => b.abs - a.abs)
+        .slice(0, limit)
+        .map(x => x.r);
+    }
+
+    return { lancamentos: rows, total: rows.length, ordenado_por: ordem };
   },
 };
 
