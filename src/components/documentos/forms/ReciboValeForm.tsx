@@ -1,36 +1,62 @@
 "use client";
-import { useState } from "react";
-import { Input } from "@/components/ui/Input";
+import { Input, Select } from "@/components/ui/Input";
 import { FormShell, FormSection } from "./FormShell";
+import { DraftBanner } from "./DraftBanner";
+import { useFormDraft } from "@/lib/hooks/useFormDraft";
+import {
+  documentoLabel, mensagemDocumentoInvalido, validarDocumento, type PessoaTipo,
+} from "@/lib/utils/documento";
 import type { DadosReciboValeCombustivel } from "@/lib/pdf/types";
 
 interface Props {
   onSubmit: (dados: DadosReciboValeCombustivel) => Promise<void> | void;
   onCancel: () => void;
   submitting: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  seed?: DadosReciboValeCombustivel | null;   // RF-09 — edição: dados originais
 }
 
-export function ReciboValeForm({ onSubmit, onCancel, submitting }: Props) {
+function fromDados(d: DadosReciboValeCombustivel) {
+  return {
+    beneficiario_nome: d.beneficiario.nome,
+    beneficiario_doc:  d.beneficiario.documento,
+    pagador_nome:      d.pagador.nome,
+    pagador_tipo:      (d.pagador.tipo ?? "pf") as PessoaTipo,
+    pagador_doc:       d.pagador.documento,
+    valor:             String(d.valor ?? ""),
+    competencia:       d.competencia,
+    periodo:           d.periodo,
+    cidade:            d.cidade,
+    data_emissao:      d.data_emissao,
+  };
+}
+
+export function ReciboValeForm({ onSubmit, onCancel, submitting, onDirtyChange, seed }: Props) {
   const hoje = new Date().toISOString().slice(0, 10);
   const mesAtual = hoje.slice(0, 7);
 
-  const [form, setForm] = useState({
+  const [form, setForm, draft] = useFormDraft("recibo_vale_combustivel", seed ? fromDados(seed) : {
     beneficiario_nome:   "",
     beneficiario_doc:    "",
     pagador_nome:        "",
+    pagador_tipo:        "pf" as PessoaTipo,
     pagador_doc:         "",
     valor:               "",
     competencia:         mesAtual,
     periodo:             "",
     cidade:              "Campo Grande - MS",
     data_emissao:        hoje,
-  });
+  }, onDirtyChange, !!seed);
+
+  // Beneficiário é sempre Pessoa Física (quem recebe o auxílio).
+  const beneficiarioDocOk = validarDocumento("pf", form.beneficiario_doc);
+  const pagadorDocOk      = validarDocumento(form.pagador_tipo, form.pagador_doc);
 
   const valido =
     !!form.beneficiario_nome.trim() &&
-    !!form.beneficiario_doc.trim() &&
+    beneficiarioDocOk &&
     !!form.pagador_nome.trim() &&
-    !!form.pagador_doc.trim() &&
+    pagadorDocOk &&
     !!form.competencia &&
     !!form.periodo.trim() &&
     !!form.cidade.trim() &&
@@ -39,8 +65,8 @@ export function ReciboValeForm({ onSubmit, onCancel, submitting }: Props) {
 
   function handleSubmit() {
     const dados: DadosReciboValeCombustivel = {
-      beneficiario: { nome: form.beneficiario_nome.trim(), documento: form.beneficiario_doc.trim() },
-      pagador:      { nome: form.pagador_nome.trim(),      documento: form.pagador_doc.trim() },
+      beneficiario: { nome: form.beneficiario_nome.trim(), documento: form.beneficiario_doc.trim(), tipo: "pf" },
+      pagador:      { nome: form.pagador_nome.trim(),      documento: form.pagador_doc.trim(), tipo: form.pagador_tipo },
       valor:        Number(form.valor),
       competencia:  form.competencia,
       periodo:      form.periodo.trim(),
@@ -52,14 +78,35 @@ export function ReciboValeForm({ onSubmit, onCancel, submitting }: Props) {
 
   return (
     <FormShell onCancel={onCancel} onSubmit={handleSubmit} submitting={submitting} disabled={!valido}>
+      <DraftBanner show={draft.recovered} onDiscard={draft.discard} />
       <FormSection title="Beneficiário (quem recebe)" columns={2}>
         <Input label="Nome completo"  value={form.beneficiario_nome} onChange={(e) => setForm({ ...form, beneficiario_nome: e.target.value })} />
-        <Input label="CPF"            value={form.beneficiario_doc}  onChange={(e) => setForm({ ...form, beneficiario_doc: e.target.value })} placeholder="000.000.000-00" />
+        <Input
+          label="CPF"
+          value={form.beneficiario_doc}
+          onChange={(e) => setForm({ ...form, beneficiario_doc: e.target.value })}
+          placeholder="000.000.000-00"
+          error={form.beneficiario_doc.trim() && !beneficiarioDocOk ? mensagemDocumentoInvalido("pf") : undefined}
+        />
       </FormSection>
 
-      <FormSection title="Pagador" columns={2}>
-        <Input label="Nome completo"  value={form.pagador_nome} onChange={(e) => setForm({ ...form, pagador_nome: e.target.value })} />
-        <Input label="CPF"            value={form.pagador_doc}  onChange={(e) => setForm({ ...form, pagador_doc: e.target.value })} placeholder="000.000.000-00" />
+      <FormSection title="Pagador" columns={3}>
+        <Input label="Nome / Razão social" value={form.pagador_nome} onChange={(e) => setForm({ ...form, pagador_nome: e.target.value })} />
+        <Select
+          label="Tipo"
+          value={form.pagador_tipo}
+          onChange={(e) => setForm({ ...form, pagador_tipo: e.target.value as PessoaTipo })}
+        >
+          <option value="pf">Pessoa Física</option>
+          <option value="pj">Pessoa Jurídica</option>
+        </Select>
+        <Input
+          label={documentoLabel(form.pagador_tipo)}
+          value={form.pagador_doc}
+          onChange={(e) => setForm({ ...form, pagador_doc: e.target.value })}
+          placeholder={form.pagador_tipo === "pj" ? "00.000.000/0000-00" : "000.000.000-00"}
+          error={form.pagador_doc.trim() && !pagadorDocOk ? mensagemDocumentoInvalido(form.pagador_tipo) : undefined}
+        />
       </FormSection>
 
       <FormSection title="Auxílio combustível" columns={3}>

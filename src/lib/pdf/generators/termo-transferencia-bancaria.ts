@@ -1,9 +1,12 @@
 import { PdfBuilder } from "../builder";
+import { loadTimbreLogo } from "../assets";
 import { formatDataCurta, formatMoeda, valorPorExtenso } from "../helpers";
 import type { DadosTermoTransferencia } from "../types";
 
 export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia): Promise<Uint8Array> {
-  const pdf = await PdfBuilder.create();
+  // RF-07 — timbre (marca d'água) da Aramburu em todas as páginas.
+  const watermarkJpg = await loadTimbreLogo();
+  const pdf = await PdfBuilder.create({ watermarkJpg });
 
   pdf.space(30);
   pdf.title("TERMO DE TRANSFERÊNCIA BANCÁRIA", { size: 14, spaceAfter: 28 });

@@ -1,19 +1,49 @@
 "use client";
-import { useState } from "react";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { FormShell, FormSection } from "./FormShell";
+import { DraftBanner } from "./DraftBanner";
+import { useFormDraft } from "@/lib/hooks/useFormDraft";
 import type { DadosTermoAutorizacaoTerceiros } from "@/lib/pdf/types";
 
 interface Props {
   onSubmit: (dados: DadosTermoAutorizacaoTerceiros) => Promise<void> | void;
   onCancel: () => void;
   submitting: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  seed?: DadosTermoAutorizacaoTerceiros | null;   // RF-09 — edição
 }
 
-export function TermoAutorizacaoForm({ onSubmit, onCancel, submitting }: Props) {
+function fromDados(d: DadosTermoAutorizacaoTerceiros) {
+  return {
+    autorizante_razao_social: d.autorizante_razao_social,
+    autorizante_tipo:         d.autorizante_tipo,
+    autorizante_documento:    d.autorizante_documento,
+    autorizante_endereco:     d.autorizante_endereco,
+    autorizada_razao_social:  d.autorizada_razao_social,
+    autorizada_documento:     d.autorizada_documento,
+    autorizada_endereco:      d.autorizada_endereco,
+    numero_nota:              d.numero_nota,
+    valor_pagamento:          String(d.valor_pagamento ?? ""),
+    valor_total_nota:         String(d.valor_total_nota ?? ""),
+    titulo_pagamento:         d.titulo_pagamento ?? "",
+    saldo_remanescente:       d.saldo_remanescente != null ? String(d.saldo_remanescente) : "",
+    beneficiario_nome:        d.beneficiario_nome,
+    beneficiario_cpf:         d.beneficiario_cpf,
+    benef_banco:              d.beneficiario_dados_bancarios.banco,
+    benef_agencia:            d.beneficiario_dados_bancarios.agencia,
+    benef_conta:              d.beneficiario_dados_bancarios.conta,
+    benef_chave_pix:          d.beneficiario_dados_bancarios.chave_pix ?? "",
+    parentesco:               d.parentesco ?? "",
+    cidade:                   d.cidade,
+    data_emissao:             d.data_emissao,
+    signatario_nome:          d.signatario_nome,
+  };
+}
+
+export function TermoAutorizacaoForm({ onSubmit, onCancel, submitting, onDirtyChange, seed }: Props) {
   const hoje = new Date().toISOString().slice(0, 10);
 
-  const [form, setForm] = useState({
+  const [form, setForm, draft] = useFormDraft("termo_autorizacao_pagamento_terceiros", seed ? fromDados(seed) : {
     autorizante_razao_social: "",
     autorizante_tipo:         "pj" as "pj" | "pf",
     autorizante_documento:    "",
@@ -36,7 +66,7 @@ export function TermoAutorizacaoForm({ onSubmit, onCancel, submitting }: Props) 
     cidade:                   "",
     data_emissao:             hoje,
     signatario_nome:          "",
-  });
+  }, onDirtyChange, !!seed);
 
   const valido =
     !!form.autorizante_razao_social.trim() &&
@@ -89,6 +119,7 @@ export function TermoAutorizacaoForm({ onSubmit, onCancel, submitting }: Props) 
 
   return (
     <FormShell onCancel={onCancel} onSubmit={handleSubmit} submitting={submitting} disabled={!valido}>
+      <DraftBanner show={draft.recovered} onDiscard={draft.discard} />
       <FormSection title="Autorizante (quem autoriza o pagamento)" columns={2}>
         <Input  label="Razão social / Nome" value={form.autorizante_razao_social} onChange={(e) => setForm({ ...form, autorizante_razao_social: e.target.value })} />
         <Select label="Tipo"                value={form.autorizante_tipo}         onChange={(e) => setForm({ ...form, autorizante_tipo: e.target.value as "pj" | "pf" })}>

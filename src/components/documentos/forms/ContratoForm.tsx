@@ -1,19 +1,49 @@
 "use client";
-import { useState } from "react";
 import { Input, Textarea } from "@/components/ui/Input";
 import { FormShell, FormSection } from "./FormShell";
+import { DraftBanner } from "./DraftBanner";
+import { useFormDraft } from "@/lib/hooks/useFormDraft";
 import type { DadosContratoPrestacaoServicos } from "@/lib/pdf/types";
 
 interface Props {
   onSubmit: (dados: DadosContratoPrestacaoServicos) => Promise<void> | void;
   onCancel: () => void;
   submitting: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  seed?: DadosContratoPrestacaoServicos | null;   // RF-09 — edição
 }
 
-export function ContratoForm({ onSubmit, onCancel, submitting }: Props) {
+function fromDados(d: DadosContratoPrestacaoServicos) {
+  return {
+    contratante_razao_social:       d.contratante_razao_social,
+    contratante_cnpj:               d.contratante_cnpj,
+    contratante_inscricao_estadual: d.contratante_inscricao_estadual ?? "",
+    contratante_endereco:           d.contratante_endereco,
+    contratante_telefone:           d.contratante_telefone ?? "",
+    contratante_email:              d.contratante_email ?? "",
+    contratante_representantes:     d.contratante_representantes,
+    contratado_nome:                d.contratado_nome,
+    contratado_nacionalidade:       d.contratado_nacionalidade ?? "brasileiro",
+    contratado_nascimento:          d.contratado_nascimento ?? "",
+    contratado_naturalidade:        d.contratado_naturalidade ?? "",
+    contratado_cpf:                 d.contratado_cpf,
+    contratado_rg:                  d.contratado_rg ?? "",
+    contratado_endereco:            d.contratado_endereco,
+    objeto:                         d.objeto,
+    valor_total:                    String(d.valor_total ?? ""),
+    pagamento_texto:                d.pagamento_texto,
+    prazo_texto:                    d.prazo_texto,
+    multa_percentual:               d.multa_percentual != null ? String(d.multa_percentual) : "10",
+    foro_comarca:                   d.foro_comarca,
+    cidade:                         d.cidade,
+    data_emissao:                   d.data_emissao,
+  };
+}
+
+export function ContratoForm({ onSubmit, onCancel, submitting, onDirtyChange, seed }: Props) {
   const hoje = new Date().toISOString().slice(0, 10);
 
-  const [form, setForm] = useState({
+  const [form, setForm, draft] = useFormDraft("contrato_prestacao_servicos", seed ? fromDados(seed) : {
     contratante_razao_social:        "AGROPECUÁRIA ARAMBURU LTDA",
     contratante_cnpj:                "30.921.299/0001-88",
     contratante_inscricao_estadual:  "28.828.807-6",
@@ -36,7 +66,7 @@ export function ContratoForm({ onSubmit, onCancel, submitting }: Props) {
     foro_comarca:                    "Maracaju/MS",
     cidade:                          "Maracaju, MS",
     data_emissao:                    hoje,
-  });
+  }, onDirtyChange, !!seed);
 
   const valido =
     !!form.contratante_razao_social.trim() &&
@@ -84,6 +114,7 @@ export function ContratoForm({ onSubmit, onCancel, submitting }: Props) {
 
   return (
     <FormShell onCancel={onCancel} onSubmit={handleSubmit} submitting={submitting} disabled={!valido}>
+      <DraftBanner show={draft.recovered} onDiscard={draft.discard} />
       <FormSection title="Contratante" columns={2}>
         <Input label="Razão social"             value={form.contratante_razao_social}      onChange={(e) => setForm({ ...form, contratante_razao_social: e.target.value })} />
         <Input label="CNPJ"                     value={form.contratante_cnpj}              onChange={(e) => setForm({ ...form, contratante_cnpj: e.target.value })} />

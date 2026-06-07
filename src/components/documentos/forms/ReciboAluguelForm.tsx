@@ -1,20 +1,44 @@
 "use client";
-import { useState } from "react";
 import { Input } from "@/components/ui/Input";
 import { FormShell, FormSection } from "./FormShell";
+import { DraftBanner } from "./DraftBanner";
+import { useFormDraft } from "@/lib/hooks/useFormDraft";
 import type { DadosReciboAluguel } from "@/lib/pdf/types";
 
 interface Props {
   onSubmit: (dados: DadosReciboAluguel) => Promise<void> | void;
   onCancel: () => void;
   submitting: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  seed?: DadosReciboAluguel | null;   // RF-09 — edição
 }
 
-export function ReciboAluguelForm({ onSubmit, onCancel, submitting }: Props) {
+function fromDados(d: DadosReciboAluguel) {
+  return {
+    numero:               d.numero,
+    proprietario_nome:    d.proprietario_nome,
+    imovel_nome:          d.imovel_nome,
+    imovel_endereco:      d.imovel_endereco,
+    locatario_nome:       d.locatario_nome,
+    locatario_cnpj:       d.locatario_cnpj,
+    valor:                String(d.valor ?? ""),
+    competencia:          d.competencia,
+    data_pagamento:       d.data_pagamento,
+    forma_pagamento:      d.forma_pagamento,
+    tipo_servico:         d.tipo_servico ?? "",
+    cidade:               d.cidade,
+    data_emissao:         d.data_emissao,
+    emissor_razao_social: d.emissor_razao_social,
+    emissor_cnpj:         d.emissor_cnpj,
+    emissor_signatario:   d.emissor_signatario,
+  };
+}
+
+export function ReciboAluguelForm({ onSubmit, onCancel, submitting, onDirtyChange, seed }: Props) {
   const hoje = new Date().toISOString().slice(0, 10);
   const mesAtual = hoje.slice(0, 7);
 
-  const [form, setForm] = useState({
+  const [form, setForm, draft] = useFormDraft("recibo_aluguel", seed ? fromDados(seed) : {
     numero:                "",
     proprietario_nome:     "",
     imovel_nome:           "",
@@ -31,7 +55,7 @@ export function ReciboAluguelForm({ onSubmit, onCancel, submitting }: Props) {
     emissor_razao_social:  "",
     emissor_cnpj:          "",
     emissor_signatario:    "",
-  });
+  }, onDirtyChange, !!seed);
 
   const valido =
     !!form.numero.trim() &&
@@ -74,6 +98,7 @@ export function ReciboAluguelForm({ onSubmit, onCancel, submitting }: Props) {
 
   return (
     <FormShell onCancel={onCancel} onSubmit={handleSubmit} submitting={submitting} disabled={!valido}>
+      <DraftBanner show={draft.recovered} onDiscard={draft.discard} />
       <FormSection title="Identificação do recibo" columns={2}>
         <Input label="Número"            value={form.numero}             onChange={(e) => setForm({ ...form, numero: e.target.value })}             placeholder="022/2026" />
         <Input label="Proprietário"      value={form.proprietario_nome}  onChange={(e) => setForm({ ...form, proprietario_nome: e.target.value })} />

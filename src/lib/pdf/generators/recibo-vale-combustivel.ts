@@ -1,5 +1,5 @@
 import { PdfBuilder } from "../builder";
-import { formatCompetencia, formatDataPorExtenso, formatMoeda, valorPorExtenso } from "../helpers";
+import { formatCompetencia, formatDataPorExtenso, formatMoeda, fraseInscricao, valorPorExtenso } from "../helpers";
 import type { DadosReciboValeCombustivel } from "../types";
 
 export async function gerarReciboValeCombustivel(d: DadosReciboValeCombustivel): Promise<Uint8Array> {
@@ -16,9 +16,9 @@ export async function gerarReciboValeCombustivel(d: DadosReciboValeCombustivel):
   pdf.rich([
     { text: "Eu, " },
     { text: d.beneficiario.nome, bold: true },
-    { text: `, inscrito(a) no CPF sob o nº ${d.beneficiario.documento}, recebi de ` },
+    { text: `, ${fraseInscricao(d.beneficiario.tipo, d.beneficiario.documento)}, recebi de ` },
     { text: d.pagador.nome, bold: true },
-    { text: `, devidamente inscrito(a) no cadastro de pessoa física ${d.pagador.documento} a importância de ` },
+    { text: `, devidamente ${fraseInscricao(d.pagador.tipo, d.pagador.documento)} a importância de ` },
     { text: `R$ ${formatMoeda(d.valor)} (${valorPorExtenso(d.valor)})`, bold: true },
     { text: `, referente ao auxílio combustível da competência ` },
     { text: formatCompetencia(d.competencia), bold: true },

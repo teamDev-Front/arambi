@@ -2,12 +2,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Pagination } from "@/components/ui/Pagination";
 import { useToast } from "@/components/ui/Toast";
+import { clearDraft } from "@/lib/hooks/useFormDraft";
 import {
   Search, Download, Trash2, FileText, Fuel, Home as HomeIcon, Wrench,
-  Handshake, ArrowRightLeft, FileSignature, Loader2,
+  Handshake, ArrowRightLeft, FileSignature, Loader2, Pencil,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { DOCUMENTO_GERADO_LABEL, DOCUMENTO_GERADO_LABEL_CURTO } from "@/types";
@@ -23,6 +25,9 @@ interface ModeloCard {
   icone: React.ElementType;
   resumo: string;
   cor: string;
+  /** Se false, não aparece como card gerável (RF-08), mas continua no
+   *  registro de ícones/filtro para os documentos antigos do histórico. */
+  disponivel?: boolean;
 }
 
 const MODELOS: ModeloCard[] = [
@@ -31,8 +36,12 @@ const MODELOS: ModeloCard[] = [
   { tipo: "recibo_pagamento_prestador",            icone: Wrench,         resumo: "Pagamento por serviço prestado",          cor: "bg-sky-50 text-sky-700 border-sky-100" },
   { tipo: "termo_autorizacao_pagamento_terceiros", icone: Handshake,      resumo: "Autoriza pagamento a terceiro indicado",  cor: "bg-violet-50 text-violet-700 border-violet-100" },
   { tipo: "termo_transferencia_bancaria",          icone: ArrowRightLeft, resumo: "Comprova transferência entre contas",     cor: "bg-rose-50 text-rose-700 border-rose-100" },
-  { tipo: "contrato_prestacao_servicos",           icone: FileSignature,  resumo: "Contrato com cláusulas customizáveis",    cor: "bg-stone-50 text-stone-700 border-stone-200" },
+  // RF-08 — Contrato removido dos modelos disponíveis (segue acessível no histórico).
+  { tipo: "contrato_prestacao_servicos",           icone: FileSignature,  resumo: "Contrato com cláusulas customizáveis",    cor: "bg-stone-50 text-stone-700 border-stone-200", disponivel: false },
 ];
+
+// Modelos que aparecem como cards geráveis (RF-08).
+const MODELOS_DISPONIVEIS = MODELOS.filter((m) => m.disponivel !== false);
 
 const TIPO_ICON: Record<DocumentoGeradoTipo, React.ElementType> = MODELOS.reduce((acc, m) => {
   acc[m.tipo] = m.icone;
@@ -53,8 +62,11 @@ export function DocumentosPage() {
   const [page, setPage]         = useState(1);
 
   const [tipoAberto, setTipoAberto]     = useState<DocumentoGeradoTipo | null>(null);
+  const [editando, setEditando]         = useState<DocumentoGeradoRow | null>(null);   // RF-09 — edição
   const [submitting, setSubmitting]     = useState(false);
   const [downloading, setDownloading]   = useState<string | null>(null);
+  const [formDirty, setFormDirty]       = useState(false);   // RF-03 — rascunho em andamento
+  const [confirmClose, setConfirmClose] = useState(false);   // RF-03 — diálogo de saída
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -86,18 +98,26 @@ export function DocumentosPage() {
 
   async function handleGerar(dados: unknown) {
     if (!tipoAberto) return;
+    const editId = editando?.id;
     setSubmitting(true);
     try {
-      const res = await gerarDocumento(tipoAberto, dados as never);
-      toast.success("Documento gerado", `${DOCUMENTO_GERADO_LABEL[tipoAberto]} pronto para download.`);
+      const res = await gerarDocumento(tipoAberto, dados as never, editId);
+      if (editId) {
+        toast.success("Documento atualizado", `Nova versão (v${res.versao ?? "?"}) gerada.`);
+      } else {
+        toast.success("Documento gerado", `${DOCUMENTO_GERADO_LABEL[tipoAberto]} pronto para download.`);
+        clearDraft(tipoAberto);   // RF-03 — documento gerado: descarta o rascunho
+      }
       if (res.download_url) {
         window.open(res.download_url, "_blank", "noopener");
       }
+      setFormDirty(false);
+      setEditando(null);
       setTipoAberto(null);
-      setPage(1);
+      if (!editId) setPage(1);
       await carregar();
     } catch (e) {
-      toast.error("Falha ao gerar PDF", (e as Error).message);
+      toast.error(editId ? "Falha ao atualizar documento" : "Falha ao gerar PDF", (e as Error).message);
     } finally {
       setSubmitting(false);
     }
@@ -128,6 +148,42 @@ export function DocumentosPage() {
     }
   }
 
+  // ─── RF-03 / RF-09 — abertura/fechamento com proteção de rascunho ─────────
+  function abrirModelo(tipo: DocumentoGeradoTipo) {
+    setEditando(null);
+    setFormDirty(false);
+    setConfirmClose(false);
+    setTipoAberto(tipo);
+  }
+
+  /** RF-09 — abre o formulário preenchido para corrigir um documento. */
+  function editarDocumento(row: DocumentoGeradoRow) {
+    setEditando(row);
+    setFormDirty(false);
+    setConfirmClose(false);
+    setTipoAberto(row.tipo);
+  }
+
+  /** Fecha de fato (X confirmado, gerar ou descarte). */
+  function fecharModal() {
+    setConfirmClose(false);
+    setFormDirty(false);
+    setEditando(null);
+    setTipoAberto(null);
+  }
+
+  /** Pedido de fechamento (X, Cancelar). Se há rascunho, confirma antes. */
+  function solicitarFechamento() {
+    if (submitting) return;
+    if (formDirty) { setConfirmClose(true); return; }
+    fecharModal();
+  }
+
+  function descartarRascunhoESair() {
+    if (tipoAberto && !editando) clearDraft(tipoAberto);   // edição não usa rascunho local
+    fecharModal();
+  }
+
   return (
     <div className="space-y-6 max-w-[1200px]">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -141,12 +197,12 @@ export function DocumentosPage() {
       <div>
         <h2 className="text-xs font-semibold uppercase tracking-wider text-stone-500 mb-3">Modelos disponíveis</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {MODELOS.map((m) => {
+          {MODELOS_DISPONIVEIS.map((m) => {
             const Icon = m.icone;
             return (
               <button
                 key={m.tipo}
-                onClick={() => setTipoAberto(m.tipo)}
+                onClick={() => abrirModelo(m.tipo)}
                 className="group flex items-start gap-3 p-4 bg-white rounded-xl border border-stone-200 hover:border-[#a67c20] hover:shadow-sm transition text-left"
               >
                 <div className={`w-9 h-9 rounded-lg flex items-center justify-center border ${m.cor} shrink-0`}>
@@ -231,6 +287,14 @@ export function DocumentosPage() {
                           <div className="flex items-center gap-2">
                             <Icon size={14} className="text-stone-400 shrink-0" />
                             <Badge variant="neutral">{DOCUMENTO_GERADO_LABEL_CURTO[r.tipo]}</Badge>
+                            {(r.versao_atual ?? 1) > 1 && (
+                              <span
+                                title={`Editado — versão ${r.versao_atual}`}
+                                className="text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-100 rounded px-1 py-0.5"
+                              >
+                                v{r.versao_atual}
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-4 py-3 font-medium text-stone-700 max-w-[180px] truncate">
@@ -245,6 +309,13 @@ export function DocumentosPage() {
                         <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">{formatDate(r.created_at)}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => editarDocumento(r)}
+                              title="Editar (gera nova versão)"
+                              className="p-1.5 rounded hover:bg-sky-50 text-stone-400 hover:text-sky-600 transition"
+                            >
+                              <Pencil size={13} />
+                            </button>
                             <button
                               onClick={() => handleDownload(r)}
                               disabled={downloading === r.id}
@@ -281,17 +352,53 @@ export function DocumentosPage() {
       {/* ─── Modal de geração ───────────────────────────────────────────── */}
       <Modal
         open={tipoAberto !== null}
-        onClose={() => { if (!submitting) setTipoAberto(null); }}
-        title={tipoAberto ? `Gerar – ${DOCUMENTO_GERADO_LABEL[tipoAberto]}` : ""}
+        onClose={solicitarFechamento}
+        title={tipoAberto
+          ? `${editando ? "Editar" : "Gerar"} – ${DOCUMENTO_GERADO_LABEL[tipoAberto]}${editando ? ` (v${editando.versao_atual ?? 1})` : ""}`
+          : ""}
         size="xl"
+        closeOnBackdrop={false}
       >
         {FormAtivo && (
           <FormAtivo
             onSubmit={handleGerar}
-            onCancel={() => { if (!submitting) setTipoAberto(null); }}
+            onCancel={solicitarFechamento}
             submitting={submitting}
+            onDirtyChange={setFormDirty}
+            seed={editando ? editando.dados : undefined}
           />
         )}
+      </Modal>
+
+      {/* ─── RF-03 — Confirmação de saída com alterações não salvas ───────── */}
+      <Modal open={confirmClose} onClose={() => setConfirmClose(false)} size="sm">
+        <div className="p-6">
+          <h3 className="text-sm font-semibold text-stone-800">Existem informações não salvas</h3>
+          <p className="text-xs text-stone-600 mt-1.5 leading-relaxed">
+            {editando
+              ? "As alterações ainda não foram salvas. Se sair agora, o documento permanece como está."
+              : "O preenchimento fica guardado como rascunho neste navegador e pode ser retomado depois. O que deseja fazer?"}
+          </p>
+        </div>
+        <div className="px-6 py-4 border-t border-stone-100 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2 bg-stone-50/50">
+          <Button type="button" variant="ghost" onClick={() => setConfirmClose(false)}>
+            Continuar editando
+          </Button>
+          {editando ? (
+            <Button type="button" variant="danger" onClick={descartarRascunhoESair}>
+              Descartar alterações e sair
+            </Button>
+          ) : (
+            <>
+              <Button type="button" variant="danger" onClick={descartarRascunhoESair}>
+                Sair sem salvar
+              </Button>
+              <Button type="button" variant="primary" onClick={fecharModal}>
+                Salvar rascunho
+              </Button>
+            </>
+          )}
+        </div>
       </Modal>
     </div>
   );

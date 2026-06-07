@@ -440,8 +440,36 @@ export type DocumentoGeradoRow = {
   dados: Json;
   pdf_path: string | null;
   pdf_size: number | null;
+  versao_atual: number;          // RF-09 — versão atual (1 = nunca editado)
+  updated_at: string | null;
   created_at: string;
   created_by: string | null;
+};
+
+export type DocumentoGeradoVersaoRow = {
+  id: string;
+  documento_id: string;
+  versao: number;
+  numero: string | null;
+  beneficiario: string | null;
+  valor: number | null;
+  descricao: string | null;
+  mes_referencia: string | null;
+  dados: Json;
+  pdf_path: string | null;
+  pdf_size: number | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export type DocumentDescriptionHistoryRow = {
+  id: string;
+  document_type: DocumentoGeradoTipo;
+  description: string;
+  usage_count: number;
+  last_used_at: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ConfigIARow = {
@@ -717,8 +745,20 @@ export interface Database {
       };
       documentos_gerados: {
         Row: DocumentoGeradoRow;
-        Insert: Omit<DocumentoGeradoRow, "id" | "created_at">;
+        Insert: Omit<DocumentoGeradoRow, "id" | "created_at" | "updated_at" | "versao_atual"> & { versao_atual?: number };
         Update: Partial<Omit<DocumentoGeradoRow, "id" | "created_at">>;
+        Relationships: EmptyRels;
+      };
+      documentos_gerados_versoes: {
+        Row: DocumentoGeradoVersaoRow;
+        Insert: Omit<DocumentoGeradoVersaoRow, "id" | "created_at">;
+        Update: Partial<Omit<DocumentoGeradoVersaoRow, "id" | "created_at">>;
+        Relationships: EmptyRels;
+      };
+      document_description_history: {
+        Row: DocumentDescriptionHistoryRow;
+        Insert: Omit<DocumentDescriptionHistoryRow, "id" | "created_at" | "updated_at">;
+        Update: Partial<Omit<DocumentDescriptionHistoryRow, "id" | "created_at">>;
         Relationships: EmptyRels;
       };
       config_ia: {

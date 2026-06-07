@@ -4,6 +4,7 @@
 export interface PessoaSimples {
   nome: string;
   documento: string;            // CPF ou CNPJ (texto livre, com máscara)
+  tipo?: "pf" | "pj";           // default "pf" (compat. com documentos antigos sem o campo)
 }
 
 export interface DadosBancarios {

@@ -125,6 +125,26 @@ export function formatMoeda(valor: number): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Concordância PF/PJ — geração textual centralizada (RF-01 / RF-04)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Frase de inscrição conforme o tipo de pessoa.
+ *   pf → "inscrito(a) no CPF sob o nº 000.000.000-00"
+ *   pj → "inscrita no CNPJ sob o nº 00.000.000/0000-00"
+ */
+export function fraseInscricao(tipo: "pf" | "pj" | undefined, documento: string): string {
+  return tipo === "pj"
+    ? `inscrita no CNPJ sob o nº ${documento}`
+    : `inscrito(a) no CPF sob o nº ${documento}`;
+}
+
+/** Rótulo curto do documento (assinaturas/rodapés). */
+export function rotuloDocumento(tipo: "pf" | "pj" | undefined): "CPF" | "CNPJ" {
+  return tipo === "pj" ? "CNPJ" : "CPF";
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Sanitização para WinAnsi (fontes Times/Helvetica do pdf-lib)
 // ────────────────────────────────────────────────────────────────────────────
 // Regexes construídos via RegExp() — usar literal /.../ com caracteres como

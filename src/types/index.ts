@@ -37,6 +37,8 @@ export type {
   PdfMonkeyGeracaoRow,
   DocumentoGeradoTipo,
   DocumentoGeradoRow,
+  DocumentoGeradoVersaoRow,
+  DocumentDescriptionHistoryRow,
   IAProvider,
   ConfigIARow,
   AgentePromptRow,

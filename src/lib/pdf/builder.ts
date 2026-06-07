@@ -1,7 +1,7 @@
 // PDF Builder — wrapper sobre pdf-lib com utilitários para layout A4 brasileiro
 // (texto justificado básico, wrap em largura, múltiplas páginas, fontes Times).
 
-import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb, type RGB } from "pdf-lib";
+import { PDFDocument, PDFFont, PDFImage, PDFPage, StandardFonts, rgb, type RGB } from "pdf-lib";
 import { sanitizeWinAnsi } from "./helpers";
 
 export const PAGE = {
@@ -44,18 +44,45 @@ export class PdfBuilder {
   private readonly defaultLineHeight = 1.4;
   public readonly contentWidth: number;
 
+  // Marca d'água (timbre) desenhada atrás do conteúdo de cada página.
+  private watermark?: PDFImage;
+  private readonly watermarkWidth = 300;   // pt; mantém a proporção do arquivo
+  private readonly watermarkOpacity = 0.10;
+
   private constructor() {
     this.y = PAGE.height - PAGE.margin.top;
     this.contentWidth = PAGE.width - PAGE.margin.left - PAGE.margin.right;
   }
 
-  static async create(): Promise<PdfBuilder> {
+  /**
+   * Cria o builder. Se `watermarkJpg` for informado, o timbre é desenhado
+   * (esmaecido, centralizado, atrás do texto) em todas as páginas.
+   */
+  static async create(opts: { watermarkJpg?: Uint8Array | null } = {}): Promise<PdfBuilder> {
     const b = new PdfBuilder();
     b.doc = await PDFDocument.create();
     b.fontRegular = await b.doc.embedFont(StandardFonts.TimesRoman);
     b.fontBold    = await b.doc.embedFont(StandardFonts.TimesRomanBold);
+    if (opts.watermarkJpg) {
+      try { b.watermark = await b.doc.embedJpg(opts.watermarkJpg); } catch { b.watermark = undefined; }
+    }
     b.page = b.doc.addPage([PAGE.width, PAGE.height]);
+    b.paintWatermark();
     return b;
+  }
+
+  /** Desenha o timbre na página atual (chamado ao criar cada página). */
+  private paintWatermark(): void {
+    if (!this.watermark) return;
+    const w = this.watermarkWidth;
+    const h = (this.watermark.height / this.watermark.width) * w;
+    this.page.drawImage(this.watermark, {
+      x: (PAGE.width - w) / 2,
+      y: (PAGE.height - h) / 2,
+      width: w,
+      height: h,
+      opacity: this.watermarkOpacity,
+    });
   }
 
   /** Pula N pontos verticalmente (ou abre página nova se necessário). */
@@ -69,6 +96,7 @@ export class PdfBuilder {
     if (this.y - needed < PAGE.margin.bottom) {
       this.page = this.doc.addPage([PAGE.width, PAGE.height]);
       this.y = PAGE.height - PAGE.margin.top;
+      this.paintWatermark();
     }
   }
 

@@ -64,18 +64,24 @@ export async function listarMesesDistintos(): Promise<string[]> {
 export interface GerarDocumentoResponse {
   id: string;
   pdf_path: string;
+  versao?: number;
   download_url: string | null;
   filename: string;
 }
 
+/**
+ * Gera (ou regera, quando `id` é informado — RF-09) um documento.
+ * Com `id`, cria uma nova versão do documento existente preservando o original.
+ */
 export async function gerarDocumento<T extends DocumentoGeradoTipo>(
   tipo: T,
   dados: DocumentoPayloadMap[T],
+  id?: string,
 ): Promise<GerarDocumentoResponse> {
   const res = await fetch("/api/documentos/gerar", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tipo, dados }),
+    body: JSON.stringify({ tipo, dados, ...(id ? { id } : {}) }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -91,6 +97,26 @@ export async function obterUrlDownload(id: string): Promise<{ download_url: stri
     throw new Error(err.error ?? `Falha ao obter URL (${res.status})`);
   }
   return res.json();
+}
+
+/**
+ * RF-02 — sugestões de descrições já usadas para um tipo de documento,
+ * filtradas pelo texto digitado e ordenadas por uso/recência.
+ */
+export async function sugerirDescricoes(tipo: DocumentoGeradoTipo, q: string): Promise<string[]> {
+  const term = q.trim().replace(/[%_]/g, "\\$&");
+  if (term.length < 2) return [];
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("document_description_history")
+    .select("description")
+    .eq("document_type", tipo)
+    .ilike("description", `%${term}%`)
+    .order("usage_count", { ascending: false })
+    .order("last_used_at", { ascending: false })
+    .limit(8);
+  if (error) return [];
+  return (data ?? []).map((r) => r.description);
 }
 
 export async function excluirDocumento(id: string): Promise<void> {
