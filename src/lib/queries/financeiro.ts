@@ -22,7 +22,7 @@ export interface ListarTransacoesFiltros {
   search?: string;                  // descrição/fornecedor/ref
   status?: StatusAramburu | "";
   contaContabilCod?: string;        // "2.7" — filtra prefixo
-  centroCustoCod?: string;          // "2.7.2"
+  centroCustoCod?: string | string[]; // "2.7.2" — string (1) ou lista (multi-seleção)
   contaBancariaId?: string;
   mesReferencia?: string;           // "YYYY-MM"
   dataDe?: string;
@@ -63,7 +63,14 @@ export async function listarTransacoesEmpresa(
     }
   }
   if (filtros.status)            q = q.eq("status", filtros.status);
-  if (filtros.centroCustoCod)    q = q.eq("centro_custo_cod", filtros.centroCustoCod);
+  if (filtros.centroCustoCod) {
+    const cc = filtros.centroCustoCod;
+    if (Array.isArray(cc)) {
+      if (cc.length > 0) q = q.in("centro_custo_cod", cc);
+    } else {
+      q = q.eq("centro_custo_cod", cc);
+    }
+  }
   if (filtros.contaContabilCod)  q = q.eq("conta_contabil_cod", filtros.contaContabilCod);
   if (filtros.contaBancariaId)   q = q.eq("conta_bancaria_id", filtros.contaBancariaId);
   if (filtros.mesReferencia)     q = q.eq("mes_referencia", filtros.mesReferencia);
@@ -76,6 +83,90 @@ export async function listarTransacoesEmpresa(
   const { data, count, error } = await q;
   if (error) throw error;
   return { rows: (data ?? []) as TransacaoEmpresaRich[], total: count ?? 0 };
+}
+
+// ----------------------------------------------------------------------------
+// Resumo do escopo (RF-FIN-09) — alimenta o modal de revisão antes de gerar
+// o relatório. Precedência: seleção manual (ids) > filtros aplicados.
+// ----------------------------------------------------------------------------
+export interface ResumoEscopo {
+  count: number;                         // total de lançamentos no recorte
+  soma: number;                          // soma líquida dos valores (com sinal)
+  contas: { id: string; nome: string }[];
+  centros: { cod: string; nome: string }[];
+  statuses: StatusAramburu[];
+  capped: boolean;                       // true se o recorte excedeu o limite de amostragem
+}
+
+const RESUMO_CAP = 10000;
+
+export async function resumirEscopoTransacoes(
+  scope: { filtros?: ListarTransacoesFiltros; transacaoIds?: string[] },
+): Promise<ResumoEscopo> {
+  const supabase = createClient();
+  let q = supabase
+    .from("transacoes_empresa")
+    .select(
+      `id, valor, status, conta_bancaria_id,
+       centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
+       conta_bancaria:contas_bancarias_empresa(id, nome, apelido)`,
+      { count: "exact" },
+    );
+
+  if (scope.transacaoIds && scope.transacaoIds.length) {
+    q = q.in("id", scope.transacaoIds);
+  } else if (scope.filtros) {
+    const f = scope.filtros;
+    if (f.search) {
+      const s = f.search.replace(/[%_,]/g, " ").trim();
+      if (s) q = q.or(`descricao.ilike.%${s}%,fornecedor_nome.ilike.%${s}%,ref.ilike.%${s}%`);
+    }
+    if (f.status) q = q.eq("status", f.status);
+    if (f.centroCustoCod) {
+      const cc = f.centroCustoCod;
+      if (Array.isArray(cc)) { if (cc.length) q = q.in("centro_custo_cod", cc); }
+      else q = q.eq("centro_custo_cod", cc);
+    }
+    if (f.contaContabilCod) q = q.eq("conta_contabil_cod", f.contaContabilCod);
+    if (f.contaBancariaId)  q = q.eq("conta_bancaria_id", f.contaBancariaId);
+    if (f.mesReferencia)    q = q.eq("mes_referencia", f.mesReferencia);
+    if (f.dataDe)           q = q.gte("data", f.dataDe);
+    if (f.dataAte)          q = q.lte("data", f.dataAte);
+  }
+
+  q = q.range(0, RESUMO_CAP - 1);
+  const { data, count, error } = await q;
+  if (error) throw error;
+
+  type Row = {
+    id: string;
+    valor: number;
+    status: StatusAramburu;
+    conta_bancaria_id: string | null;
+    centro_custo: { codigo: string; nome: string } | null;
+    conta_bancaria: { id: string; nome: string; apelido: string | null } | null;
+  };
+  const rows = (data ?? []) as unknown as Row[];
+
+  let soma = 0;
+  const contas = new Map<string, string>();
+  const centros = new Map<string, string>();
+  const statuses = new Set<StatusAramburu>();
+  for (const r of rows) {
+    soma += Number(r.valor);
+    if (r.conta_bancaria) contas.set(r.conta_bancaria.id, r.conta_bancaria.apelido ?? r.conta_bancaria.nome);
+    if (r.centro_custo) centros.set(r.centro_custo.codigo, r.centro_custo.nome);
+    statuses.add(r.status);
+  }
+
+  return {
+    count: count ?? rows.length,
+    soma,
+    contas: Array.from(contas, ([id, nome]) => ({ id, nome })),
+    centros: Array.from(centros, ([cod, nome]) => ({ cod, nome })),
+    statuses: Array.from(statuses),
+    capped: (count ?? 0) > rows.length,
+  };
 }
 
 /**

@@ -30,12 +30,12 @@
   --color-surface-card:  #ffffff;
   --color-surface-dark:  #1a2e28;
 
-  /* Sidebar – petróleo profundo */
-  --color-sidebar-bg:     #152420;
-  --color-sidebar-active: #1f3830;
-  --color-sidebar-border: #253d35;
-  --color-sidebar-text:   #b8d8d0;
-  --color-sidebar-muted:  #5a9485;
+  /* Sidebar – carvão escuro com destaque dourado (RF-FIN-04) */
+  --color-sidebar-bg:     #1a1a1a;
+  --color-sidebar-active: #a67c20;
+  --color-sidebar-border: #333333;
+  --color-sidebar-text:   #d6d3d1;
+  --color-sidebar-muted:  #a8a29e;
 }
 
 * { box-sizing: border-box; }

@@ -1,7 +1,9 @@
 "use client";
 import { Loader2, Wallet, TrendingUp } from "lucide-react";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { BankLogo } from "@/components/ui/BankLogo";
 import { formatCurrency } from "@/lib/utils/format";
+import { formatIdentificacaoBancaria } from "@/lib/constants/bancos";
 import type { SaldoAtualBanco } from "@/lib/queries/dashboard";
 
 interface Props {
@@ -51,8 +53,19 @@ export function SaldosBancariosGrid({ saldos, loading, onSelect }: Props) {
             const aReceber = Number(b.a_receber);
             const provis = Math.abs(Number(b.provisionado));
             const projetado = Number(b.saldo_projetado);
-            const isInvest = b.banco_instituicao?.toLowerCase().includes("xp") ||
-                             b.banco_apelido?.toLowerCase().includes("invest");
+            const isInvest = (b.banco_tipo ?? "").toLowerCase() === "investimento";
+            const identificacao = formatIdentificacaoBancaria({
+              banco: b.banco_instituicao,
+              apelido: b.banco_apelido,
+              tipoInstituicao: b.banco_tipo_instituicao,
+              numeroBanco: b.banco_numero,
+              agencia: b.banco_agencia,
+              tipo: b.banco_tipo,
+              numeroConta: b.banco_numero_conta,
+              digito: b.banco_digito,
+            });
+            const subtitulo = identificacao
+              || [b.banco_instituicao, b.banco_agencia ? `ag. ${b.banco_agencia}` : null].filter(Boolean).join(" • ");
             const saldoColor =
               saldo > 0 ? "text-emerald-700" :
               saldo < 0 ? "text-red-600" : "text-stone-400";
@@ -70,18 +83,20 @@ export function SaldosBancariosGrid({ saldos, loading, onSelect }: Props) {
                 className={`bg-white rounded-xl border border-stone-200 shadow-sm p-4 text-left transition hover:shadow-md hover:ring-2 ${ringColor} cursor-pointer flex flex-col gap-3`}
                 title="Clique para ver detalhes e lançamentos"
               >
-                {/* topo: nome + tipo */}
+                {/* topo: logo + nome + tipo */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-stone-800 truncate">
-                      {b.banco_apelido ?? b.banco_nome}
-                    </p>
-                    <p className="text-[10px] text-stone-400 truncate">
-                      {b.banco_instituicao}
-                      {b.banco_agencia ? ` • ag. ${b.banco_agencia}` : ""}
-                    </p>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <BankLogo banco={b.banco_instituicao} apelido={b.banco_apelido} size={34} />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-stone-800 truncate">
+                        {b.banco_apelido ?? b.banco_nome}
+                      </p>
+                      <p className="text-[10px] text-stone-400 truncate" title={subtitulo}>
+                        {subtitulo}
+                      </p>
+                    </div>
                   </div>
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${tipoBadgeColor}`}>
+                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap uppercase ${tipoBadgeColor}`}>
                     {isInvest ? <TrendingUp size={10} className="inline mr-0.5" /> : null}
                     {isInvest ? "investimento" : "corrente"}
                   </span>

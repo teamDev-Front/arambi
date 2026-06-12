@@ -103,7 +103,7 @@ export function DashboardHome() {
     Despesa: Number(r.saidas_realizadas ?? 0),
   })), [kpiAll]);
 
-  // PieChart: despesa por conta contábil (apenas saídas)
+  // PieChart: despesa por conta contábil (apenas saídas) — com percentual (RF-FIN-03)
   const pieData = useMemo(() => {
     const saidas = byConta.filter((r) => r.natureza === "saida");
     const m = new Map<string, { name: string; value: number; codigo: string }>();
@@ -114,8 +114,14 @@ export function DashboardHome() {
       if (cur) cur.value += v;
       else m.set(k, { name: r.conta_contabil_nome, value: v, codigo: k });
     }
-    return Array.from(m.values()).sort((a, b) => b.value - a.value).slice(0, 8);
+    const arr = Array.from(m.values()).sort((a, b) => b.value - a.value).slice(0, 8);
+    // percentual relativo ao total EXIBIDO (soma das fatias) — evita divisão por zero.
+    const totalExibido = arr.reduce((s, d) => s + d.value, 0);
+    return arr.map((d) => ({ ...d, pct: totalExibido > 0 ? (d.value / totalExibido) * 100 : 0 }));
   }, [byConta]);
+
+  // "39,1%" — 1 casa decimal, vírgula PT-BR
+  const fmtPct = (n: number) => `${n.toFixed(1).replace(".", ",")}%`;
 
   const meses = useMemo(() => kpiAll.map((r) => r.mes_referencia), [kpiAll]);
 
@@ -267,7 +273,11 @@ export function DashboardHome() {
                     />
                   ))}
                 </Pie>
-                <RechartsTooltip formatter={(v) => formatCurrency(Number(v ?? 0))}
+                <RechartsTooltip
+                  formatter={(v, _n, item) => {
+                    const pct = Number((item?.payload as { pct?: number })?.pct ?? 0);
+                    return [`${formatCurrency(Number(v ?? 0))} — ${fmtPct(pct)}`, (item?.payload as { name?: string })?.name ?? ""];
+                  }}
                   contentStyle={{ borderRadius: 8, border: "1px solid #e7e5e4", fontSize: 12 }} />
               </PieChart>
             </ResponsiveContainer>
@@ -281,6 +291,7 @@ export function DashboardHome() {
                   <span className="w-2 h-2 rounded-full shrink-0" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
                   <span className="truncate flex-1 text-stone-600">{d.codigo} – {d.name}</span>
                   <span className="font-semibold text-stone-700 tabular-nums">{formatCurrency(d.value)}</span>
+                  <span className="text-stone-400 tabular-nums w-12 text-right">{fmtPct(d.pct)}</span>
                 </button>
               ))}
             </div>

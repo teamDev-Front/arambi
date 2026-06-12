@@ -228,6 +228,40 @@ export interface RelatorioSociosOverrides {
 }
 
 // ============================================================================
+// Escopo do relatório (RF-FIN-09) — recorte real escolhido pela Lola
+// ============================================================================
+// O relatório deixa de ser sempre "o mês inteiro": passa a respeitar os filtros
+// aplicados na tela Financeiro OU os lançamentos selecionados manualmente.
+// Precedência: seleção manual (por_selecao) > filtros (por_filtros) > mês.
+export type ReportScopeType = "por_mes" | "por_filtros" | "por_selecao";
+
+export interface ReportScopeFiltros {
+  mes_referencia?: string;          // "YYYY-MM"
+  search?: string;                  // descrição/fornecedor/ref
+  status?: string;                  // status_aramburu
+  conta_contabil_cod?: string;      // "2.7"
+  centro_custo_cod?: string[];      // multi-seleção
+  conta_bancaria_id?: string;
+  data_de?: string;                 // "YYYY-MM-DD"
+  data_ate?: string;                // "YYYY-MM-DD"
+}
+
+export interface ReportScope {
+  scope_type: ReportScopeType;
+  filtros?: ReportScopeFiltros;
+  /** Ids dos lançamentos selecionados manualmente (têm precedência sobre filtros). */
+  transacao_ids?: string[];
+  /** Resumo calculado na revisão (somente para auditoria em scope_applied). */
+  totais?: {
+    qtd_lancamentos?: number;
+    total?: number;
+    contas?: string[];
+    centros?: string[];
+    status?: string[];
+  };
+}
+
+// ============================================================================
 // Mapeamento slug → tipo de payload
 // ============================================================================
 export type PayloadPorSlug = {

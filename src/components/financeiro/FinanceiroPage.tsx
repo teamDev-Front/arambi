@@ -3,14 +3,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { Badge, type BadgeVariant } from "@/components/ui/Badge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import { Pagination } from "@/components/ui/Pagination";
+import { RelatorioEscopoModal } from "@/components/financeiro/RelatorioEscopoModal";
+import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
   Plus, FileText, Search, Edit2, Trash2,
-  TrendingUp, TrendingDown, DollarSign, Loader2,
+  TrendingUp, TrendingDown, Loader2,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
@@ -42,7 +45,8 @@ import { useToast } from "@/components/ui/Toast";
 const PAGE_SIZE = 25;
 
 type FormState = {
-  data: string;
+  data: string;            // Vencimento
+  data_emissao: string;    // Emissão (opcional)
   conta_contabil_cod: string;
   centro_custo_cod: string;
   tipo_despesa: TipoDespesa;
@@ -60,6 +64,7 @@ type FormState = {
 
 const EMPTY_FORM: FormState = {
   data: new Date().toISOString().slice(0, 10),
+  data_emissao: "",
   conta_contabil_cod: "",
   centro_custo_cod: "",
   tipo_despesa: "sem",
@@ -74,13 +79,6 @@ const EMPTY_FORM: FormState = {
   valor: "",
   observacao: "",
 };
-
-function statusBadgeVariant(status: StatusAramburu): BadgeVariant {
-  const k = STATUS_KIND[status];
-  if (k === "entrada") return "success";
-  if (k === "saida")   return status.startsWith("a_") ? "warning" : "danger";
-  return "neutral";
-}
 
 export function FinanceiroPage() {
   const toast = useToast();
@@ -99,9 +97,15 @@ export function FinanceiroPage() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<StatusAramburu | "">("");
   const [filterContaContabil, setFilterContaContabil] = useState("");
+  const [filterCentroCusto, setFilterCentroCusto] = useState<string[]>([]);
   const [filterMes, setFilterMes] = useState("");
   const [filterBanco, setFilterBanco] = useState("");
   const [page, setPage] = useState(1);
+
+  // ---- seleção manual p/ relatório por escopo (RF-FIN-09) ----
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [escopoOpen, setEscopoOpen] = useState(false);
+  const [escopoTipo, setEscopoTipo] = useState<"por_filtros" | "por_selecao">("por_filtros");
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -137,6 +141,40 @@ export function FinanceiroPage() {
     return r;
   }, [rows]);
 
+  // ---- seleção (RF-FIN-09) ----
+  const allPageSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
+  const togglePageSelection = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (rows.length > 0 && rows.every((r) => next.has(r.id))) rows.forEach((r) => next.delete(r.id));
+      else rows.forEach((r) => next.add(r.id));
+      return next;
+    });
+  }, [rows]);
+  const toggleOneSelection = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Filtros atuais (para gerar relatório pelo recorte) e competência sugerida.
+  const filtrosAtuais: ListarTransacoesFiltros = useMemo(() => ({
+    search: search || undefined,
+    status: filterStatus || undefined,
+    contaContabilCod: filterContaContabil || undefined,
+    centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
+    contaBancariaId: filterBanco || undefined,
+    mesReferencia: filterMes || undefined,
+  }), [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco, filterMes]);
+  const competenciaSugerida = filterMes || new Date().toISOString().slice(0, 7);
+
+  function abrirEscopo() {
+    setEscopoTipo(selectedIds.size > 0 ? "por_selecao" : "por_filtros");
+    setEscopoOpen(true);
+  }
+
   // ---- effects ----
   // lookups
   useEffect(() => {
@@ -157,6 +195,7 @@ export function FinanceiroPage() {
           search: search || undefined,
           status: filterStatus || undefined,
           contaContabilCod: filterContaContabil || undefined,
+          centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
           contaBancariaId: filterBanco || undefined,
           mesReferencia: filterMes || undefined,
         },
@@ -171,7 +210,9 @@ export function FinanceiroPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, filterStatus, filterContaContabil, filterBanco, filterMes, page]);
+  }, [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco, filterMes, page]);
+  // fetchData sincroniza a tabela com os filtros/página — o setState interno é intencional.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // ---- ações ----
@@ -184,6 +225,7 @@ export function FinanceiroPage() {
     setEditId(row.id);
     setForm({
       data: row.data,
+      data_emissao: row.data_emissao ?? "",
       conta_contabil_cod: row.conta_contabil_cod,
       centro_custo_cod: row.centro_custo_cod,
       tipo_despesa: row.tipo_despesa,
@@ -205,6 +247,7 @@ export function FinanceiroPage() {
     if (!form.data || !form.conta_contabil_cod || !form.centro_custo_cod || !form.valor) return;
     const payload: TransacaoEmpresaInsert = {
       data: form.data,
+      data_emissao: form.data_emissao || null,
       conta_contabil_cod: form.conta_contabil_cod,
       centro_custo_cod: form.centro_custo_cod,
       tipo_despesa: form.tipo_despesa,
@@ -263,21 +306,19 @@ export function FinanceiroPage() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={abrirEscopo}
+            title="Gera o relatório a partir do recorte atual (filtros ou itens selecionados)">
+            <FileText size={14} /> {selectedIds.size > 0 ? `Gerar de ${selectedIds.size} selec.` : "Gerar do recorte"}
+          </Button>
           <Link href="/dashboard/relatorios">
-            <Button variant="outline" size="sm"><FileText size={14} /> Gerar Relatórios PDF</Button>
+            <Button variant="ghost" size="sm">Relatórios PDF</Button>
           </Link>
           <Button size="sm" onClick={openNew}><Plus size={14} /> Nova Transação</Button>
         </div>
       </div>
 
       {/* KPIs (página atual) */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <KpiCard
-          label="Total no banco"
-          value={String(total)}
-          icon={<DollarSign size={16}/>}
-          helpText="Quantidade total de lançamentos respeitando os filtros aplicados (não apenas a página visível)."
-        />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <KpiCard
           label="Entradas (página)"
           value={formatCurrency(kpis.entradas)}
@@ -333,6 +374,16 @@ export function FinanceiroPage() {
                 <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>
               ))}
             </select>
+            <MultiSelect
+              className="w-44"
+              value={filterCentroCusto}
+              onChange={(v) => { setFilterCentroCusto(v); setPage(1); }}
+              options={classificacoesN3.map((c) => ({ value: c.codigo, label: `${c.codigo} – ${c.nome}` }))}
+              placeholder="Todos os centros de custo"
+              searchPlaceholder="Buscar centro de custo…"
+              emptyText="Nenhum centro de custo"
+              unitLabel="centros"
+            />
             <select
               value={filterMes}
               onChange={(e) => { setFilterMes(e.target.value); setPage(1); }}
@@ -356,28 +407,50 @@ export function FinanceiroPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-100">
-                  {["Data","Conta","Centro de Custo","Descrição","Fornecedor","Banco","Status","Valor","Ações"].map((h) => (
+                  <th className="px-3 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      aria-label="Selecionar todos da página"
+                      checked={allPageSelected}
+                      onChange={togglePageSelection}
+                      className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
+                    />
+                  </th>
+                  {["Vencimento","Emissão","Conta","Centro de Custo","Descrição","Fornecedor","Banco","Status","Valor","Ações"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={9} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="inline-block animate-spin mr-2" />
                     Carregando…
                   </td></tr>
                 )}
                 {!loading && rows.length === 0 && (
-                  <tr><td colSpan={9} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
                     Nenhuma transação encontrada.
                   </td></tr>
                 )}
                 {!loading && rows.map((t) => {
                   const kind = STATUS_KIND[t.status];
+                  const selected = selectedIds.has(t.id);
                   return (
-                    <tr key={t.id} className="border-b border-stone-50 hover:bg-stone-50 transition-colors table-row-alt">
+                    <tr key={t.id} className={`border-b border-stone-50 transition-colors table-row-alt ${selected ? "bg-accent-50/60" : "hover:bg-stone-50"}`}>
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          aria-label="Selecionar lançamento"
+                          checked={selected}
+                          onChange={() => toggleOneSelection(t.id)}
+                          className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
+                        />
+                      </td>
                       <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">{formatDate(t.data)}</td>
+                      <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">
+                        {t.data_emissao ? formatDate(t.data_emissao) : <span className="text-stone-300">—</span>}
+                      </td>
                       <td className="px-4 py-3 text-stone-700 text-xs">
                         <div className="font-medium text-stone-700">{t.conta_contabil?.nome ?? t.conta_contabil_cod}</div>
                         <div className="text-stone-400 text-[10px]">{t.conta_contabil_cod}</div>
@@ -396,7 +469,7 @@ export function FinanceiroPage() {
                         {t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? <span className="text-stone-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant={statusBadgeVariant(t.status)}>{STATUS_ARAMBURU_LABEL[t.status]}</Badge>
+                        <StatusBadge status={t.status} />
                       </td>
                       <td className={`px-4 py-3 font-semibold text-sm whitespace-nowrap ${kind === "entrada" ? "text-green-700" : kind === "saida" ? "text-red-600" : "text-stone-700"}`}>
                         {formatCurrency(t.valor)}
@@ -417,10 +490,18 @@ export function FinanceiroPage() {
               </tbody>
             </table>
           </div>
-          <div className="flex items-center justify-between px-4 py-3 border-t border-stone-100">
-            <p className="text-xs text-stone-400">
-              {loading ? "…" : `${total} lançamento${total === 1 ? "" : "s"}`}
-            </p>
+          <div className="flex items-center justify-between px-4 py-3 border-t border-stone-100 gap-3 flex-wrap">
+            <div className="flex items-center gap-3 text-xs text-stone-400">
+              <span>{loading ? "…" : `${total} lançamento${total === 1 ? "" : "s"}`}</span>
+              {selectedIds.size > 0 && (
+                <span className="inline-flex items-center gap-2 text-accent-600 font-medium">
+                  {selectedIds.size} selecionado{selectedIds.size === 1 ? "" : "s"}
+                  <button onClick={() => setSelectedIds(new Set())} className="text-stone-400 hover:text-stone-600 underline">
+                    limpar
+                  </button>
+                </span>
+              )}
+            </div>
             <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
           </div>
         </CardContent>
@@ -434,9 +515,14 @@ export function FinanceiroPage() {
         size="lg"
       >
         <div className="p-6 space-y-4">
-          <div className="grid grid-cols-3 gap-3">
-            <Input label="Data" type="date" value={form.data}
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Vencimento" type="date" value={form.data}
               onChange={(e) => setForm({ ...form, data: e.target.value })} />
+            <Input label="Emissão (opcional)" type="date" value={form.data_emissao}
+              onChange={(e) => setForm({ ...form, data_emissao: e.target.value })} />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
             <Select label="Tipo de Despesa" value={form.tipo_despesa}
               onChange={(e) => setForm({ ...form, tipo_despesa: e.target.value as TipoDespesa })}>
               {Object.entries(TIPO_DESPESA_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -516,6 +602,16 @@ export function FinanceiroPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Geração de relatório pelo recorte (RF-FIN-09) */}
+      <RelatorioEscopoModal
+        open={escopoOpen}
+        onClose={() => setEscopoOpen(false)}
+        scopeType={escopoTipo}
+        filtros={filtrosAtuais}
+        transacaoIds={Array.from(selectedIds)}
+        mesReferenciaDefault={competenciaSugerida}
+      />
     </div>
   );
 }

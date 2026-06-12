@@ -13,7 +13,51 @@ import type { Database } from "@/types";
 import type {
   CapaEmpresaPayload, CapaSocioPayload,
   RelatorioContabilPayload, RelatorioSociosPayload,
+  ReportScope,
 } from "./types";
+
+// ----------------------------------------------------------------------------
+// Escopo do relatório (RF-FIN-09)
+// ----------------------------------------------------------------------------
+// Aplica o recorte escolhido pela Lola a uma query de transacoes_empresa.
+// Precedência: seleção manual (por_selecao) > filtros (por_filtros) > mês.
+// Tipagem propositalmente frouxa: o filter builder do supabase-js encadeia os
+// mesmos métodos retornando o mesmo tipo — a interface mínima abaixo basta.
+interface QueryFiltravel {
+  eq: (col: string, val: unknown) => QueryFiltravel;
+  in: (col: string, vals: readonly unknown[]) => QueryFiltravel;
+  gte: (col: string, val: unknown) => QueryFiltravel;
+  lte: (col: string, val: unknown) => QueryFiltravel;
+  or: (filtros: string) => QueryFiltravel;
+}
+
+function aplicarEscopo<T>(query: T, scope: ReportScope | undefined, mesFallback: string): T {
+  const q = query as unknown as QueryFiltravel;
+
+  if (!scope || scope.scope_type === "por_mes") {
+    return q.eq("mes_referencia", scope?.filtros?.mes_referencia ?? mesFallback) as unknown as T;
+  }
+  if (scope.scope_type === "por_selecao") {
+    // Seleção manual: o conjunto é exatamente os ids marcados (vazio = nada).
+    return q.in("id", scope.transacao_ids ?? []) as unknown as T;
+  }
+
+  // por_filtros
+  const f = scope.filtros ?? {};
+  let r = q;
+  if (f.mes_referencia)            r = r.eq("mes_referencia", f.mes_referencia);
+  if (f.status)                    r = r.eq("status", f.status);
+  if (f.conta_contabil_cod)        r = r.eq("conta_contabil_cod", f.conta_contabil_cod);
+  if (f.centro_custo_cod?.length)  r = r.in("centro_custo_cod", f.centro_custo_cod);
+  if (f.conta_bancaria_id)         r = r.eq("conta_bancaria_id", f.conta_bancaria_id);
+  if (f.data_de)                   r = r.gte("data", f.data_de);
+  if (f.data_ate)                  r = r.lte("data", f.data_ate);
+  if (f.search) {
+    const s = f.search.replace(/[%_,]/g, " ").trim();
+    if (s) r = r.or(`descricao.ilike.%${s}%,fornecedor_nome.ilike.%${s}%,ref.ilike.%${s}%`);
+  }
+  return r as unknown as T;
+}
 
 // ----------------------------------------------------------------------------
 // Helpers de formatação BRL
@@ -71,6 +115,8 @@ async function lerPerfilEmpresa(
 export interface BuildCapaEmpresaArgs {
   mesReferencia: string;                 // "YYYY-MM"
   preparadoPor?: string;
+  /** Recorte escolhido pela Lola (RF-FIN-09). Ausente → mês inteiro (comportamento histórico). */
+  scope?: ReportScope;
 }
 
 export async function buildCapaEmpresa(
@@ -78,49 +124,85 @@ export async function buildCapaEmpresa(
   args: BuildCapaEmpresaArgs,
 ): Promise<CapaEmpresaPayload> {
   const { mes, numero_mes } = mesReferenciaToHuman(args.mesReferencia);
+  const escopado = !!args.scope && args.scope.scope_type !== "por_mes";
 
-  // Saldos por banco no mês (vw existente) + cadastros para enriquecer apelido/banco
-  const [porBancoRes, contasRes, perfilEmpresa] = await Promise.all([
-    supabase.from("v_saldo_por_banco_mensal").select("*").eq("mes_referencia", args.mesReferencia),
-    supabase.from("contas_bancarias_empresa").select("id, nome, apelido, banco, ordem, ativa").eq("ativa", true).order("ordem", { ascending: true, nullsFirst: false }),
-    lerPerfilEmpresa(supabase),
-  ]);
-  const porBanco = porBancoRes.data;
-  const contasCadastradas = contasRes.data ?? [];
-  const cadastroPorId = new Map(contasCadastradas.map((c) => [c.id, c]));
+  const perfilEmpresa = await lerPerfilEmpresa(supabase);
 
-  // Soma a variação por banco (uma row por banco), montando a lista dinâmica.
-  const totalPorContaId = new Map<string, number>();
-  for (const r of porBanco ?? []) {
-    if (!r.conta_bancaria_id) continue;
-    const v = Math.abs(Number(r.variacao_no_mes ?? 0));
-    totalPorContaId.set(r.conta_bancaria_id, (totalPorContaId.get(r.conta_bancaria_id) ?? 0) + v);
-  }
-
-  // Lista de bancos preserva a ordem do cadastro; contas sem movimento aparecem zeradas.
-  const bancos = contasCadastradas.map((c) => {
-    const total = totalPorContaId.get(c.id) ?? 0;
-    return {
-      nome:           c.apelido ?? c.nome,
-      nome_completo:  c.nome,
-      slug:           (c.banco ?? c.nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""),
-      total:          brl(total),
-    };
-  });
-  const total_geral = Array.from(totalPorContaId.values()).reduce((a, b) => a + b, 0);
-  void cadastroPorId;
-
-  // Transações do mês agrupadas por tipo_despesa (fixa/variavel/eventual)
-  const { data: ts } = await supabase
+  // Transações do recorte (ou do mês inteiro), com banco e tipo_despesa.
+  let txQuery = supabase
     .from("transacoes_empresa")
     .select(`
-      data, descricao, fornecedor_nome, valor, forma_pgto, tipo_despesa,
-      conta_bancaria:contas_bancarias_empresa(apelido, nome)
-    `)
-    .eq("mes_referencia", args.mesReferencia)
-    .in("tipo_despesa", ["fixa","variavel","eventual"])
-    .order("data");
+      conta_bancaria_id, data, descricao, fornecedor_nome, valor, forma_pgto, tipo_despesa,
+      conta_bancaria:contas_bancarias_empresa(apelido, nome, banco, ordem)
+    `);
+  txQuery = aplicarEscopo(txQuery, args.scope, args.mesReferencia);
+  const { data: tsAll } = await txQuery.order("data");
 
+  type TransacaoComConta = {
+    conta_bancaria_id: string | null;
+    data: string;
+    descricao: string | null;
+    fornecedor_nome: string | null;
+    valor: number;
+    forma_pgto: string;
+    tipo_despesa: "fixa" | "variavel" | "eventual" | "periodica" | "sem";
+    conta_bancaria: { apelido: string | null; nome: string; banco: string | null; ordem: number | null } | null;
+  };
+  const txs = (tsAll ?? []) as unknown as TransacaoComConta[];
+
+  const bancoSlug = (banco: string | null, nome: string) =>
+    (banco ?? nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+
+  // ---- Lista de bancos ----
+  let bancos: { nome: string; nome_completo: string; slug: string; total: string }[];
+  let total_geral: number;
+
+  if (escopado) {
+    // RF-FIN-09 (D-3): a capa lista SOMENTE as contas com movimento no recorte.
+    const acc = new Map<string, { nome: string; nome_completo: string; banco: string | null; ordem: number; total: number }>();
+    for (const t of txs) {
+      if (!t.conta_bancaria_id || !t.conta_bancaria) continue;
+      const a = acc.get(t.conta_bancaria_id) ?? {
+        nome: t.conta_bancaria.apelido ?? t.conta_bancaria.nome,
+        nome_completo: t.conta_bancaria.nome,
+        banco: t.conta_bancaria.banco,
+        ordem: t.conta_bancaria.ordem ?? 999,
+        total: 0,
+      };
+      a.total += Number(t.valor);
+      acc.set(t.conta_bancaria_id, a);
+    }
+    const lista = Array.from(acc.values()).sort((x, y) => x.ordem - y.ordem);
+    bancos = lista.map((c) => ({
+      nome: c.nome,
+      nome_completo: c.nome_completo,
+      slug: bancoSlug(c.banco, c.nome),
+      total: brl(Math.abs(c.total)),
+    }));
+    total_geral = lista.reduce((s, c) => s + Math.abs(c.total), 0);
+  } else {
+    // Mês inteiro: comportamento histórico (todas as contas ativas via view).
+    const [porBancoRes, contasRes] = await Promise.all([
+      supabase.from("v_saldo_por_banco_mensal").select("*").eq("mes_referencia", args.mesReferencia),
+      supabase.from("contas_bancarias_empresa").select("id, nome, apelido, banco, ordem, ativa").eq("ativa", true).order("ordem", { ascending: true, nullsFirst: false }),
+    ]);
+    const contasCadastradas = contasRes.data ?? [];
+    const totalPorContaId = new Map<string, number>();
+    for (const r of porBancoRes.data ?? []) {
+      if (!r.conta_bancaria_id) continue;
+      const v = Math.abs(Number(r.variacao_no_mes ?? 0));
+      totalPorContaId.set(r.conta_bancaria_id, (totalPorContaId.get(r.conta_bancaria_id) ?? 0) + v);
+    }
+    bancos = contasCadastradas.map((c) => ({
+      nome: c.apelido ?? c.nome,
+      nome_completo: c.nome,
+      slug: bancoSlug(c.banco, c.nome),
+      total: brl(totalPorContaId.get(c.id) ?? 0),
+    }));
+    total_geral = Array.from(totalPorContaId.values()).reduce((a, b) => a + b, 0);
+  }
+
+  // ---- Despesas por tipo (fixa/variavel/eventual) do recorte ----
   type ListItem = { vencimento: string; valor: string; descricao: string; banco: string; pgto: string };
   const buckets: Record<"fixa" | "variavel" | "eventual", { items: ListItem[]; total: number }> = {
     fixa:     { items: [], total: 0 },
@@ -128,17 +210,7 @@ export async function buildCapaEmpresa(
     eventual: { items: [], total: 0 },
   };
 
-  type TransacaoComConta = {
-    data: string;
-    descricao: string | null;
-    fornecedor_nome: string | null;
-    valor: number;
-    forma_pgto: string;
-    tipo_despesa: "fixa" | "variavel" | "eventual" | "periodica" | "sem";
-    conta_bancaria: { apelido: string | null; nome: string } | null;
-  };
-
-  for (const t of (ts ?? []) as unknown as TransacaoComConta[]) {
+  for (const t of txs) {
     const tipo = t.tipo_despesa;
     if (tipo !== "fixa" && tipo !== "variavel" && tipo !== "eventual") continue;
     const valor = Math.abs(Number(t.valor));
@@ -308,6 +380,8 @@ export async function buildCapaSocio(
 export interface BuildRelatorioContabilArgs {
   mesReferencia: string;
   preparadoPor?: string;
+  /** Recorte escolhido pela Lola (RF-FIN-09). Ausente → mês inteiro. */
+  scope?: ReportScope;
 }
 
 export async function buildRelatorioContabil(
@@ -316,17 +390,17 @@ export async function buildRelatorioContabil(
 ): Promise<RelatorioContabilPayload> {
   const { mes } = mesReferenciaToHuman(args.mesReferencia);
 
-  // Lê transações do mês com todos os joins
-  const { data } = await supabase
+  // Lê transações do recorte (ou do mês inteiro) com todos os joins
+  let q = supabase
     .from("transacoes_empresa")
     .select(`
       data, valor, status, descricao, fornecedor_nome,
       conta_contabil:classificacao_financeira!transacoes_empresa_conta_contabil_cod_fkey(codigo, nome, natureza),
       centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
       conta_bancaria:contas_bancarias_empresa(nome, apelido, banco)
-    `)
-    .eq("mes_referencia", args.mesReferencia)
-    .order("data");
+    `);
+  q = aplicarEscopo(q, args.scope, args.mesReferencia);
+  const { data } = await q.order("data");
 
   type T = {
     data: string;

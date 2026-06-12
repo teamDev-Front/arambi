@@ -63,7 +63,12 @@ export interface SaldoAtualBanco {
   banco_nome: string;
   banco_apelido: string | null;
   banco_instituicao: string | null;
+  banco_numero: string | null;            // código BACEN (403, 748, 077, 348)
+  banco_tipo_instituicao: string | null;  // "banco" | "cooperativa"
   banco_agencia: string | null;
+  banco_numero_conta: string | null;
+  banco_digito: string | null;
+  banco_tipo: string | null;              // "corrente" | "investimento"
   saldo_atual: number;
   a_pagar: number;
   a_receber: number;
@@ -78,7 +83,7 @@ export async function getSaldoAtualPorBanco(): Promise<SaldoAtualBanco[]> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from("v_saldo_atual_por_banco")
-    .select("conta_bancaria_id, banco_nome, banco_apelido, banco_instituicao, banco_agencia, saldo_atual, a_pagar, a_receber, provisionado, entradas_realizadas, saidas_realizadas, saldo_projetado, total_lancamentos")
+    .select("conta_bancaria_id, banco_nome, banco_apelido, banco_instituicao, banco_numero, banco_tipo_instituicao, banco_agencia, banco_numero_conta, banco_digito, banco_tipo, saldo_atual, a_pagar, a_receber, provisionado, entradas_realizadas, saidas_realizadas, saldo_projetado, total_lancamentos")
     .order("banco_ordem");
   if (error) throw error;
   return (data ?? []) as SaldoAtualBanco[];

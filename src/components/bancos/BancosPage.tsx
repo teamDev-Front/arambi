@@ -37,6 +37,8 @@ type CbeForm = {
   nome: string;
   apelido: string;
   banco: string;
+  numero_banco: string;
+  tipo_instituicao: string;
   agencia: string;
   numero_conta: string;
   digito: string;
@@ -46,8 +48,8 @@ type CbeForm = {
 };
 
 const EMPTY_EMPRESA: CbeForm = {
-  nome: "", apelido: "", banco: "", agencia: "",
-  numero_conta: "", digito: "", tipo: "corrente",
+  nome: "", apelido: "", banco: "", numero_banco: "", tipo_instituicao: "banco",
+  agencia: "", numero_conta: "", digito: "", tipo: "corrente",
   ativa: true, ordem: "",
 };
 
@@ -188,6 +190,8 @@ export function BancosPage() {
       nome: c.nome,
       apelido: c.apelido ?? "",
       banco: c.banco ?? "",
+      numero_banco: c.numero_banco ?? "",
+      tipo_instituicao: c.tipo_instituicao ?? "banco",
       agencia: c.agencia ?? "",
       numero_conta: c.numero_conta ?? "",
       digito: c.digito ?? "",
@@ -208,6 +212,8 @@ export function BancosPage() {
       nome: empForm.nome.trim(),
       apelido: empForm.apelido.trim() || null,
       banco: empForm.banco.trim() || null,
+      numero_banco: empForm.numero_banco.trim() || null,
+      tipo_instituicao: empForm.tipo_instituicao || "banco",
       agencia: empForm.agencia.trim() || null,
       numero_conta: empForm.numero_conta.trim() || null,
       digito: empForm.digito.trim() || null,
@@ -670,6 +676,22 @@ export function BancosPage() {
             >
               {TIPO_OPTIONS.map((t) => <option key={t} value={t}>{TIPO_LABEL[t]}</option>)}
             </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Select
+              label="Tipo de instituição"
+              value={empForm.tipo_instituicao}
+              onChange={(e) => setEmpForm({ ...empForm, tipo_instituicao: e.target.value })}
+            >
+              <option value="banco">Banco</option>
+              <option value="cooperativa">Cooperativa</option>
+            </Select>
+            <Input
+              label="Nº do Banco (BACEN)"
+              placeholder="403 / 748 / 077 / 348"
+              value={empForm.numero_banco}
+              onChange={(e) => setEmpForm({ ...empForm, numero_banco: e.target.value })}
+            />
           </div>
           <div className="grid grid-cols-3 gap-3">
             <Input

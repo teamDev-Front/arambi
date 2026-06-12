@@ -97,6 +97,8 @@ export type ContaBancariaEmpresaRow = WithTimestamps & {
   nome: string;
   apelido: string | null;
   banco: string | null;
+  numero_banco: string | null;        // código BACEN: 403 Cora, 748 Sicredi, 077 Inter, 348 XP
+  tipo_instituicao: string;           // "banco" | "cooperativa" — rótulo do card
   agencia: string | null;
   conta: string | null;
   tipo: string | null;
@@ -143,7 +145,8 @@ export type FornecedorRow = WithTimestamps & {
 
 export type TransacaoEmpresaRow = {
   id: string;
-  data: string;                              // "YYYY-MM-DD"
+  data: string;                              // "YYYY-MM-DD" — VENCIMENTO
+  data_emissao: string | null;              // "YYYY-MM-DD" — EMISSÃO da NF/documento (RF-FIN-06); null em lançamentos antigos
   mes_referencia: string;                    // "YYYY-MM"
   conta_contabil_cod: string;
   centro_custo_cod: string;
@@ -333,6 +336,7 @@ export type PdfMonkeyGeracaoRow = {
   status: string | null;
   download_url: string | null;
   payload: Json | null;
+  scope_applied: Json | null;          // recorte usado na geração (RF-FIN-09): filtros/ids/contas/totais
   erro: string | null;
   created_at: string;
   created_by: string | null;
@@ -637,7 +641,9 @@ export interface Database {
       };
       contas_bancarias_empresa: {
         Row: ContaBancariaEmpresaRow;
-        Insert: Omit<ContaBancariaEmpresaRow, "id" | "created_at" | "updated_at">;
+        // numero_banco é nullable e tipo_instituicao tem default 'banco' no banco → opcionais no insert.
+        Insert: Omit<ContaBancariaEmpresaRow, "id" | "created_at" | "updated_at" | "numero_banco" | "tipo_instituicao">
+          & { numero_banco?: string | null; tipo_instituicao?: string };
         Update: Partial<Omit<ContaBancariaEmpresaRow, "id" | "created_at" | "updated_at">>;
         Relationships: EmptyRels;
       };
@@ -739,7 +745,8 @@ export interface Database {
       };
       pdfmonkey_geracoes: {
         Row: PdfMonkeyGeracaoRow;
-        Insert: Omit<PdfMonkeyGeracaoRow, "id" | "created_at">;
+        // scope_applied é nullable no banco → opcional no insert (preenchido pela geração por escopo, RF-FIN-09).
+        Insert: Omit<PdfMonkeyGeracaoRow, "id" | "created_at" | "scope_applied"> & { scope_applied?: Json | null };
         Update: Partial<Omit<PdfMonkeyGeracaoRow, "id" | "created_at">>;
         Relationships: EmptyRels;
       };
@@ -869,7 +876,12 @@ export interface Database {
           banco_nome: string;
           banco_apelido: string | null;
           banco_instituicao: string | null;
+          banco_numero: string | null;
+          banco_tipo_instituicao: string | null;
           banco_agencia: string | null;
+          banco_numero_conta: string | null;
+          banco_digito: string | null;
+          banco_tipo: string | null;
           banco_ordem: number | null;
           saldo_atual: number;
           a_pagar: number;

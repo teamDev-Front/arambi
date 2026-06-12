@@ -31,7 +31,7 @@ import {
   buildRelatorioContabil, buildRelatorioSocios,
 } from "@/lib/pdfmonkey/builders";
 import type {
-  AnyPayload, ContabilObservacao, RelatorioSociosOverrides,
+  AnyPayload, ContabilObservacao, RelatorioSociosOverrides, ReportScope,
 } from "@/lib/pdfmonkey/types";
 import type { PdfMonkeySlug, Json } from "@/types";
 
@@ -44,6 +44,8 @@ interface Body {
   observacoes?: ContabilObservacao[];
   /** Overrides editáveis do relatório de sócios (saldo inicial e notas dos gráficos). */
   socios_overrides?: RelatorioSociosOverrides;
+  /** Recorte (RF-FIN-09): aplica-se a capa_empresa e relatorio_contabil. */
+  scope?: ReportScope;
 }
 
 const VALID_SLUGS: PdfMonkeySlug[] = [
@@ -84,11 +86,11 @@ export async function POST(req: NextRequest) {
     if (body.payload) {
       payload = body.payload;
     } else if (slug === "capa_empresa") {
-      payload = await buildCapaEmpresa(supabase, { mesReferencia: body.mes_referencia });
+      payload = await buildCapaEmpresa(supabase, { mesReferencia: body.mes_referencia, scope: body.scope });
     } else if (slug === "capa_socio") {
       payload = await buildCapaSocio(supabase, { mesReferencia: body.mes_referencia, socioId: body.socio_id! });
     } else if (slug === "relatorio_contabil") {
-      payload = await buildRelatorioContabil(supabase, { mesReferencia: body.mes_referencia });
+      payload = await buildRelatorioContabil(supabase, { mesReferencia: body.mes_referencia, scope: body.scope });
       // Sobrescreve observações se vieram do front
       if (body.observacoes && Array.isArray(body.observacoes)) {
         (payload as { observacoes: ContabilObservacao[] }).observacoes = body.observacoes;
@@ -113,6 +115,8 @@ export async function POST(req: NextRequest) {
       pdfmonkey_document_id: null,
       status: "pending",
       payload: payload as unknown as Json,
+      // RF-FIN-09: registra o recorte usado (auditoria/reprodutibilidade).
+      scope_applied: body.scope ? (body.scope as unknown as Json) : null,
       download_url: null,
       erro: null,
       created_by: null,

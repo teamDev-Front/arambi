@@ -1,11 +1,11 @@
 "use client";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { type TransacaoEmpresaRich } from "@/lib/queries/financeiro";
 import {
-  STATUS_ARAMBURU_LABEL, STATUS_KIND, FORMA_PGTO_LABEL,
+  STATUS_KIND, FORMA_PGTO_LABEL,
   TIPO_DESPESA_LABEL, OBS_OBRA_LABEL,
 } from "@/types";
 
@@ -35,9 +35,7 @@ export function LancamentoDetalheModal({ lancamento, onClose }: Props) {
         <div className="flex items-baseline justify-between border-b border-stone-100 pb-3">
           <div>
             <p className="text-[10px] uppercase tracking-wide text-stone-400">Status</p>
-            <Badge variant={kind === "entrada" ? "success" : kind === "saida" ? "danger" : "neutral"}>
-              {STATUS_ARAMBURU_LABEL[t.status]}
-            </Badge>
+            <StatusBadge status={t.status} />
           </div>
           <div className="text-right">
             <p className="text-[10px] uppercase tracking-wide text-stone-400">Valor</p>
@@ -52,9 +50,12 @@ export function LancamentoDetalheModal({ lancamento, onClose }: Props) {
 
         {/* Grid de campos */}
         <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-          <Field label="Data">{formatDate(t.data)}</Field>
-          <Field label="Mês de referência">{t.mes_referencia}</Field>
+          <Field label="Vencimento">{formatDate(t.data)}</Field>
+          <Field label="Emissão">
+            {t.data_emissao ? formatDate(t.data_emissao) : <span className="text-stone-300">—</span>}
+          </Field>
 
+          <Field label="Mês de referência">{t.mes_referencia}</Field>
           <Field label="Conta Contábil">
             <div>{t.conta_contabil?.nome ?? t.conta_contabil_cod}</div>
             <div className="text-[10px] text-stone-400">{t.conta_contabil_cod}</div>

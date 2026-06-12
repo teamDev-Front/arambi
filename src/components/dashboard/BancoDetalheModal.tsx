@@ -3,12 +3,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
-import { Badge } from "@/components/ui/Badge";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Loader2, ArrowRight } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
+import { BankLogo } from "@/components/ui/BankLogo";
+import { formatIdentificacaoBancaria } from "@/lib/constants/bancos";
 import { listarTransacoesEmpresa, type TransacaoEmpresaRich } from "@/lib/queries/financeiro";
 import type { SaldoAtualBanco } from "@/lib/queries/dashboard";
-import { STATUS_ARAMBURU_LABEL, STATUS_KIND } from "@/types";
+import { STATUS_KIND } from "@/types";
 
 interface Props {
   banco: SaldoAtualBanco | null;
@@ -35,6 +37,12 @@ export function BancoDetalheModal({ banco, onClose }: Props) {
   const aReceber = Number(banco.a_receber);
   const provis = Math.abs(Number(banco.provisionado));
   const projetado = Number(banco.saldo_projetado);
+  const identificacao = formatIdentificacaoBancaria({
+    banco: banco.banco_instituicao, apelido: banco.banco_apelido,
+    tipoInstituicao: banco.banco_tipo_instituicao, numeroBanco: banco.banco_numero,
+    agencia: banco.banco_agencia, tipo: banco.banco_tipo,
+    numeroConta: banco.banco_numero_conta, digito: banco.banco_digito,
+  }) || (banco.banco_agencia ? `agência ${banco.banco_agencia}` : "");
 
   return (
     <Modal
@@ -45,14 +53,17 @@ export function BancoDetalheModal({ banco, onClose }: Props) {
     >
       <div className="px-6 pb-6 space-y-5">
         {/* Cabeçalho com saldo grande */}
-        <div className="flex items-baseline justify-between border-b border-stone-100 pb-4">
-          <div>
-            <p className="text-xs text-stone-500">{banco.banco_nome}</p>
-            {banco.banco_agencia && (
-              <p className="text-[10px] text-stone-400">agência {banco.banco_agencia}</p>
-            )}
+        <div className="flex items-end justify-between border-b border-stone-100 pb-4 gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <BankLogo banco={banco.banco_instituicao} apelido={banco.banco_apelido} size={40} />
+            <div className="min-w-0">
+              <p className="text-xs text-stone-500 truncate">{banco.banco_nome}</p>
+              {identificacao && (
+                <p className="text-[10px] text-stone-400 truncate" title={identificacao}>{identificacao}</p>
+              )}
+            </div>
           </div>
-          <div className="text-right">
+          <div className="text-right shrink-0">
             <p className="text-[10px] text-stone-400 uppercase tracking-wide">saldo atual</p>
             <p className={`text-3xl font-bold tabular-nums ${
               saldo > 0 ? "text-emerald-700" : saldo < 0 ? "text-red-600" : "text-stone-500"
@@ -131,7 +142,7 @@ export function BancoDetalheModal({ banco, onClose }: Props) {
                           )}
                         </td>
                         <td className="px-3 py-2">
-                          <Badge variant="neutral">{STATUS_ARAMBURU_LABEL[t.status]}</Badge>
+                          <StatusBadge status={t.status} />
                         </td>
                         <td className={`px-3 py-2 text-right font-semibold tabular-nums whitespace-nowrap ${
                           kind === "entrada" ? "text-emerald-700" :
