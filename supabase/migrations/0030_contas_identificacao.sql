@@ -34,12 +34,12 @@ comment on column public.contas_bancarias_empresa.tipo_instituicao is
 -- Acrescenta banco_numero, banco_tipo_instituicao, banco_numero_conta,
 -- banco_digito e banco_tipo (corrente/investimento) ao retorno. A lógica de
 -- saldo/compromissos/projetado é idêntica à 0010.
--- IMPORTANTE: as colunas novas (banco_numero, banco_tipo_instituicao,
--- banco_numero_conta, banco_digito, banco_tipo) ficam NO FIM do SELECT. O
--- Postgres só permite adicionar colunas ao final em CREATE OR REPLACE VIEW;
--- mexer na ordem das existentes exigiria DROP. O frontend lê por nome, então
--- a posição não importa.
-create or replace view public.v_saldo_atual_por_banco as
+-- Recriamos a view com DROP + CREATE (e não CREATE OR REPLACE) para ser
+-- idempotente mesmo quando a view já existe numa forma diferente — re-aplicar
+-- esta migration ou o apply_all não falha com "cannot drop columns from view".
+-- O frontend lê por nome, então a posição das colunas não importa.
+drop view if exists public.v_saldo_atual_por_banco;
+create view public.v_saldo_atual_por_banco as
 select
   cb.id                as conta_bancaria_id,
   cb.nome              as banco_nome,

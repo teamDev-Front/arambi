@@ -88,3 +88,27 @@ export async function getSaldoAtualPorBanco(): Promise<SaldoAtualBanco[]> {
   if (error) throw error;
   return (data ?? []) as SaldoAtualBanco[];
 }
+
+// Fluxo de caixa mensal (aba "Saldo Disponível") — com o indicador
+// "Saldo − contas do próximo mês" (passa o mês tranquila sem depender de vendas?).
+export interface FluxoCaixaMes {
+  mes_referencia: string;
+  saldo_final_acumulado: number;          // saldo acumulado no fim do mês
+  saidas_mes: number;
+  resgate_mes: number;
+  outros_entradas_mes: number;
+  vendas_mes: number;
+  saidas_proximo_mes: number;             // saídas do mês seguinte (negativo)
+  entradas_garantidas_proximo_mes: number; // resgates + outras entradas do mês seguinte (sem vendas)
+  saldo_menos_proximo_mes: number;        // indicador: verde (>=0) ou vermelho (<0)
+}
+
+export async function getFluxoCaixaMensal(): Promise<FluxoCaixaMes[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("v_fluxo_caixa_mensal")
+    .select("*")
+    .order("mes_referencia");
+  if (error) throw error;
+  return (data ?? []) as FluxoCaixaMes[];
+}

@@ -15,8 +15,8 @@ import {
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils/format";
 import {
-  getKpiMensal, getPorContaContabil, getSaldoPorBanco, getSaldoAtualPorBanco,
-  type KpiMensalRow, type PorContaContabilRow, type SaldoAtualBanco,
+  getKpiMensal, getPorContaContabil, getSaldoAtualPorBanco, getFluxoCaixaMensal,
+  type KpiMensalRow, type PorContaContabilRow, type SaldoAtualBanco, type FluxoCaixaMes,
 } from "@/lib/queries/dashboard";
 import { listarTransacoesEmpresa, type TransacaoEmpresaRich } from "@/lib/queries/financeiro";
 import { STATUS_ARAMBURU_LABEL } from "@/types";
@@ -51,6 +51,7 @@ export function DashboardHome() {
   const [kpiAll, setKpiAll]     = useState<KpiMensalRow[]>([]);
   const [byConta, setByConta]   = useState<PorContaContabilRow[]>([]);
   const [saldosBanco, setSaldosBanco] = useState<SaldoAtualBanco[]>([]);
+  const [fluxo, setFluxo]       = useState<FluxoCaixaMes[]>([]);
   const [recent, setRecent]     = useState<TransacaoEmpresaRich[]>([]);
   const [loading, setLoading]   = useState(true);
 
@@ -62,15 +63,17 @@ export function DashboardHome() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [k, c, sb, r] = await Promise.all([
+      const [k, c, sb, fx, r] = await Promise.all([
         getKpiMensal(),
         getPorContaContabil(mesFiltro || undefined),
         getSaldoAtualPorBanco(),
+        getFluxoCaixaMensal(),
         listarTransacoesEmpresa(mesFiltro ? { mesReferencia: mesFiltro } : {}, 1, 5),
       ]);
       setKpiAll(k);
       setByConta(c);
       setSaldosBanco(sb);
+      setFluxo(fx);
       setRecent(r.rows);
     } catch (e: unknown) {
       toast.error("Erro carregando dashboard", (e as Error).message ?? String(e));
@@ -122,6 +125,9 @@ export function DashboardHome() {
 
   // "39,1%" — 1 casa decimal, vírgula PT-BR
   const fmtPct = (n: number) => `${n.toFixed(1).replace(".", ",")}%`;
+
+  // mês corrente "YYYY-MM" — para destacar a linha atual no fluxo de caixa
+  const mesAtual = new Date().toISOString().slice(0, 7);
 
   const meses = useMemo(() => kpiAll.map((r) => r.mes_referencia), [kpiAll]);
 
@@ -298,6 +304,61 @@ export function DashboardHome() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Fluxo de Caixa — Saldo vs. próximo mês (espelha aba "Saldo Disponível") */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Fluxo de Caixa — Saldo vs. Próximo Mês</CardTitle>
+          <Link href="/dashboard/saldos" className="text-xs text-accent-600 hover:underline">Saldos mensais</Link>
+        </CardHeader>
+        <CardContent className="p-0">
+          {fluxo.length === 0 && !loading && (
+            <p className="text-xs text-stone-400 text-center py-8">Sem dados de fluxo de caixa.</p>
+          )}
+          {fluxo.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-stone-50 border-b border-stone-100">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide">Mês</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">Saldo no fim do mês</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">Saídas do próx. mês</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">Entradas garantidas (sem vendas)</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">Saldo após o próximo mês</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fluxo.map((f) => {
+                    const ind = Number(f.saldo_menos_proximo_mes);
+                    const ok = ind >= 0;
+                    const atual = f.mes_referencia === mesAtual;
+                    const entradas = Number(f.entradas_garantidas_proximo_mes);
+                    return (
+                      <tr key={f.mes_referencia} className={`border-b border-stone-50 hover:bg-stone-50 ${atual ? "bg-accent-50/40" : ""}`}>
+                        <td className="px-4 py-2.5 text-stone-700 font-medium whitespace-nowrap">
+                          {mesShort(f.mes_referencia)}
+                          {atual && <span className="ml-1.5 text-[9px] text-accent-600 font-semibold uppercase">atual</span>}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-stone-700 whitespace-nowrap">{formatCurrency(Number(f.saldo_final_acumulado))}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-red-600 whitespace-nowrap">{formatCurrency(Number(f.saidas_proximo_mes))}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700 whitespace-nowrap">{entradas > 0 ? `+${formatCurrency(entradas)}` : formatCurrency(entradas)}</td>
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold tabular-nums ${ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
+                            {formatCurrency(ind)}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-[11px] text-stone-400 px-4 py-3 border-t border-stone-100 leading-relaxed">
+            <strong className="text-stone-500">Saldo após o próximo mês</strong> = saldo no fim do mês + saídas e entradas garantidas (resgates/outras) do mês seguinte, <strong className="text-stone-500">sem contar vendas</strong>. Verde = passa o mês tranquila; vermelho = vai precisar de vendas ou resgates pra cobrir.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* Últimos Lançamentos — full width */}
       <Card>

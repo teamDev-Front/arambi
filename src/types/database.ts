@@ -822,6 +822,20 @@ export interface Database {
         };
         Relationships: EmptyRels;
       };
+      v_fluxo_caixa_mensal: {
+        Row: {
+          mes_referencia: string;
+          saldo_final_acumulado: number;
+          saidas_mes: number;
+          resgate_mes: number;
+          outros_entradas_mes: number;
+          vendas_mes: number;
+          saidas_proximo_mes: number;
+          entradas_garantidas_proximo_mes: number;
+          saldo_menos_proximo_mes: number;
+        };
+        Relationships: EmptyRels;
+      };
       v_por_conta_contabil_mensal: {
         Row: {
           mes_referencia: string;

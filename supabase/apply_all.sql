@@ -1133,6 +1133,12 @@ create policy logs_insert on public.logs for insert with check (auth.uid() is no
 -- Esses status entram em colunas separadas (a_pagar, a_receber, provisionado)
 -- pra ela ter visão de "o que vai sair/entrar" sem misturar com saldo real.
 
+-- Compat / re-run (RF-FIN-01/02): a migration 0030 ADICIONA colunas a esta view.
+-- Num re-run do apply_all, a view já está na forma nova (21 colunas) e o
+-- CREATE OR REPLACE abaixo (16 colunas) falharia com "cannot drop columns from
+-- view". Removemos antes pra deixar o script idempotente.
+drop view if exists public.v_saldo_atual_por_banco;
+
 create or replace view public.v_saldo_atual_por_banco as
 select
   cb.id                                                           as conta_bancaria_id,
@@ -1362,7 +1368,8 @@ comment on column public.contas_bancarias_empresa.numero_banco is
 comment on column public.contas_bancarias_empresa.tipo_instituicao is
   'banco | cooperativa — define o rótulo exibido no card ("Banco 403" vs "Cooperativa 748").';
 
-create or replace view public.v_saldo_atual_por_banco as
+drop view if exists public.v_saldo_atual_por_banco;
+create view public.v_saldo_atual_por_banco as
 select
   cb.id                as conta_bancaria_id,
   cb.nome              as banco_nome,
@@ -1432,6 +1439,50 @@ alter table public.pdfmonkey_geracoes
 comment on column public.pdfmonkey_geracoes.scope_applied is
   'Recorte usado na geração (RF-FIN-09): { scope_type: por_mes|por_filtros|por_selecao, '
   'filtros:{...}, transacao_ids:[...], conta_ids:[...], totais:{...} }. Para auditoria/reprodutibilidade.';
+
+
+
+-- ┌──────────────────────────────────────────────────────────────────────────┐
+-- │ migrations\0032_fluxo_caixa_mensal.sql
+-- └──────────────────────────────────────────────────────────────────────────┘
+-- ============================================================================
+-- 0032 — Fluxo de Caixa mensal + "Saldo − contas do próximo mês" (aba Saldo Disponível)
+-- ============================================================================
+create or replace view public.v_fluxo_caixa_mensal as
+with por_mes as (
+  select
+    te.mes_referencia,
+    coalesce(sum(te.valor) filter (where te.status in
+      ('saldo_inicial','recebido','pago','repassado','aplicado','aplicacao','resgatado','resgate')
+      and cbe.tipo = 'corrente'), 0)                                                   as movimento_realizado,
+    coalesce(sum(te.valor) filter (where te.status in
+      ('provisionado','provisionado_dv','provisionado_dl','a_pagar','a_repassar','a_aplicar','pago','repassado','aplicado','aplicacao')), 0) as saidas_mes,
+    coalesce(sum(te.valor) filter (where te.status in ('resgate','a_resgatar','resgatado')), 0) as resgate_mes,
+    coalesce(sum(te.valor) filter (where te.status in ('a_receber','recebido') and te.conta_contabil_cod not like '1.2%'), 0) as outros_entradas_mes,
+    coalesce(sum(te.valor) filter (where te.status in ('a_receber','recebido') and te.conta_contabil_cod like '1.2%'), 0) as vendas_mes
+  from public.transacoes_empresa te
+  left join public.contas_bancarias_empresa cbe on cbe.id = te.conta_bancaria_id
+  where te.mes_referencia is not null
+  group by te.mes_referencia
+),
+acc as (
+  select *,
+    sum(movimento_realizado) over (order by mes_referencia rows between unbounded preceding and current row) as saldo_final_acumulado
+  from por_mes
+)
+select
+  mes_referencia,
+  saldo_final_acumulado,
+  saidas_mes,
+  resgate_mes,
+  outros_entradas_mes,
+  vendas_mes,
+  coalesce(lead(saidas_mes) over (order by mes_referencia), 0)                         as saidas_proximo_mes,
+  coalesce(lead(resgate_mes + outros_entradas_mes) over (order by mes_referencia), 0)  as entradas_garantidas_proximo_mes,
+  saldo_final_acumulado
+    + coalesce(lead(saidas_mes + resgate_mes + outros_entradas_mes) over (order by mes_referencia), 0) as saldo_menos_proximo_mes
+from acc
+order by mes_referencia;
 
 
 
