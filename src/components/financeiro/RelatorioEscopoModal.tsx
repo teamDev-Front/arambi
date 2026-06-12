@@ -112,7 +112,7 @@ export function RelatorioEscopoModal({
         // só restringe por mês se a tela estava filtrada por mês
         mes_referencia: typeof filtros.mesReferencia === "string" ? filtros.mesReferencia : undefined,
         search: filtros.search,
-        status: filtros.status || undefined,
+        status: filtros.status,            // 1 status ou lista (filtrosAtuais já manda undefined quando vazio)
         conta_contabil_cod: filtros.contaContabilCod,
         centro_custo_cod: Array.isArray(cc) ? cc : cc ? [cc] : undefined,
         conta_bancaria_id: filtros.contaBancariaId,
@@ -152,7 +152,7 @@ export function RelatorioEscopoModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Gerar relatório do recorte" size="lg" closeOnBackdrop={false}>
+    <Modal open={open} onClose={onClose} title="Gerar relatório" size="lg" closeOnBackdrop={false}>
       <div className="p-6 space-y-5">
         {/* Tipo de escopo */}
         <div className="flex items-center gap-2">
@@ -172,13 +172,13 @@ export function RelatorioEscopoModal({
         <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
           {loadingResumo ? (
             <div className="flex items-center gap-2 text-stone-400 text-sm py-4 justify-center">
-              <Loader2 size={16} className="animate-spin" /> Calculando o recorte…
+              <Loader2 size={16} className="animate-spin" /> Calculando os lançamentos…
             </div>
           ) : erroResumo ? (
             <div className="flex items-start gap-2 text-red-600 text-sm">
               <AlertTriangle size={16} className="shrink-0 mt-0.5" />
               <div>
-                Não foi possível calcular o recorte.
+                Não foi possível calcular a seleção.
                 <div className="text-xs text-red-500">{erroResumo}</div>
                 <button onClick={carregarResumo} className="text-xs underline mt-1">Tentar novamente</button>
               </div>
@@ -199,7 +199,7 @@ export function RelatorioEscopoModal({
               </div>
               {resumo.capped && (
                 <p className="text-[11px] text-amber-600 flex items-center gap-1">
-                  <AlertTriangle size={12} /> Recorte muito grande — resumo baseado em amostra de {10000} lançamentos.
+                  <AlertTriangle size={12} /> Conjunto muito grande — resumo por amostra de 10.000 lançamentos.
                 </p>
               )}
               <div>
@@ -231,7 +231,7 @@ export function RelatorioEscopoModal({
           </div>
         </div>
         <p className="text-[11px] text-stone-400 -mt-2">
-          A capa considera somente as contas com movimento no recorte. O escopo é registrado junto à geração.
+          A capa inclui somente as contas com movimento. Os filtros/seleção usados ficam registrados na geração.
         </p>
 
         {/* Resultado */}

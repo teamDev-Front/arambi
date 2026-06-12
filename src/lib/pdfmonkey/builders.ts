@@ -46,7 +46,10 @@ function aplicarEscopo<T>(query: T, scope: ReportScope | undefined, mesFallback:
   const f = scope.filtros ?? {};
   let r = q;
   if (f.mes_referencia)            r = r.eq("mes_referencia", f.mes_referencia);
-  if (f.status)                    r = r.eq("status", f.status);
+  if (f.status) {
+    if (Array.isArray(f.status)) { if (f.status.length > 0) r = r.in("status", f.status); }
+    else r = r.eq("status", f.status);
+  }
   if (f.conta_contabil_cod)        r = r.eq("conta_contabil_cod", f.conta_contabil_cod);
   if (f.centro_custo_cod?.length)  r = r.in("centro_custo_cod", f.centro_custo_cod);
   if (f.conta_bancaria_id)         r = r.eq("conta_bancaria_id", f.conta_bancaria_id);

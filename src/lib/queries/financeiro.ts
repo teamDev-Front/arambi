@@ -20,7 +20,7 @@ export interface TransacaoEmpresaRich extends TransacaoEmpresaRow {
 
 export interface ListarTransacoesFiltros {
   search?: string;                  // descrição/fornecedor/ref
-  status?: StatusAramburu | "";
+  status?: StatusAramburu | StatusAramburu[]; // 1 status ou lista (multi-seleção)
   contaContabilCod?: string;        // "2.7" — filtra prefixo
   centroCustoCod?: string | string[]; // "2.7.2" — string (1) ou lista (multi-seleção)
   contaBancariaId?: string;
@@ -62,7 +62,11 @@ export async function listarTransacoesEmpresa(
       );
     }
   }
-  if (filtros.status)            q = q.eq("status", filtros.status);
+  if (filtros.status) {
+    const st = filtros.status;
+    if (Array.isArray(st)) { if (st.length > 0) q = q.in("status", st); }
+    else q = q.eq("status", st);
+  }
   if (filtros.centroCustoCod) {
     const cc = filtros.centroCustoCod;
     if (Array.isArray(cc)) {
@@ -121,7 +125,11 @@ export async function resumirEscopoTransacoes(
       const s = f.search.replace(/[%_,]/g, " ").trim();
       if (s) q = q.or(`descricao.ilike.%${s}%,fornecedor_nome.ilike.%${s}%,ref.ilike.%${s}%`);
     }
-    if (f.status) q = q.eq("status", f.status);
+    if (f.status) {
+      const st = f.status;
+      if (Array.isArray(st)) { if (st.length > 0) q = q.in("status", st); }
+      else q = q.eq("status", st);
+    }
     if (f.centroCustoCod) {
       const cc = f.centroCustoCod;
       if (Array.isArray(cc)) { if (cc.length) q = q.in("centro_custo_cod", cc); }

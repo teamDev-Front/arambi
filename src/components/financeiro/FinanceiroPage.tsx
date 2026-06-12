@@ -95,7 +95,7 @@ export function FinanceiroPage() {
 
   // ---- filtros / UI ----
   const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState<StatusAramburu | "">("");
+  const [filterStatus, setFilterStatus] = useState<StatusAramburu[]>([]);
   const [filterContaContabil, setFilterContaContabil] = useState("");
   const [filterCentroCusto, setFilterCentroCusto] = useState<string[]>([]);
   const [filterMes, setFilterMes] = useState("");
@@ -162,7 +162,7 @@ export function FinanceiroPage() {
   // Filtros atuais (para gerar relatório pelo recorte) e competência sugerida.
   const filtrosAtuais: ListarTransacoesFiltros = useMemo(() => ({
     search: search || undefined,
-    status: filterStatus || undefined,
+    status: filterStatus.length ? filterStatus : undefined,
     contaContabilCod: filterContaContabil || undefined,
     centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
     contaBancariaId: filterBanco || undefined,
@@ -193,7 +193,7 @@ export function FinanceiroPage() {
       const { rows, total } = await listarTransacoesEmpresa(
         {
           search: search || undefined,
-          status: filterStatus || undefined,
+          status: filterStatus.length ? filterStatus : undefined,
           contaContabilCod: filterContaContabil || undefined,
           centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
           contaBancariaId: filterBanco || undefined,
@@ -307,8 +307,8 @@ export function FinanceiroPage() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={abrirEscopo}
-            title="Gera o relatório a partir do recorte atual (filtros ou itens selecionados)">
-            <FileText size={14} /> {selectedIds.size > 0 ? `Gerar de ${selectedIds.size} selec.` : "Gerar do recorte"}
+            title="Gera o relatório a partir dos filtros aplicados ou dos lançamentos selecionados">
+            <FileText size={14} /> {selectedIds.size > 0 ? `Gerar (${selectedIds.size} selecionados)` : "Gerar relatório"}
           </Button>
           <Link href="/dashboard/relatorios">
             <Button variant="ghost" size="sm">Relatórios PDF</Button>
@@ -354,16 +354,15 @@ export function FinanceiroPage() {
                 className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-72 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
             </div>
-            <select
+            <MultiSelect
+              className="w-40"
               value={filterStatus}
-              onChange={(e) => { setFilterStatus(e.target.value as StatusAramburu | ""); setPage(1); }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
-            >
-              <option value="">Todos os status</option>
-              {(Object.keys(STATUS_ARAMBURU_LABEL) as StatusAramburu[]).map((s) => (
-                <option key={s} value={s}>{STATUS_ARAMBURU_LABEL[s]}</option>
-              ))}
-            </select>
+              onChange={(v) => { setFilterStatus(v as StatusAramburu[]); setPage(1); }}
+              options={(Object.keys(STATUS_ARAMBURU_LABEL) as StatusAramburu[]).map((s) => ({ value: s, label: STATUS_ARAMBURU_LABEL[s] }))}
+              placeholder="Todos os status"
+              searchPlaceholder="Buscar status…"
+              unitLabel="status"
+            />
             <select
               value={filterContaContabil}
               onChange={(e) => { setFilterContaContabil(e.target.value); setPage(1); }}

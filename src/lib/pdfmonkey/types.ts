@@ -238,7 +238,7 @@ export type ReportScopeType = "por_mes" | "por_filtros" | "por_selecao";
 export interface ReportScopeFiltros {
   mes_referencia?: string;          // "YYYY-MM"
   search?: string;                  // descrição/fornecedor/ref
-  status?: string;                  // status_aramburu
+  status?: string | string[];       // status_aramburu (1 ou vários)
   conta_contabil_cod?: string;      // "2.7"
   centro_custo_cod?: string[];      // multi-seleção
   conta_bancaria_id?: string;
