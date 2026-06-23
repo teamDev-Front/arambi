@@ -1486,6 +1486,178 @@ order by mes_referencia;
 
 
 
+-- ┌──────────────────────────────────────────────────────────────────────────┐
+-- │ migrations\0033_saldo_exclui_resgate.sql
+-- └──────────────────────────────────────────────────────────────────────────┘
+-- Corrige saldo_atual: 'Resgate' (provisionado) não é saldo realizado.
+-- A Lola provisiona os resgates (SOMASE do Provisionado+Eventuais+Sicredi do mês)
+-- pra zerar o provisionado; logo 'Resgate' NÃO entra no saldo realizado, só no
+-- projetado. Mantém-se 'resgatado' (resgate já realizado).
+
+drop view if exists public.v_saldo_atual_por_banco;
+create view public.v_saldo_atual_por_banco as
+select
+  cb.id                as conta_bancaria_id,
+  cb.nome              as banco_nome,
+  cb.apelido           as banco_apelido,
+  cb.banco             as banco_instituicao,
+  cb.agencia           as banco_agencia,
+  cb.ordem             as banco_ordem,
+
+  -- Saldo conciliado. 'resgate' (provisionado) REMOVIDO; 'resgatado' (realizado) mantido.
+  coalesce(sum(te.valor) filter (
+    where te.status in (
+      'saldo_inicial',
+      'recebido', 'pago',
+      'repassado',
+      'aplicado', 'aplicacao',
+      'resgatado'
+    )
+  ), 0)                                                           as saldo_atual,
+
+  coalesce(sum(te.valor) filter (where te.status = 'a_pagar'),    0) as a_pagar,
+  coalesce(sum(te.valor) filter (where te.status = 'a_receber'),  0) as a_receber,
+  coalesce(sum(te.valor) filter (where te.status = 'a_repassar'), 0) as a_repassar,
+  coalesce(sum(te.valor) filter (where te.status = 'a_resgatar'), 0) as a_resgatar,
+  coalesce(sum(te.valor) filter (
+    where te.status in ('provisionado','provisionado_dl','provisionado_dv')
+  ), 0)                                                           as provisionado,
+
+  -- 'resgate' REMOVIDO daqui também — não é entrada realizada.
+  coalesce(sum(te.valor) filter (
+    where te.status in ('saldo_inicial','recebido','resgatado','aplicacao')
+  ), 0)                                                           as entradas_realizadas,
+  coalesce(sum(te.valor) filter (
+    where te.status in ('pago','repassado','aplicado')
+  ), 0)                                                           as saidas_realizadas,
+
+  -- Projetado inalterado (inclui 'resgate', que lá anula o 'provisionado').
+  coalesce(sum(te.valor) filter (
+    where te.status in (
+      'saldo_inicial','recebido','pago','repassado','aplicado','aplicacao',
+      'resgatado','resgate','a_pagar','a_receber','a_repassar','a_resgatar',
+      'provisionado','provisionado_dl','provisionado_dv'
+    )
+  ), 0)                                                           as saldo_projetado,
+
+  count(te.id)                                                    as total_lancamentos,
+
+  cb.numero_banco      as banco_numero,
+  cb.tipo_instituicao  as banco_tipo_instituicao,
+  cb.numero_conta      as banco_numero_conta,
+  cb.digito            as banco_digito,
+  cb.tipo              as banco_tipo
+from public.contas_bancarias_empresa cb
+left join public.transacoes_empresa te on te.conta_bancaria_id = cb.id
+where cb.ativa = true
+group by cb.id, cb.nome, cb.apelido, cb.banco, cb.agencia, cb.ordem,
+         cb.numero_banco, cb.tipo_instituicao, cb.numero_conta, cb.digito, cb.tipo
+order by cb.ordem;
+
+
+
+-- ┌──────────────────────────────────────────────────────────────────────────┐
+-- │ migrations\0034_trigger_resgate_sicredi.sql
+-- └──────────────────────────────────────────────────────────────────────────┘
+-- Gatilho: mantém automática a linha "Resgate" do Sicredi 0913 =
+--   -1 × Σ(Provisionado + Despesas Eventuais + 0913 + mesmo mês). Cria/atualiza/remove.
+-- ⚠ Reimport via script: DESABILITE este gatilho durante o import pra não duplicar.
+
+create or replace function public.fn_sync_resgate_sicredi()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_sic0913  uuid;
+  v_forn     uuid;
+  v_meses    text[] := array[]::text[];
+  v_mes      text;
+  v_total    numeric(15,2);
+  v_existe   uuid;
+begin
+  if pg_trigger_depth() > 1 then
+    return null;
+  end if;
+
+  select id into v_sic0913
+    from public.contas_bancarias_empresa
+   where nome = 'Cooperativa Sicredi (0913)'
+   limit 1;
+  if v_sic0913 is null then
+    return null;
+  end if;
+
+  if tg_op in ('INSERT','UPDATE')
+     and NEW.status = 'provisionado'
+     and NEW.tipo_despesa = 'eventual'
+     and NEW.conta_bancaria_id = v_sic0913 then
+    v_meses := array_append(v_meses, NEW.mes_referencia);
+  end if;
+  if tg_op in ('UPDATE','DELETE')
+     and OLD.status = 'provisionado'
+     and OLD.tipo_despesa = 'eventual'
+     and OLD.conta_bancaria_id = v_sic0913 then
+    v_meses := array_append(v_meses, OLD.mes_referencia);
+  end if;
+
+  if array_length(v_meses, 1) is null then
+    return null;
+  end if;
+
+  select id into v_forn
+    from public.fornecedores
+   where nome = 'Banco Cooperativa Sicredi'
+   limit 1;
+
+  for v_mes in select distinct unnest(v_meses) loop
+    select coalesce(sum(valor), 0) into v_total
+      from public.transacoes_empresa
+     where status = 'provisionado'
+       and tipo_despesa = 'eventual'
+       and conta_bancaria_id = v_sic0913
+       and mes_referencia = v_mes;
+
+    select id into v_existe
+      from public.transacoes_empresa
+     where status = 'resgate'
+       and conta_bancaria_id = v_sic0913
+       and mes_referencia = v_mes
+     limit 1;
+
+    if v_total = 0 then
+      if v_existe is not null then
+        delete from public.transacoes_empresa where id = v_existe;
+      end if;
+    elsif v_existe is not null then
+      update public.transacoes_empresa
+         set valor = -1 * v_total
+       where id = v_existe;
+    else
+      insert into public.transacoes_empresa
+        (data, conta_contabil_cod, centro_custo_cod, tipo_despesa, obs_obra,
+         forma_pgto, conta_bancaria_id, status, valor,
+         fornecedor_id, fornecedor_nome, descricao, origem_planilha)
+      values
+        ((to_date(v_mes, 'YYYY-MM') + interval '1 month - 1 day')::date,
+         '1.8', '1.8.1', 'sem', 'sem', 'sem',
+         v_sic0913, 'resgate', -1 * v_total,
+         v_forn, 'Banco Cooperativa Sicredi',
+         'Resgate da Conta Investimento Invest - Reserva p/ Construção da Sede',
+         'auto:resgate_sicredi');
+    end if;
+  end loop;
+
+  return null;
+end;
+$$;
+
+drop trigger if exists tg_sync_resgate_sicredi on public.transacoes_empresa;
+create trigger tg_sync_resgate_sicredi
+  after insert or update or delete on public.transacoes_empresa
+  for each row execute function public.fn_sync_resgate_sicredi();
+
+
+
 -- ============================================================================
 -- SEEDS — dados de domínio (DML)
 -- ============================================================================
