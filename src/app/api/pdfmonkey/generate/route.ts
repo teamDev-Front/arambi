@@ -46,6 +46,10 @@ interface Body {
   socios_overrides?: RelatorioSociosOverrides;
   /** Recorte (RF-FIN-09): aplica-se a capa_empresa e relatorio_contabil. */
   scope?: ReportScope;
+  /** CAPAS (4.3): número do lote informado manualmente — ex.: "7º". */
+  numero_lote?: string;
+  /** CAPAS (4.3): mês de referência do lote informado manualmente — ex.: "Julho". */
+  mes_referencia_label?: string;
 }
 
 const VALID_SLUGS: PdfMonkeySlug[] = [
@@ -86,7 +90,12 @@ export async function POST(req: NextRequest) {
     if (body.payload) {
       payload = body.payload;
     } else if (slug === "capa_empresa") {
-      payload = await buildCapaEmpresa(supabase, { mesReferencia: body.mes_referencia, scope: body.scope });
+      payload = await buildCapaEmpresa(supabase, {
+        mesReferencia: body.mes_referencia,
+        scope: body.scope,
+        numeroLote: body.numero_lote,
+        mesReferenciaLabel: body.mes_referencia_label,
+      });
     } else if (slug === "capa_socio") {
       payload = await buildCapaSocio(supabase, { mesReferencia: body.mes_referencia, socioId: body.socio_id! });
     } else if (slug === "relatorio_contabil") {

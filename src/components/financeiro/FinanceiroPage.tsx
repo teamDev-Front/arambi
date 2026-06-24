@@ -14,18 +14,25 @@ import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
   Plus, FileText, Search, Edit2, Trash2,
   TrendingUp, TrendingDown, Loader2,
+  FileDown, FileSpreadsheet, CalendarRange,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
   listarTransacoesEmpresa,
+  listarTransacoesParaExport,
   criarTransacaoEmpresa,
   atualizarTransacaoEmpresa,
   deletarTransacaoEmpresa,
   listarClassificacoes,
   listarContasEmpresa,
-  listarMesesDistintos,
+  listarMesesDisponiveis,
   type TransacaoEmpresaRich,
 } from "@/lib/queries/financeiro";
+import {
+  exportFinanceiroPdf,
+  exportFinanceiroXlsx,
+  type FinanceiroExportMeta,
+} from "@/lib/export/financeiro-export";
 import {
   STATUS_ARAMBURU_LABEL,
   FORMA_PGTO_LABEL,
@@ -100,7 +107,14 @@ export function FinanceiroPage() {
   const [filterCentroCusto, setFilterCentroCusto] = useState<string[]>([]);
   const [filterMes, setFilterMes] = useState("");
   const [filterBanco, setFilterBanco] = useState("");
+  // Filtro por período/intervalo de dias (UX-02). Mutuamente exclusivo com o mês.
+  const [filterDataDe, setFilterDataDe] = useState("");
+  const [filterDataAte, setFilterDataAte] = useState("");
   const [page, setPage] = useState(1);
+
+  // ---- exportação (REL-01/02) ----
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+  const [exportandoXlsx, setExportandoXlsx] = useState(false);
 
   // ---- seleção manual p/ relatório por escopo (RF-FIN-09) ----
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -167,7 +181,9 @@ export function FinanceiroPage() {
     centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
     contaBancariaId: filterBanco || undefined,
     mesReferencia: filterMes || undefined,
-  }), [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco, filterMes]);
+    dataDe: filterDataDe || undefined,
+    dataAte: filterDataAte || undefined,
+  }), [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco, filterMes, filterDataDe, filterDataAte]);
   const competenciaSugerida = filterMes || new Date().toISOString().slice(0, 7);
 
   function abrirEscopo() {
@@ -175,10 +191,65 @@ export function FinanceiroPage() {
     setEscopoOpen(true);
   }
 
+  // ---- exportação espelho-da-tela (REL-01/02) ----
+  const montarMetaExport = useCallback((): FinanceiroExportMeta => {
+    const f: string[] = [];
+    if (search) f.push(`Busca: "${search}"`);
+    if (filterStatus.length) f.push(`Status: ${filterStatus.map((s) => STATUS_ARAMBURU_LABEL[s]).join(", ")}`);
+    if (filterContaContabil) {
+      const c = classificacoesN2.find((x) => x.codigo === filterContaContabil);
+      f.push(`Conta: ${filterContaContabil}${c ? ` – ${c.nome}` : ""}`);
+    }
+    if (filterCentroCusto.length) {
+      f.push(`Centro de custo: ${filterCentroCusto.map((cod) => {
+        const c = classificacoesN3.find((x) => x.codigo === cod);
+        return c ? `${cod} – ${c.nome}` : cod;
+      }).join(", ")}`);
+    }
+    if (filterBanco) {
+      const b = bancos.find((x) => x.id === filterBanco);
+      f.push(`Banco: ${b?.apelido ?? b?.nome ?? filterBanco}`);
+    }
+    if (filterMes) f.push(`Mês: ${filterMes}`);
+    if (filterDataDe || filterDataAte) {
+      f.push(`Período: ${filterDataDe ? formatDate(filterDataDe) : "…"} a ${filterDataAte ? formatDate(filterDataAte) : "…"}`);
+    }
+    const escopo = selectedIds.size > 0
+      ? `Seleção manual — ${selectedIds.size} lançamento${selectedIds.size === 1 ? "" : "s"}`
+      : "Recorte pelos filtros aplicados na tela";
+    return { titulo: "Relatório de Lançamentos Financeiros", escopo, filtros: f };
+  }, [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco, filterMes,
+      filterDataDe, filterDataAte, selectedIds, classificacoesN2, classificacoesN3, bancos]);
+
+  async function handleExport(formato: "pdf" | "xlsx") {
+    const setBusy = formato === "pdf" ? setExportandoPdf : setExportandoXlsx;
+    setBusy(true);
+    try {
+      const { rows: exportRows, total: totalExport, capped } = await listarTransacoesParaExport(
+        selectedIds.size > 0
+          ? { transacaoIds: Array.from(selectedIds) }
+          : { filtros: filtrosAtuais },
+      );
+      if (exportRows.length === 0) {
+        toast.info("Nada para exportar", "Nenhum lançamento no recorte atual.");
+        return;
+      }
+      const meta = montarMetaExport();
+      if (capped) meta.aviso = `Exportação limitada às primeiras ${exportRows.length} de ${totalExport} linhas.`;
+      if (formato === "pdf") await exportFinanceiroPdf(exportRows, meta);
+      else exportFinanceiroXlsx(exportRows, meta);
+      toast.success("Exportação concluída", `Arquivo ${formato.toUpperCase()} gerado (${exportRows.length} linha${exportRows.length === 1 ? "" : "s"}).`);
+    } catch (e: unknown) {
+      toast.error("Falha na exportação", (e as Error).message ?? String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // ---- effects ----
   // lookups
   useEffect(() => {
-    Promise.all([listarClassificacoes(), listarContasEmpresa(), listarMesesDistintos()])
+    Promise.all([listarClassificacoes(), listarContasEmpresa(), listarMesesDisponiveis()])
       .then(([cf, cb, m]) => { setClassificacoes(cf); setBancos(cb); setMeses(m); })
       .catch((e: unknown) =>
         toast.error("Erro carregando cadastros", (e as Error).message ?? String(e))
@@ -190,18 +261,7 @@ export function FinanceiroPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const { rows, total } = await listarTransacoesEmpresa(
-        {
-          search: search || undefined,
-          status: filterStatus.length ? filterStatus : undefined,
-          contaContabilCod: filterContaContabil || undefined,
-          centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
-          contaBancariaId: filterBanco || undefined,
-          mesReferencia: filterMes || undefined,
-        },
-        page,
-        PAGE_SIZE,
-      );
+      const { rows, total } = await listarTransacoesEmpresa(filtrosAtuais, page, PAGE_SIZE);
       setRows(rows);
       setTotal(total);
     } catch (e: unknown) {
@@ -210,7 +270,7 @@ export function FinanceiroPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco, filterMes, page]);
+  }, [filtrosAtuais, page]);
   // fetchData sincroniza a tabela com os filtros/página — o setState interno é intencional.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -306,8 +366,18 @@ export function FinanceiroPage() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={() => handleExport("pdf")}
+            loading={exportandoPdf} disabled={exportandoPdf || exportandoXlsx}
+            title="Exporta um PDF espelho da tela com os lançamentos selecionados ou filtrados">
+            <FileDown size={14} /> {selectedIds.size > 0 ? `Exportar PDF (${selectedIds.size})` : "Exportar PDF"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => handleExport("xlsx")}
+            loading={exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
+            title="Exporta uma planilha XLSX com os lançamentos selecionados ou filtrados">
+            <FileSpreadsheet size={14} /> {selectedIds.size > 0 ? `Exportar XLSX (${selectedIds.size})` : "Exportar XLSX"}
+          </Button>
           <Button variant="outline" size="sm" onClick={abrirEscopo}
-            title="Gera o relatório a partir dos filtros aplicados ou dos lançamentos selecionados">
+            title="Gera o relatório (Capa/Contábil via PDFMonkey) a partir dos filtros ou da seleção">
             <FileText size={14} /> {selectedIds.size > 0 ? `Gerar (${selectedIds.size} selecionados)` : "Gerar relatório"}
           </Button>
           <Link href="/dashboard/relatorios">
@@ -385,8 +455,14 @@ export function FinanceiroPage() {
             />
             <select
               value={filterMes}
-              onChange={(e) => { setFilterMes(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setFilterMes(e.target.value);
+                // Mês e período são mutuamente exclusivos (UX-02/3.3).
+                if (e.target.value) { setFilterDataDe(""); setFilterDataAte(""); }
+                setPage(1);
+              }}
               className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
+              title="Filtra pelo mês de vencimento. Limpa o filtro por período."
             >
               <option value="">Todos os meses</option>
               {meses.map((m) => <option key={m} value={m}>{m}</option>)}
@@ -399,6 +475,41 @@ export function FinanceiroPage() {
               <option value="">Todos os bancos</option>
               {bancos.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
             </select>
+            {/* Filtro por período/intervalo de dias (vencimento). Substitui o mês. */}
+            <div
+              className="flex items-center gap-1"
+              title="Filtra por intervalo de datas de vencimento. Substitui o filtro de mês. Use a mesma data nos dois campos para um único dia."
+            >
+              <CalendarRange size={14} className="text-stone-400 shrink-0" />
+              <input
+                type="date"
+                value={filterDataDe}
+                max={filterDataAte || undefined}
+                aria-label="Vencimento de"
+                onChange={(e) => { setFilterDataDe(e.target.value); if (e.target.value) setFilterMes(""); setPage(1); }}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              <span className="text-stone-400 text-xs">até</span>
+              <input
+                type="date"
+                value={filterDataAte}
+                min={filterDataDe || undefined}
+                aria-label="Vencimento até"
+                onChange={(e) => { setFilterDataAte(e.target.value); if (e.target.value) setFilterMes(""); setPage(1); }}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              {(filterDataDe || filterDataAte) && (
+                <button
+                  type="button"
+                  onClick={() => { setFilterDataDe(""); setFilterDataAte(""); setPage(1); }}
+                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
+                  title="Limpar período"
+                  aria-label="Limpar período"
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="p-0">

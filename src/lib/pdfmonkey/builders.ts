@@ -10,6 +10,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types";
+import { formatDataCurta } from "@/lib/pdf/helpers";
 import type {
   CapaEmpresaPayload, CapaSocioPayload,
   RelatorioContabilPayload, RelatorioSociosPayload,
@@ -120,6 +121,41 @@ export interface BuildCapaEmpresaArgs {
   preparadoPor?: string;
   /** Recorte escolhido pela Lola (RF-FIN-09). Ausente → mês inteiro (comportamento histórico). */
   scope?: ReportScope;
+  /** Número do lote informado manualmente (4.3) — ex.: "7º". Sobrescreve o auto. */
+  numeroLote?: string;
+  /** Mês de referência do lote informado manualmente (4.3) — ex.: "Julho". Sobrescreve o auto. */
+  mesReferenciaLabel?: string;
+}
+
+// Monta a descrição completa de um lançamento para o relatório CAPAS (4.4):
+//   "Fornecedor (NF 123 – Categoria | Descrição) – Parcela X de Y"
+// Defensivo: omite as partes ausentes sem deixar parênteses/traços vazios.
+function montarDescricaoCapa(t: {
+  fornecedor_nome: string | null;
+  ref: string | null;
+  parcelas: string | null;
+  descricao: string | null;
+  categoria: string | null;
+}): string {
+  const fornecedor = (t.fornecedor_nome ?? "").trim();
+  const ref = (t.ref ?? "").trim();
+  const descricao = (t.descricao ?? "").trim();
+  const categoria = (t.categoria ?? "").trim();
+
+  // "318841" → "NF 318841"; "NF 318841"/"Recibo ..." já vem rotulado → mantém.
+  const refTxt = ref ? (/^(nf|nota|recibo|nº|n°|contrato)/i.test(ref) ? ref : `NF ${ref}`) : "";
+  const catDesc = [categoria, descricao].filter(Boolean).join(" | ");
+  const dentro = [refTxt, catDesc].filter(Boolean).join(" – ");
+
+  // "2/12" → "Parcela 2 de 12"
+  const p = (t.parcelas ?? "").trim();
+  const mParc = /^(\d+)\s*\/\s*(\d+)$/.exec(p);
+  const parcelaTxt = mParc ? `Parcela ${Number(mParc[1])} de ${Number(mParc[2])}` : p;
+
+  let out = fornecedor;
+  if (dentro) out = out ? `${out} (${dentro})` : dentro;
+  if (parcelaTxt) out = out ? `${out} – ${parcelaTxt}` : parcelaTxt;
+  return out || descricao || fornecedor || "—";
 }
 
 export async function buildCapaEmpresa(
@@ -131,12 +167,15 @@ export async function buildCapaEmpresa(
 
   const perfilEmpresa = await lerPerfilEmpresa(supabase);
 
-  // Transações do recorte (ou do mês inteiro), com banco e tipo_despesa.
+  // Transações do recorte (ou do mês inteiro), com banco, tipo_despesa e os
+  // campos que compõem a descrição completa (4.4): ref (NF), parcelas e o
+  // nome do centro de custo (categoria).
   let txQuery = supabase
     .from("transacoes_empresa")
     .select(`
-      conta_bancaria_id, data, descricao, fornecedor_nome, valor, forma_pgto, tipo_despesa,
-      conta_bancaria:contas_bancarias_empresa(apelido, nome, banco, ordem)
+      conta_bancaria_id, data, descricao, fornecedor_nome, valor, forma_pgto, tipo_despesa, ref, parcelas,
+      conta_bancaria:contas_bancarias_empresa(apelido, nome, banco, ordem),
+      centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(nome)
     `);
   txQuery = aplicarEscopo(txQuery, args.scope, args.mesReferencia);
   const { data: tsAll } = await txQuery.order("data");
@@ -149,7 +188,10 @@ export async function buildCapaEmpresa(
     valor: number;
     forma_pgto: string;
     tipo_despesa: "fixa" | "variavel" | "eventual" | "periodica" | "sem";
+    ref: string | null;
+    parcelas: string | null;
     conta_bancaria: { apelido: string | null; nome: string; banco: string | null; ordem: number | null } | null;
+    centro_custo: { nome: string } | null;
   };
   const txs = (tsAll ?? []) as unknown as TransacaoComConta[];
 
@@ -157,7 +199,10 @@ export async function buildCapaEmpresa(
     (banco ?? nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
 
   // ---- Lista de bancos ----
+  // bancos[]    → lista dinâmica (escalável: Cora/Sicredi/Inter/… ) p/ o template iterar.
+  // bancosNum[] → mesmos totais em número, para derivar os subtotais por banco (4.6).
   let bancos: { nome: string; nome_completo: string; slug: string; total: string }[];
+  let bancosNum: { nome: string; slug: string; total: number }[];
   let total_geral: number;
 
   if (escopado) {
@@ -182,6 +227,7 @@ export async function buildCapaEmpresa(
       slug: bancoSlug(c.banco, c.nome),
       total: brl(Math.abs(c.total)),
     }));
+    bancosNum = lista.map((c) => ({ nome: c.nome, slug: bancoSlug(c.banco, c.nome), total: Math.abs(c.total) }));
     total_geral = lista.reduce((s, c) => s + Math.abs(c.total), 0);
   } else {
     // Mês inteiro: comportamento histórico (todas as contas ativas via view).
@@ -202,8 +248,28 @@ export async function buildCapaEmpresa(
       slug: bancoSlug(c.banco, c.nome),
       total: brl(totalPorContaId.get(c.id) ?? 0),
     }));
+    bancosNum = contasCadastradas.map((c) => ({
+      nome: c.apelido ?? c.nome,
+      slug: bancoSlug(c.banco, c.nome),
+      total: totalPorContaId.get(c.id) ?? 0,
+    }));
     total_geral = Array.from(totalPorContaId.values()).reduce((a, b) => a + b, 0);
   }
+
+  // ---- Subtotais por banco (4.6) ----
+  // O template CAPAS (JSON aprovado) referencia campos PLANOS total_cora/total_sicredi
+  // e banco_principal/banco_secundario. A migração p/ bancos[] dinâmico deixou esses
+  // campos vazios → os subtotais sumiram (só o total geral aparecia). Reemitimos os
+  // campos planos derivados de bancosNum E mantemos a lista dinâmica + um array genérico.
+  const somaSlug = (needle: string) =>
+    bancosNum.filter((b) => b.slug.includes(needle)).reduce((s, b) => s + b.total, 0);
+  const nomePorSlug = (needle: string, fb: string) =>
+    bancosNum.find((b) => b.slug.includes(needle))?.nome ?? fb;
+  const total_cora = brl(somaSlug("cora"));
+  const total_sicredi = brl(somaSlug("sicredi"));
+  const banco_principal = (nomePorSlug("cora", bancosNum[0]?.nome ?? "CORA")).toUpperCase();
+  const banco_secundario = (nomePorSlug("sicredi", bancosNum[1]?.nome ?? "SICREDI")).toUpperCase();
+  const subtotais_bancos = bancosNum.map((b) => ({ nome: b.nome, slug: b.slug, total: brl(b.total) }));
 
   // ---- Despesas por tipo (fixa/variavel/eventual) do recorte ----
   type ListItem = { vencimento: string; valor: string; descricao: string; banco: string; pgto: string };
@@ -219,9 +285,16 @@ export async function buildCapaEmpresa(
     const valor = Math.abs(Number(t.valor));
     buckets[tipo].total += valor;
     buckets[tipo].items.push({
-      vencimento: new Date(t.data).toLocaleDateString("pt-BR"),
+      vencimento: formatDataCurta(t.data),
       valor: brl(valor),
-      descricao: t.descricao ?? t.fornecedor_nome ?? "—",
+      // Descrição completa (4.4): fornecedor + NF + categoria + descrição + parcela.
+      descricao: montarDescricaoCapa({
+        fornecedor_nome: t.fornecedor_nome,
+        ref: t.ref,
+        parcelas: t.parcelas,
+        descricao: t.descricao,
+        categoria: t.centro_custo?.nome ?? null,
+      }),
       banco: t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? "—",
       pgto: t.forma_pgto,
     });
@@ -231,11 +304,19 @@ export async function buildCapaEmpresa(
     empresa: perfilEmpresa.nome,
     cnpj: perfilEmpresa.cnpj,
     fazenda: "FAZENDA ARAMBURU",
-    mes_referencia: mes.split(" ")[0],
-    numero_mes,
-    realizado_em: new Date().toLocaleDateString("pt-BR"),
+    // 4.3: mês de referência do lote — manual (ex.: "Julho") sobrescreve o automático.
+    mes_referencia: args.mesReferenciaLabel?.trim() || mes.split(" ")[0],
+    // 4.3: número do lote — manual (ex.: "7º") sobrescreve o automático.
+    numero_mes: args.numeroLote?.trim() || numero_mes,
+    realizado_em: formatDataCurta(new Date().toISOString().slice(0, 10)),
     preparado_por: args.preparadoPor ?? "Adriane Estefany",
     bancos,
+    // 4.6: subtotais por banco — planos (template atual) + array dinâmico (futuro).
+    banco_principal,
+    banco_secundario,
+    total_cora,
+    total_sicredi,
+    subtotais_bancos,
     total_geral: brl(total_geral),
     despesas_fixas: buckets.fixa.items,
     total_fixas: brl(buckets.fixa.total),

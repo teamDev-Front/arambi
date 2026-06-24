@@ -11,6 +11,10 @@ export interface GerarPdfArgs {
   socios_overrides?: RelatorioSociosOverrides; // só p/ relatorio_socios
   /** Recorte (RF-FIN-09): capa_empresa e relatorio_contabil respeitam filtros/seleção. */
   scope?: ReportScope;
+  /** CAPAS (4.3): número do lote informado manualmente — ex.: "7º" (só p/ capa_empresa). */
+  numero_lote?: string;
+  /** CAPAS (4.3): mês de referência do lote — ex.: "Julho" (só p/ capa_empresa). */
+  mes_referencia_label?: string;
 }
 
 export interface GerarPdfResult {

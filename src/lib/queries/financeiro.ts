@@ -41,6 +41,43 @@ const TRANS_SELECT = `
   conta_bancaria:contas_bancarias_empresa(id, nome, apelido)
 `;
 
+// Aplica os filtros da tela a qualquer query builder de transacoes_empresa.
+// Tipagem propositalmente frouxa (igual a aplicarEscopo em builders.ts): o filter
+// builder do supabase-js encadeia os mesmos métodos retornando o mesmo tipo — a
+// interface mínima abaixo basta e evita brigar com as colunas tipadas. Reusado na
+// listagem paginada e na exportação para garantir EXATAMENTE o mesmo recorte.
+interface QueryFiltravel {
+  eq: (col: string, val: unknown) => QueryFiltravel;
+  in: (col: string, vals: readonly unknown[]) => QueryFiltravel;
+  gte: (col: string, val: unknown) => QueryFiltravel;
+  lte: (col: string, val: unknown) => QueryFiltravel;
+  or: (filtros: string) => QueryFiltravel;
+}
+
+function aplicarFiltros<T>(query: T, filtros: ListarTransacoesFiltros): T {
+  let r = query as unknown as QueryFiltravel;
+  if (filtros.search) {
+    const s = filtros.search.replace(/[%_,]/g, " ").trim();
+    if (s) r = r.or(`descricao.ilike.%${s}%,fornecedor_nome.ilike.%${s}%,ref.ilike.%${s}%`);
+  }
+  if (filtros.status) {
+    const st = filtros.status;
+    if (Array.isArray(st)) { if (st.length > 0) r = r.in("status", st); }
+    else r = r.eq("status", st);
+  }
+  if (filtros.centroCustoCod) {
+    const cc = filtros.centroCustoCod;
+    if (Array.isArray(cc)) { if (cc.length > 0) r = r.in("centro_custo_cod", cc); }
+    else r = r.eq("centro_custo_cod", cc);
+  }
+  if (filtros.contaContabilCod)  r = r.eq("conta_contabil_cod", filtros.contaContabilCod);
+  if (filtros.contaBancariaId)   r = r.eq("conta_bancaria_id", filtros.contaBancariaId);
+  if (filtros.mesReferencia)     r = r.eq("mes_referencia", filtros.mesReferencia);
+  if (filtros.dataDe)            r = r.gte("data", filtros.dataDe);
+  if (filtros.dataAte)           r = r.lte("data", filtros.dataAte);
+  return r as unknown as T;
+}
+
 export async function listarTransacoesEmpresa(
   filtros: ListarTransacoesFiltros = {},
   page = 1,
@@ -48,38 +85,15 @@ export async function listarTransacoesEmpresa(
 ): Promise<ListarTransacoesResult> {
   const supabase = createClient();
 
+  // Ordem CRESCENTE por vencimento (UX-03): do mais antigo p/ o mais recente,
+  // com created_at como desempate estável.
   let q = supabase
     .from("transacoes_empresa")
     .select(TRANS_SELECT, { count: "exact" })
-    .order("data", { ascending: false })
-    .order("created_at", { ascending: false });
+    .order("data", { ascending: true })
+    .order("created_at", { ascending: true });
 
-  if (filtros.search) {
-    const s = filtros.search.replace(/[%_,]/g, " ").trim();
-    if (s) {
-      q = q.or(
-        `descricao.ilike.%${s}%,fornecedor_nome.ilike.%${s}%,ref.ilike.%${s}%`,
-      );
-    }
-  }
-  if (filtros.status) {
-    const st = filtros.status;
-    if (Array.isArray(st)) { if (st.length > 0) q = q.in("status", st); }
-    else q = q.eq("status", st);
-  }
-  if (filtros.centroCustoCod) {
-    const cc = filtros.centroCustoCod;
-    if (Array.isArray(cc)) {
-      if (cc.length > 0) q = q.in("centro_custo_cod", cc);
-    } else {
-      q = q.eq("centro_custo_cod", cc);
-    }
-  }
-  if (filtros.contaContabilCod)  q = q.eq("conta_contabil_cod", filtros.contaContabilCod);
-  if (filtros.contaBancariaId)   q = q.eq("conta_bancaria_id", filtros.contaBancariaId);
-  if (filtros.mesReferencia)     q = q.eq("mes_referencia", filtros.mesReferencia);
-  if (filtros.dataDe)            q = q.gte("data", filtros.dataDe);
-  if (filtros.dataAte)           q = q.lte("data", filtros.dataAte);
+  q = aplicarFiltros(q, filtros);
 
   const from = (page - 1) * pageSize;
   q = q.range(from, from + pageSize - 1);
@@ -87,6 +101,42 @@ export async function listarTransacoesEmpresa(
   const { data, count, error } = await q;
   if (error) throw error;
   return { rows: (data ?? []) as TransacaoEmpresaRich[], total: count ?? 0 };
+}
+
+// ----------------------------------------------------------------------------
+// Exportação (PDF / XLSX) — traz TODAS as linhas do recorte (não paginado).
+// Precedência: seleção manual (ids) > filtros aplicados. Limitado a `cap`
+// linhas por segurança/performance; `capped` sinaliza truncamento à UI.
+// ----------------------------------------------------------------------------
+export interface ExportTransacoesResult {
+  rows: TransacaoEmpresaRich[];
+  total: number;
+  capped: boolean;
+}
+
+export async function listarTransacoesParaExport(
+  opts: { filtros?: ListarTransacoesFiltros; transacaoIds?: string[]; cap?: number } = {},
+): Promise<ExportTransacoesResult> {
+  const supabase = createClient();
+  const cap = opts.cap ?? 5000;
+
+  let q = supabase
+    .from("transacoes_empresa")
+    .select(TRANS_SELECT, { count: "exact" })
+    .order("data", { ascending: true })
+    .order("created_at", { ascending: true });
+
+  if (opts.transacaoIds && opts.transacaoIds.length > 0) {
+    q = q.in("id", opts.transacaoIds);
+  } else {
+    q = aplicarFiltros(q, opts.filtros ?? {});
+  }
+  q = q.range(0, cap - 1);
+
+  const { data, count, error } = await q;
+  if (error) throw error;
+  const rows = (data ?? []) as TransacaoEmpresaRich[];
+  return { rows, total: count ?? rows.length, capped: (count ?? 0) > rows.length };
 }
 
 // ----------------------------------------------------------------------------
@@ -258,13 +308,45 @@ export async function listarContasEmpresa(): Promise<ContaBancariaEmpresaRow[]> 
   return data as ContaBancariaEmpresaRow[];
 }
 
-export async function listarMesesDistintos(): Promise<string[]> {
+/**
+ * Lista os meses (YYYY-MM) disponíveis para o filtro, em ordem CRESCENTE (UX-01).
+ *
+ * BUG-01: a versão antiga lia 200 LINHAS ordenadas desc e tirava o distinto — com
+ * muitos lançamentos em meses futuros, os meses mais antigos (ex.: o vigente
+ * 2026-06) eram truncados e sumiam do filtro. Aqui derivamos o intervalo do
+ * MENOR ao MAIOR vencimento e geramos a sequência completa de meses, garantindo
+ * que todo mês com lançamento (e o vigente) apareça. Duas queries O(1).
+ */
+export async function listarMesesDisponiveis(): Promise<string[]> {
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("transacoes_empresa")
-    .select("mes_referencia")
-    .order("mes_referencia", { ascending: false })
-    .limit(200);
-  if (error) throw error;
-  return Array.from(new Set((data ?? []).map((r) => r.mes_referencia))).filter(Boolean) as string[];
+  const [minRes, maxRes] = await Promise.all([
+    supabase.from("transacoes_empresa").select("data").order("data", { ascending: true }).limit(1).maybeSingle(),
+    supabase.from("transacoes_empresa").select("data").order("data", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (minRes.error) throw minRes.error;
+  if (maxRes.error) throw maxRes.error;
+  const min = minRes.data?.data as string | undefined;
+  const max = maxRes.data?.data as string | undefined;
+  if (!min || !max) return [];
+
+  // YYYY-MM por fatiamento de string (sem timezone). Inclui o mês corrente
+  // mesmo que ainda não exista lançamento, para conferências do mês vigente.
+  const hoje = new Date();
+  const mesCorrente = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+  const fim = max.slice(0, 7) > mesCorrente ? max.slice(0, 7) : mesCorrente;
+  return gerarSequenciaMeses(min.slice(0, 7), fim);
+}
+
+/** Gera ["2026-06","2026-07",…] de `de` até `ate` (inclusivos), ordem crescente. */
+function gerarSequenciaMeses(de: string, ate: string): string[] {
+  const meses: string[] = [];
+  let [y, m] = de.split("-").map(Number);
+  const [yf, mf] = ate.split("-").map(Number);
+  // Guarda contra intervalos absurdos (no máx. ~50 anos).
+  let guard = 0;
+  while ((y < yf || (y === yf && m <= mf)) && guard++ < 600) {
+    meses.push(`${y}-${String(m).padStart(2, "0")}`);
+    if (++m > 12) { m = 1; y++; }
+  }
+  return meses;
 }

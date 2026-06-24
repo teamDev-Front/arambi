@@ -60,6 +60,9 @@ export function RelatorioEscopoModal({
 
   const [slug, setSlug] = useState<PdfMonkeySlug>("relatorio_contabil");
   const [competencia, setCompetencia] = useState(mesReferenciaDefault);
+  // CAPAS (4.3): número do lote e mês de referência informados manualmente.
+  const [numeroLote, setNumeroLote] = useState("");
+  const [mesRefLabel, setMesRefLabel] = useState("");
   const [gerando, setGerando] = useState(false);
   const [resultado, setResultado] = useState<{ status: string; url: string | null } | null>(null);
 
@@ -85,6 +88,8 @@ export function RelatorioEscopoModal({
     /* eslint-disable react-hooks/set-state-in-effect */
     setResultado(null);
     setCompetencia(mesReferenciaDefault);
+    setNumeroLote("");
+    setMesRefLabel("");
     /* eslint-enable react-hooks/set-state-in-effect */
     carregarResumo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,6 +144,9 @@ export function RelatorioEscopoModal({
         slug: slug as PdfMonkeySlug,
         mes_referencia: competencia,
         scope: montarScope(),
+        ...(slug === "capa_empresa"
+          ? { numero_lote: numeroLote.trim() || undefined, mes_referencia_label: mesRefLabel.trim() || undefined }
+          : {}),
       });
       setResultado({ status: res.status, url: res.download_url });
       if (res.status === "success") toast.success("Relatório gerado", "O PDF está pronto para download.");
@@ -233,6 +241,30 @@ export function RelatorioEscopoModal({
         <p className="text-[11px] text-stone-400 -mt-2">
           A capa inclui somente as contas com movimento. Os filtros/seleção usados ficam registrados na geração.
         </p>
+
+        {/* CAPAS (4.3): lote + mês de referência manuais (apenas Capa Empresa). */}
+        {slug === "capa_empresa" && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-stone-700">Número do lote</label>
+              <input
+                value={numeroLote}
+                onChange={(e) => setNumeroLote(e.target.value)}
+                placeholder="ex.: 7º (automático se vazio)"
+                className="w-full h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:border-transparent transition"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-stone-700">Mês de referência (lote)</label>
+              <input
+                value={mesRefLabel}
+                onChange={(e) => setMesRefLabel(e.target.value)}
+                placeholder="ex.: Julho (automático se vazio)"
+                className="w-full h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm text-stone-900 focus:outline-none focus:ring-2 focus:ring-accent-400 focus:border-transparent transition"
+              />
+            </div>
+          </div>
+        )}
 
         {/* Resultado */}
         {resultado && (

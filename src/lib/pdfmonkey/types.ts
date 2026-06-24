@@ -30,12 +30,19 @@ export interface CapaEmpresaPayload {
   empresa: string;
   cnpj: string;
   fazenda: string;
-  mes_referencia: string;
-  numero_mes: string;            // "1º"
+  mes_referencia: string;        // "Julho" (manual 4.3 ou auto)
+  numero_mes: string;            // "7º"   (lote manual 4.3 ou auto)
   realizado_em: string;
   preparado_por: string;
   /** Lista dinâmica de bancos com totais do mês — substituiu o par fixo Cora/Sicredi. */
   bancos: BancoTotal[];
+  // Subtotais por banco (4.6). Campos PLANOS reemitidos p/ compatibilidade com o
+  // template CAPAS atual; `subtotais_bancos` é a versão genérica/escalável.
+  banco_principal?: string;      // "CORA"
+  banco_secundario?: string;     // "SICREDI"
+  total_cora?: string;
+  total_sicredi?: string;
+  subtotais_bancos?: BancoTotal[];
   total_geral: string;
   despesas_fixas: CapaEmpresaItem[];
   total_fixas: string;
