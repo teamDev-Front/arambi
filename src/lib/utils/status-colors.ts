@@ -11,7 +11,8 @@
 // Centralizado aqui para o MESMO status ter a MESMA cor em tabela, modais e
 // qualquer badge. INDEPENDENTE da paleta lateral (RF-FIN-04 não as afeta).
 
-import { STATUS_KIND, type StatusAramburu } from "@/types";
+import { type StatusAramburu } from "@/types";
+import { getStatusKind } from "@/lib/utils/status-config";
 
 // Paleta do Excel (aprovada pela cliente)
 const C = {
@@ -51,8 +52,8 @@ export function statusBadgeClassName(status: StatusAramburu): string {
  * Cor de TEXTO para o valor monetário, coerente com a natureza do lançamento
  * (entrada = verde, saída = vermelho, neutro = cinza). Usada em tabelas/modais.
  */
-export function valorTextColor(status: StatusAramburu): string {
-  const k = STATUS_KIND[status];
+export function valorTextColor(status: StatusAramburu | string): string {
+  const k = getStatusKind(status); // data-driven (suporta status novos), com fallback
   if (k === "entrada") return "text-emerald-700";
   if (k === "saida") return "text-red-600";
   return "text-stone-700";

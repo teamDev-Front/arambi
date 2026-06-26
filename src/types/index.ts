@@ -19,6 +19,7 @@ export type {
   SafraDepositoStatus,
   PdfMonkeySlug,
   ClassificacaoFinanceiraRow,
+  StatusConfigRow,
   ClassificacaoPessoalRow,
   SocioRow,
   ContaBancariaEmpresaRow,

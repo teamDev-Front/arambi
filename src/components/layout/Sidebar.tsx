@@ -18,6 +18,7 @@ import {
   FileBarChart,
   Wallet,
   PiggyBank,
+  Settings,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -34,6 +35,7 @@ const navItems = [
   { label: "Assistentes IA", href: "/dashboard/assistentes", icon: Bot },
   { label: "Recibos & Termos", href: "/dashboard/recibos", icon: Receipt },
   { label: "Logs do Sistema", href: "/dashboard/logs", icon: ScrollText },
+  { label: "Configurações", href: "/dashboard/configuracoes", icon: Settings },
 ];
 
 export function Sidebar() {

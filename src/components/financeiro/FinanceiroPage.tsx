@@ -33,8 +33,8 @@ import {
   exportFinanceiroXlsx,
   type FinanceiroExportMeta,
 } from "@/lib/export/financeiro-export";
+import { useStatusConfig, getStatusLabel } from "@/lib/utils/status-config";
 import {
-  STATUS_ARAMBURU_LABEL,
   FORMA_PGTO_LABEL,
   TIPO_DESPESA_LABEL,
   OBS_OBRA_LABEL,
@@ -142,6 +142,10 @@ export function FinanceiroPage() {
     [classificacoesN3],
   );
 
+  // Status data-driven (Admin → Status & Cores). Ativos para os filtros/seleções.
+  const { entries: statusEntries } = useStatusConfig();
+  const statusAtivos = useMemo(() => statusEntries.filter((e) => e.ativo), [statusEntries]);
+
   // KPI rápida das linhas exibidas (nem todas as 731 — é "do que tá em tela")
   const kpis = useMemo(() => {
     const r: { entradas: number; saidas: number; aPagar: number } = { entradas: 0, saidas: 0, aPagar: 0 };
@@ -195,7 +199,7 @@ export function FinanceiroPage() {
   const montarMetaExport = useCallback((): FinanceiroExportMeta => {
     const f: string[] = [];
     if (search) f.push(`Busca: "${search}"`);
-    if (filterStatus.length) f.push(`Status: ${filterStatus.map((s) => STATUS_ARAMBURU_LABEL[s]).join(", ")}`);
+    if (filterStatus.length) f.push(`Status: ${filterStatus.map((s) => getStatusLabel(s)).join(", ")}`);
     if (filterContaContabil) {
       const c = classificacoesN2.find((x) => x.codigo === filterContaContabil);
       f.push(`Conta: ${filterContaContabil}${c ? ` – ${c.nome}` : ""}`);
@@ -428,7 +432,7 @@ export function FinanceiroPage() {
               className="w-40"
               value={filterStatus}
               onChange={(v) => { setFilterStatus(v as StatusAramburu[]); setPage(1); }}
-              options={(Object.keys(STATUS_ARAMBURU_LABEL) as StatusAramburu[]).map((s) => ({ value: s, label: STATUS_ARAMBURU_LABEL[s] }))}
+              options={statusAtivos.map((e) => ({ value: e.codigo, label: e.label }))}
               placeholder="Todos os status"
               searchPlaceholder="Buscar status…"
               unitLabel="status"
@@ -639,7 +643,11 @@ export function FinanceiroPage() {
             </Select>
             <Select label="Status" value={form.status}
               onChange={(e) => setForm({ ...form, status: e.target.value as StatusAramburu })}>
-              {Object.entries(STATUS_ARAMBURU_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              {/* Status ativos; inclui o valor atual mesmo se inativado, p/ não perder na edição. */}
+              {(statusAtivos.some((e) => e.codigo === form.status)
+                ? statusAtivos
+                : [{ codigo: form.status, label: getStatusLabel(form.status) }, ...statusAtivos]
+              ).map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
             </Select>
           </div>
 

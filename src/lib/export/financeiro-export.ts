@@ -9,7 +9,7 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { sanitizeWinAnsi } from "@/lib/pdf/helpers";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
-import { STATUS_ARAMBURU_LABEL, type StatusAramburu } from "@/types";
+import { getStatusLabel } from "@/lib/utils/status-config";
 import type { TransacaoEmpresaRich } from "@/lib/queries/financeiro";
 import { buildXlsx, xtext, xmoney, type XlsxValue } from "./xlsx";
 
@@ -54,7 +54,7 @@ export function toExportRows(rows: TransacaoEmpresaRich[]): FinanceiroExportRow[
       descricao: r.descricao ?? "",
       fornecedor: r.fornecedor_nome ?? "",
       banco,
-      status: STATUS_ARAMBURU_LABEL[r.status as StatusAramburu] ?? r.status,
+      status: getStatusLabel(r.status),
       valorNum: Number(r.valor) || 0,
       valorStr: formatCurrency(Number(r.valor) || 0),
     };

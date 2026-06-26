@@ -42,8 +42,9 @@ function Chips({ items, max = 8 }: { items: string[]; max?: number }) {
   const rest = items.length - shown.length;
   return (
     <div className="flex flex-wrap gap-1">
-      {shown.map((t) => (
-        <span key={t} className="px-1.5 py-0.5 rounded bg-stone-100 text-stone-600 text-[11px]">{t}</span>
+      {/* index na key: nomes podem repetir (ex.: dois centros "Cooperativa Sicredi"). */}
+      {shown.map((t, i) => (
+        <span key={`${t}-${i}`} className="px-1.5 py-0.5 rounded bg-stone-100 text-stone-600 text-[11px]">{t}</span>
       ))}
       {rest > 0 && <span className="px-1.5 py-0.5 text-stone-400 text-[11px]">+{rest}</span>}
     </div>

@@ -75,6 +75,21 @@ export type ClassificacaoFinanceiraRow = {
   created_at: string;
 };
 
+// Apresentação configurável de cada status (Admin → Status & Cores). Espelha o
+// enum status_aramburu; `codigo` é o valor do enum em texto.
+export type StatusConfigRow = {
+  codigo: string;
+  label: string;
+  kind: "entrada" | "saida" | "neutro";
+  cor_bg: string;                           // hex (#rrggbb)
+  cor_text: string;
+  ordem: number | null;
+  ativo: boolean;
+  is_sistema: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ClassificacaoPessoalRow = {
   codigo: string;                           // "1.01" .. "1.06"
   nome: string;
@@ -625,6 +640,12 @@ export interface Database {
         Row: ClassificacaoFinanceiraRow;
         Insert: Omit<ClassificacaoFinanceiraRow, "created_at">;
         Update: Partial<ClassificacaoFinanceiraRow>;
+        Relationships: EmptyRels;
+      };
+      status_config: {
+        Row: StatusConfigRow;
+        Insert: Omit<StatusConfigRow, "created_at" | "updated_at"> & { created_at?: string; updated_at?: string };
+        Update: Partial<Omit<StatusConfigRow, "created_at" | "updated_at">>;
         Relationships: EmptyRels;
       };
       classificacao_pessoal: {
