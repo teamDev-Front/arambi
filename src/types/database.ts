@@ -186,6 +186,32 @@ export type TransacaoEmpresaRow = {
 export type TransacaoEmpresaInsert = Omit<TransacaoEmpresaRow, "id" | "mes_referencia" | "created_at" | "updated_at">;
 export type TransacaoEmpresaUpdate = Partial<TransacaoEmpresaInsert>;
 
+// Resumo mensal da Distribuição de Lucro (view v_dl_mensal_resumo — migration 0036)
+export type DlMensalResumoRow = {
+  mes_referencia: string;
+  provisionado: number;
+  a_pagar: number;
+  a_pagar_sem_repasse: number;
+  realizado: number;
+  qtd_provisionado: number;
+  qtd_a_pagar: number;
+  qtd_a_pagar_sem_repasse: number;
+  qtd_realizado: number;
+};
+
+// Provisionamento anual da empresa (view v_provisionamento_anual — migration 0036)
+export type ProvisionamentoAnualRow = {
+  mes_referencia: string;
+  ano: string;
+  conta_contabil_cod: string;
+  conta_contabil_nome: string;
+  natureza: NaturezaConta;
+  realizado: number;
+  em_aberto: number;
+  provisionado: number;
+  qtd_lancamentos: number;
+};
+
 export type TransacaoSocioRow = {
   id: string;
   data: string;
@@ -198,6 +224,8 @@ export type TransacaoSocioRow = {
   valor: number;
   data_vencimento: string | null;
   status: StatusDL;
+  /** Lançamento global (transacoes_empresa) que consolidou esta linha — migration 0036. */
+  repasse_id: string | null;
   observacao: string | null;
   origem_planilha: string | null;
   created_at: string;
@@ -205,7 +233,10 @@ export type TransacaoSocioRow = {
   created_by: string | null;
 };
 
-export type TransacaoSocioInsert = Omit<TransacaoSocioRow, "id" | "mes_referencia" | "created_at" | "updated_at">;
+export type TransacaoSocioInsert =
+  Omit<TransacaoSocioRow, "id" | "mes_referencia" | "created_at" | "updated_at" | "repasse_id">
+  & { repasse_id?: string | null };
+export type TransacaoSocioUpdate = Partial<TransacaoSocioInsert>;
 
 // ============================================================================
 // Tabelas Vendas Futuras + Safra (migrations 0014/0015)
@@ -231,7 +262,9 @@ export type SafraParametrosRow = WithTimestamps & {
   quebra_quinzena_pct: number;
   armazenagem_por_kg_quinzena: number;
   devolucao_por_saca: number;
-  carencia_dias: number;
+  carencia_dias: number;                    // carência p/ venda a TERCEIROS (migration 0037)
+  carencia_armazem_dias: number;            // carência p/ venda ao PRÓPRIO ARMAZÉM (migration 0037)
+  taxa_recepcao_por_saca: number;           // R$/saca — só terceiros; 0 = isenta (migration 0037)
   kg_por_saca: number;
   data_atual: string;                       // "YYYY-MM-DD"
   cotacao_simulada_sc: number | null;
@@ -286,6 +319,18 @@ export type SafraDepositoCalculadoRow = {
   taxa_devolucao: number;
   total_a_descontar: number;
   valor_venda_simulado: number;
+  // Cenário "venda ao próprio armazém" + recepção (migration 0037)
+  carencia_armazem_dias: number | null;
+  taxa_recepcao_por_saca: number | null;
+  taxa_recepcao: number;
+  dias_percorridos_armazem: number;
+  quinzenas_armazem: number;
+  quebra_kg_armazem: number;
+  kg_liquido_armazem: number;
+  sc_liquida_armazem: number;
+  taxa_armazenagem_armazem: number;
+  total_a_descontar_armazem: number;
+  valor_venda_armazem: number;
 };
 
 export type VendaProvisionadaRow = WithTimestamps & {
@@ -731,7 +776,7 @@ export interface Database {
       transacoes_socio: {
         Row: TransacaoSocioRow;
         Insert: TransacaoSocioInsert;
-        Update: Partial<TransacaoSocioInsert>;
+        Update: TransacaoSocioUpdate;
         Relationships: EmptyRels;
       };
       armazens: {
@@ -742,7 +787,9 @@ export interface Database {
       };
       safra_parametros: {
         Row: SafraParametrosRow;
-        Insert: Omit<SafraParametrosRow, "id" | "created_at" | "updated_at">;
+        // carencia_armazem_dias / taxa_recepcao_por_saca têm default no banco → opcionais.
+        Insert: Omit<SafraParametrosRow, "id" | "created_at" | "updated_at" | "carencia_armazem_dias" | "taxa_recepcao_por_saca">
+          & { carencia_armazem_dias?: number; taxa_recepcao_por_saca?: number };
         Update: Partial<Omit<SafraParametrosRow, "id" | "created_at" | "updated_at">>;
         Relationships: EmptyRels;
       };
@@ -956,6 +1003,14 @@ export interface Database {
         };
         Relationships: EmptyRels;
       };
+      v_dl_mensal_resumo: {
+        Row: DlMensalResumoRow;
+        Relationships: EmptyRels;
+      };
+      v_provisionamento_anual: {
+        Row: ProvisionamentoAnualRow;
+        Relationships: EmptyRels;
+      };
       v_chat_sessoes_recentes: {
         Row: ChatSessaoRecenteRow;
         Relationships: EmptyRels;
@@ -993,6 +1048,10 @@ export interface Database {
         Relationships: EmptyRels;
       };
     };
+    // IMPORTANTE: manter Record<string, never> — tipar Functions "de verdade" faz o
+    // postgrest-js entrar no modo estrito de inferência e quebrar os joins existentes
+    // (as tabelas usam Relationships vazios). As RPCs de 0036 são chamadas com um
+    // wrapper tipado local em src/lib/queries/distribuicao.ts.
     Functions: Record<string, never>;
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

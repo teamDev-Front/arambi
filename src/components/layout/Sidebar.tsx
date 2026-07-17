@@ -19,15 +19,19 @@ import {
   Wallet,
   PiggyBank,
   Settings,
+  Users,
+  CalendarClock,
 } from "lucide-react";
 import { useState } from "react";
 
 const navItems = [
   { label: "Home", href: "/dashboard", icon: LayoutDashboard },
   { label: "Financeiro", href: "/dashboard/financeiro", icon: TrendingUp },
+  { label: "Distribuição de Lucro", href: "/dashboard/distribuicao", icon: Users },
   { label: "Bancos", href: "/dashboard/bancos", icon: Landmark },
   { label: "Saldos Mensais", href: "/dashboard/saldos", icon: Wallet },
   { label: "Orçamentos", href: "/dashboard/orcamentos", icon: PiggyBank },
+  { label: "Provisionamento Anual", href: "/dashboard/provisionamento", icon: CalendarClock },
   { label: "Vendas Futuras", href: "/dashboard/vendas-futuras", icon: HandCoins },
   { label: "Estoque & Safra", href: "/dashboard/estoque", icon: Sprout },
   { label: "Relatórios PDF", href: "/dashboard/relatorios", icon: FileBarChart },

@@ -28,12 +28,17 @@ export type {
   TransacaoEmpresaInsert,
   TransacaoEmpresaUpdate,
   TransacaoSocioRow,
+  TransacaoSocioInsert,
+  TransacaoSocioUpdate,
+  DlMensalResumoRow,
+  ProvisionamentoAnualRow,
   ArmazemRow,
   SafraParametrosRow,
   SafraDepositoRow,
   SafraDepositoCalculadoRow,
   VendaProvisionadaRow,
   VendaProvisionadaRichRow,
+  VendaPorPeriodoRow,
   PdfMonkeyTemplateRow,
   PdfMonkeyGeracaoRow,
   DocumentoGeradoTipo,
@@ -55,7 +60,7 @@ export type {
 } from "./database";
 
 import type {
-  StatusAramburu, FormaPgto, TipoDespesa, ObsObra,
+  StatusAramburu, StatusDL, FormaPgto, TipoDespesa, ObsObra,
   CulturaSafra, VendaStatus, SafraDepositoStatus, PdfMonkeySlug,
   DocumentoGeradoTipo,
 } from "./database";
@@ -80,6 +85,14 @@ export const STATUS_ARAMBURU_LABEL: Record<StatusAramburu, string> = {
   provisionado:     "Provisionado",
   provisionado_dl:  "Provisionado DL",
   provisionado_dv:  "Provisionado DV",
+};
+
+// Status da Distribuição de Lucro (detalhado por sócio). Na linguagem da
+// planilha da Adriane: Provisionado → A pagar → Repassado.
+export const STATUS_DL_LABEL: Record<StatusDL, string> = {
+  provisionado: "Provisionado",
+  a_pagar:      "A pagar",
+  realizado:    "Repassado",
 };
 
 export const FORMA_PGTO_LABEL: Record<FormaPgto, string> = {

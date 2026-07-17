@@ -167,15 +167,25 @@ export interface SafraResumo {
   total_quebra_kg: number;
   total_taxa_armazenagem: number;
   total_taxa_devolucao: number;
+  total_taxa_recepcao: number;
   total_a_descontar: number;
   total_valor_venda: number;
   saldo_a_receber: number;
+  // Cenário "venda ao próprio armazém" (carência longa — migration 0037)
+  armazem_total_kg_liquido: number;
+  armazem_total_sc_liquida: number;
+  armazem_total_quebra_kg: number;
+  armazem_total_taxa_armazenagem: number;
+  armazem_total_a_descontar: number;
+  armazem_total_valor_venda: number;
+  armazem_saldo_a_receber: number;
   por_data_deposito: Array<{ data: string; kg_bruto: number; kg_liquido: number }>;
 }
 
 export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraResumo {
   let kg_bruto = 0, kg_liquido = 0, sc_bruto = 0, sc_liquida = 0;
-  let quebra_kg = 0, taxa_armaz = 0, taxa_dev = 0, descontar = 0, venda = 0;
+  let quebra_kg = 0, taxa_armaz = 0, taxa_dev = 0, taxa_recep = 0, descontar = 0, venda = 0;
+  let a_kg_liq = 0, a_sc_liq = 0, a_quebra = 0, a_armaz = 0, a_descontar = 0, a_venda = 0;
   const aggDay = new Map<string, { kg_bruto: number; kg_liquido: number }>();
 
   for (const r of rows) {
@@ -186,8 +196,16 @@ export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraRes
     quebra_kg += Number(r.quebra_kg);
     taxa_armaz += Number(r.taxa_armazenagem);
     taxa_dev += Number(r.taxa_devolucao);
+    taxa_recep += Number(r.taxa_recepcao ?? 0);
     descontar += Number(r.total_a_descontar);
     venda += Number(r.valor_venda_simulado);
+
+    a_kg_liq += Number(r.kg_liquido_armazem ?? 0);
+    a_sc_liq += Number(r.sc_liquida_armazem ?? 0);
+    a_quebra += Number(r.quebra_kg_armazem ?? 0);
+    a_armaz += Number(r.taxa_armazenagem_armazem ?? 0);
+    a_descontar += Number(r.total_a_descontar_armazem ?? 0);
+    a_venda += Number(r.valor_venda_armazem ?? 0);
 
     const k = r.data_deposito;
     const ex = aggDay.get(k) ?? { kg_bruto: 0, kg_liquido: 0 };
@@ -205,9 +223,17 @@ export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraRes
     total_quebra_kg: quebra_kg,
     total_taxa_armazenagem: taxa_armaz,
     total_taxa_devolucao: taxa_dev,
+    total_taxa_recepcao: taxa_recep,
     total_a_descontar: descontar,
     total_valor_venda: venda,
     saldo_a_receber: venda - descontar,
+    armazem_total_kg_liquido: a_kg_liq,
+    armazem_total_sc_liquida: a_sc_liq,
+    armazem_total_quebra_kg: a_quebra,
+    armazem_total_taxa_armazenagem: a_armaz,
+    armazem_total_a_descontar: a_descontar,
+    armazem_total_valor_venda: a_venda,
+    armazem_saldo_a_receber: a_venda - a_descontar,
     por_data_deposito: Array.from(aggDay, ([data, v]) => ({ data, ...v })).sort((a, b) => a.data.localeCompare(b.data)),
   };
 }

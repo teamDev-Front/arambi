@@ -33,19 +33,31 @@ import {
   exportFinanceiroXlsx,
   type FinanceiroExportMeta,
 } from "@/lib/export/financeiro-export";
+import {
+  criarDetalhado,
+  listarSocios,
+  listarClassificacoesPessoais,
+  listarContasDoSocio,
+} from "@/lib/queries/distribuicao";
 import { useStatusConfig, getStatusLabel } from "@/lib/utils/status-config";
 import {
   FORMA_PGTO_LABEL,
   TIPO_DESPESA_LABEL,
   OBS_OBRA_LABEL,
   STATUS_KIND,
+  STATUS_DL_LABEL,
   type StatusAramburu,
+  type StatusDL,
   type FormaPgto,
   type TipoDespesa,
   type ObsObra,
   type ClassificacaoFinanceiraRow,
   type ContaBancariaEmpresaRow,
   type TransacaoEmpresaInsert,
+  type TransacaoSocioInsert,
+  type SocioRow,
+  type ClassificacaoPessoalRow,
+  type ContaBancariaSocioRow,
 } from "@/types";
 import { useToast } from "@/components/ui/Toast";
 
@@ -125,6 +137,38 @@ export function FinanceiroPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+
+  // ---- saída global × detalhada (call 24-jun: conta 2.8 Distribuição de Lucro) ----
+  // "Global" = lançamento normal da empresa (Cora → Inter). "Detalhada" = linha
+  // por sócio, gravada em transacoes_socio (o detalhado da tela Distribuição).
+  const [tipoSaida, setTipoSaida] = useState<"global" | "detalhada">("global");
+  const [socios, setSocios] = useState<SocioRow[]>([]);
+  const [classifsPessoais, setClassifsPessoais] = useState<ClassificacaoPessoalRow[]>([]);
+  const [contasSocio, setContasSocio] = useState<ContaBancariaSocioRow[]>([]);
+  const [dlSocioId, setDlSocioId] = useState("");
+  const [dlClassif, setDlClassif] = useState("");
+  const [dlContaSocioId, setDlContaSocioId] = useState("");
+  const [dlStatus, setDlStatus] = useState<StatusDL>("provisionado");
+  const mostraTipoSaida = form.conta_contabil_cod === "2.8" && !editId;
+  const salvandoDetalhada = mostraTipoSaida && tipoSaida === "detalhada";
+
+  // Lookups da saída detalhada — carregados só quando a opção aparece.
+  useEffect(() => {
+    if (!mostraTipoSaida || socios.length > 0) return;
+    Promise.all([listarSocios(), listarClassificacoesPessoais()])
+      .then(([s, c]) => { setSocios(s); setClassifsPessoais(c); })
+      .catch((e: unknown) => toast.error("Erro carregando sócios", (e as Error).message ?? String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mostraTipoSaida]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset síncrono intencional ao trocar de sócio
+    if (!dlSocioId) { setContasSocio([]); return; }
+    listarContasDoSocio(dlSocioId)
+      .then(setContasSocio)
+      .catch((e: unknown) => toast.error("Erro carregando contas do sócio", (e as Error).message ?? String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dlSocioId]);
 
   // ---- derivados ----
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -283,6 +327,8 @@ export function FinanceiroPage() {
   function openNew() {
     setEditId(null);
     setForm({ ...EMPTY_FORM });
+    setTipoSaida("global");
+    setDlSocioId(""); setDlClassif(""); setDlContaSocioId(""); setDlStatus("provisionado");
     setModalOpen(true);
   }
   function openEdit(row: TransacaoEmpresaRich) {
@@ -308,6 +354,44 @@ export function FinanceiroPage() {
   }
 
   async function handleSave() {
+    // Saída DETALHADA (conta 2.8): grava no detalhado por sócio (transacoes_socio),
+    // não em transacoes_empresa — o global é consolidado depois na tela Distribuição.
+    if (salvandoDetalhada) {
+      if (!form.data || !form.valor || !dlSocioId || !dlClassif || !form.descricao) {
+        toast.warning("Campos obrigatórios", "Sócio, classificação, descrição, vencimento e valor são obrigatórios na saída detalhada.");
+        return;
+      }
+      const contaSel = contasSocio.find((c) => c.id === dlContaSocioId);
+      const payload: TransacaoSocioInsert = {
+        data: `${form.data.slice(0, 7)}-01`,      // competência = mês do vencimento
+        socio_id: dlSocioId,
+        classificacao_pessoal: dlClassif,
+        descricao: form.descricao,
+        conta_bancaria_socio_id: dlContaSocioId || null,
+        conta_bancaria_socio_nome: contaSel?.nome ?? null,
+        valor: Math.abs(Number(form.valor)),
+        data_vencimento: form.data,
+        status: dlStatus,
+        observacao: form.observacao || null,
+        origem_planilha: null,
+        created_by: null,
+      };
+      setSaving(true);
+      try {
+        await criarDetalhado(payload);
+        toast.success(
+          "Saída detalhada criada",
+          "Lançada no detalhado por sócio. Acompanhe e consolide o repasse na tela Distribuição de Lucro.",
+        );
+        setModalOpen(false);
+      } catch (e: unknown) {
+        toast.error("Não foi possível criar a saída detalhada", (e as Error).message ?? String(e));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!form.data || !form.conta_contabil_cod || !form.centro_custo_cod || !form.valor) return;
     const payload: TransacaoEmpresaInsert = {
       data: form.data,
@@ -632,24 +716,28 @@ export function FinanceiroPage() {
           <div className="grid grid-cols-2 gap-3">
             <Input label="Vencimento" type="date" value={form.data}
               onChange={(e) => setForm({ ...form, data: e.target.value })} />
-            <Input label="Emissão (opcional)" type="date" value={form.data_emissao}
-              onChange={(e) => setForm({ ...form, data_emissao: e.target.value })} />
+            {!salvandoDetalhada && (
+              <Input label="Emissão (opcional)" type="date" value={form.data_emissao}
+                onChange={(e) => setForm({ ...form, data_emissao: e.target.value })} />
+            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Select label="Tipo de Despesa" value={form.tipo_despesa}
-              onChange={(e) => setForm({ ...form, tipo_despesa: e.target.value as TipoDespesa })}>
-              {Object.entries(TIPO_DESPESA_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </Select>
-            <Select label="Status" value={form.status}
-              onChange={(e) => setForm({ ...form, status: e.target.value as StatusAramburu })}>
-              {/* Status ativos; inclui o valor atual mesmo se inativado, p/ não perder na edição. */}
-              {(statusAtivos.some((e) => e.codigo === form.status)
-                ? statusAtivos
-                : [{ codigo: form.status, label: getStatusLabel(form.status) }, ...statusAtivos]
-              ).map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
-            </Select>
-          </div>
+          {!salvandoDetalhada && (
+            <div className="grid grid-cols-2 gap-3">
+              <Select label="Tipo de Despesa" value={form.tipo_despesa}
+                onChange={(e) => setForm({ ...form, tipo_despesa: e.target.value as TipoDespesa })}>
+                {Object.entries(TIPO_DESPESA_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </Select>
+              <Select label="Status" value={form.status}
+                onChange={(e) => setForm({ ...form, status: e.target.value as StatusAramburu })}>
+                {/* Status ativos; inclui o valor atual mesmo se inativado, p/ não perder na edição. */}
+                {(statusAtivos.some((e) => e.codigo === form.status)
+                  ? statusAtivos
+                  : [{ codigo: form.status, label: getStatusLabel(form.status) }, ...statusAtivos]
+                ).map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
+              </Select>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <Select label="Conta Contábil"
@@ -660,53 +748,117 @@ export function FinanceiroPage() {
                 <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>
               ))}
             </Select>
-            <Select label="Centro de Custo"
-              value={form.centro_custo_cod}
-              disabled={!form.conta_contabil_cod}
-              onChange={(e) => setForm({ ...form, centro_custo_cod: e.target.value })}>
-              <option value="">Selecione…</option>
-              {childrenOf(form.conta_contabil_cod).map((c) => (
-                <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>
-              ))}
-            </Select>
+            {!salvandoDetalhada && (
+              <Select label="Centro de Custo"
+                value={form.centro_custo_cod}
+                disabled={!form.conta_contabil_cod}
+                onChange={(e) => setForm({ ...form, centro_custo_cod: e.target.value })}>
+                <option value="">Selecione…</option>
+                {childrenOf(form.conta_contabil_cod).map((c) => (
+                  <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>
+                ))}
+              </Select>
+            )}
           </div>
+
+          {/* Conta 2.8 (Distribuição de Lucro): escolher entre saída global e detalhada (call 24-jun) */}
+          {mostraTipoSaida && (
+            <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3 space-y-2">
+              <p className="text-xs font-semibold text-stone-600 uppercase tracking-wide">Tipo de saída</p>
+              <div className="flex gap-5 text-sm text-stone-700">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="tipo-saida" checked={tipoSaida === "global"}
+                    onChange={() => setTipoSaida("global")}
+                    className="h-4 w-4 accent-accent-500" />
+                  Saída global <span className="text-xs text-stone-400">(valor total — Cora → Inter)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" name="tipo-saida" checked={tipoSaida === "detalhada"}
+                    onChange={() => setTipoSaida("detalhada")}
+                    className="h-4 w-4 accent-accent-500" />
+                  Saída detalhada <span className="text-xs text-stone-400">(por sócio — Inter → conta pessoal)</span>
+                </label>
+              </div>
+              {salvandoDetalhada && (
+                <p className="text-[11px] text-stone-500">
+                  A saída detalhada vai para o detalhado por sócio (tela <b>Distribuição de Lucro</b>), onde você
+                  confere, marca {"“A pagar”"} e consolida o valor global — sem duplicar lançamentos.
+                </p>
+              )}
+            </div>
+          )}
+
+          {salvandoDetalhada && (
+            <div className="grid grid-cols-2 gap-3">
+              <Select label="Sócio *" value={dlSocioId}
+                onChange={(e) => { setDlSocioId(e.target.value); setDlContaSocioId(""); }}>
+                <option value="">Selecione…</option>
+                {socios.map((s) => <option key={s.id} value={s.id}>{s.apelido ?? s.nome_completo}</option>)}
+              </Select>
+              <Select label="Classificação *" value={dlClassif}
+                onChange={(e) => setDlClassif(e.target.value)}>
+                <option value="">Selecione…</option>
+                {classifsPessoais.map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>)}
+              </Select>
+              <Select label="Conta destino do sócio" value={dlContaSocioId}
+                disabled={!dlSocioId}
+                onChange={(e) => setDlContaSocioId(e.target.value)}>
+                <option value="">—</option>
+                {contasSocio.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </Select>
+              <Select label="Status" value={dlStatus}
+                onChange={(e) => setDlStatus(e.target.value as StatusDL)}>
+                {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
+                  <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
+              </Select>
+            </div>
+          )}
 
           <Input label="Descrição" value={form.descricao}
             onChange={(e) => setForm({ ...form, descricao: e.target.value })}
-            placeholder="Descrição do lançamento" />
+            placeholder={salvandoDetalhada ? "IPTU, Folha de pagamento, Energia…" : "Descrição do lançamento"} />
 
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Fornecedor / contraparte" value={form.fornecedor_nome}
-              onChange={(e) => setForm({ ...form, fornecedor_nome: e.target.value })} />
-            <Input label="Valor (R$, negativo = saída)" type="number" step="0.01"
+            {!salvandoDetalhada && (
+              <Input label="Fornecedor / contraparte" value={form.fornecedor_nome}
+                onChange={(e) => setForm({ ...form, fornecedor_nome: e.target.value })} />
+            )}
+            <Input
+              label={salvandoDetalhada ? "Valor (R$)" : "Valor (R$, negativo = saída)"}
+              type="number" step="0.01"
+              min={salvandoDetalhada ? "0" : undefined}
               value={form.valor}
               onChange={(e) => setForm({ ...form, valor: e.target.value })} />
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            <Select label="Forma de Pgto" value={form.forma_pgto}
-              onChange={(e) => setForm({ ...form, forma_pgto: e.target.value as FormaPgto })}>
-              {Object.entries(FORMA_PGTO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </Select>
-            <Select label="Banco" value={form.conta_bancaria_id}
-              onChange={(e) => setForm({ ...form, conta_bancaria_id: e.target.value })}>
-              <option value="">—</option>
-              {bancos.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
-            </Select>
-            <Select label="Obs. Obra" value={form.obs_obra}
-              onChange={(e) => setForm({ ...form, obs_obra: e.target.value as ObsObra })}>
-              {Object.entries(OBS_OBRA_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </Select>
-          </div>
+          {!salvandoDetalhada && (
+            <div className="grid grid-cols-3 gap-3">
+              <Select label="Forma de Pgto" value={form.forma_pgto}
+                onChange={(e) => setForm({ ...form, forma_pgto: e.target.value as FormaPgto })}>
+                {Object.entries(FORMA_PGTO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </Select>
+              <Select label="Banco" value={form.conta_bancaria_id}
+                onChange={(e) => setForm({ ...form, conta_bancaria_id: e.target.value })}>
+                <option value="">—</option>
+                {bancos.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
+              </Select>
+              <Select label="Obs. Obra" value={form.obs_obra}
+                onChange={(e) => setForm({ ...form, obs_obra: e.target.value as ObsObra })}>
+                {Object.entries(OBS_OBRA_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </Select>
+            </div>
+          )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <Input label="Referência (NF / recibo)" value={form.ref}
-              onChange={(e) => setForm({ ...form, ref: e.target.value })}
-              placeholder='NF 12345 / "AGUARDANDO NF"' />
-            <Input label="Parcelas (n/N)" value={form.parcelas}
-              onChange={(e) => setForm({ ...form, parcelas: e.target.value })}
-              placeholder="2/12" />
-          </div>
+          {!salvandoDetalhada && (
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Referência (NF / recibo)" value={form.ref}
+                onChange={(e) => setForm({ ...form, ref: e.target.value })}
+                placeholder='NF 12345 / "AGUARDANDO NF"' />
+              <Input label="Parcelas (n/N)" value={form.parcelas}
+                onChange={(e) => setForm({ ...form, parcelas: e.target.value })}
+                placeholder="2/12" />
+            </div>
+          )}
 
           <Textarea label="Observação" value={form.observacao}
             onChange={(e) => setForm({ ...form, observacao: e.target.value })}

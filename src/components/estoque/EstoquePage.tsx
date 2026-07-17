@@ -55,7 +55,9 @@ type ParamForm = {
   quebra_quinzena_pct: string;
   armazenagem_por_kg_quinzena: string;
   devolucao_por_saca: string;
-  carencia_dias: string;
+  carencia_dias: string;             // carência p/ venda a TERCEIROS
+  carencia_armazem_dias: string;     // carência p/ venda ao PRÓPRIO ARMAZÉM (normativa anual)
+  taxa_recepcao_por_saca: string;    // R$/saca — só terceiros; 0 = isenta
   kg_por_saca: string;
   data_atual: string;
   cotacao_simulada_sc: string;
@@ -133,6 +135,7 @@ export function EstoquePage() {
 
   // ---- carregar param atual quando cultura/safra mudam ----
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset síncrono intencional ao trocar seleção
     if (!armazemId || !cultura || !safra) { setParam(null); setParamForm(null); return; }
     obterParametro(armazemId, cultura, safra)
       .then((p) => {
@@ -142,6 +145,8 @@ export function EstoquePage() {
           armazenagem_por_kg_quinzena: String(p.armazenagem_por_kg_quinzena),
           devolucao_por_saca: String(p.devolucao_por_saca),
           carencia_dias: String(p.carencia_dias),
+          carencia_armazem_dias: String(p.carencia_armazem_dias ?? 365),
+          taxa_recepcao_por_saca: String(p.taxa_recepcao_por_saca ?? 0),
           kg_por_saca: String(p.kg_por_saca),
           data_atual: p.data_atual,
           cotacao_simulada_sc: p.cotacao_simulada_sc !== null ? String(p.cotacao_simulada_sc) : "",
@@ -150,6 +155,8 @@ export function EstoquePage() {
           armazenagem_por_kg_quinzena: "0.20",
           devolucao_por_saca: "4.75",
           carencia_dias: "30",
+          carencia_armazem_dias: "365",
+          taxa_recepcao_por_saca: "0",
           kg_por_saca: "60",
           data_atual: new Date().toISOString().slice(0, 10),
           cotacao_simulada_sc: "50",
@@ -161,7 +168,9 @@ export function EstoquePage() {
 
   // ---- carregar depósitos ----
   const fetchDepositos = useCallback(async () => {
-    if (!armazemId) return;
+    // Sem armazém selecionado (ex.: base recém-zerada): mostra o estado vazio em
+    // vez de ficar preso no "Carregando…" (pedido da call de 24-jun, 35:28).
+    if (!armazemId) { setRows([]); setLoading(false); return; }
     setLoading(true);
     try {
       const data = await listarDepositosCalculados({
@@ -180,6 +189,8 @@ export function EstoquePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [armazemId, cultura, safra, filterStatus, search]);
 
+  // fetchDepositos sincroniza a tabela com os filtros — o setState interno é intencional.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchDepositos(); }, [fetchDepositos]);
 
   // ---- derivados ----
@@ -211,6 +222,8 @@ export function EstoquePage() {
         armazenagem_por_kg_quinzena: Number(paramForm.armazenagem_por_kg_quinzena),
         devolucao_por_saca: Number(paramForm.devolucao_por_saca),
         carencia_dias: Number(paramForm.carencia_dias),
+        carencia_armazem_dias: Number(paramForm.carencia_armazem_dias),
+        taxa_recepcao_por_saca: Number(paramForm.taxa_recepcao_por_saca),
         kg_por_saca: Number(paramForm.kg_por_saca),
         data_atual: paramForm.data_atual,
         cotacao_simulada_sc: paramForm.cotacao_simulada_sc === "" ? null : Number(paramForm.cotacao_simulada_sc),
@@ -450,11 +463,43 @@ export function EstoquePage() {
                     <span className="text-[10px] text-stone-400">ex: 0.0015 = 0,15%</span>
                   </div>
                   <div>
-                    <label className="text-[10px] font-medium text-stone-500 uppercase">Carência (dias)</label>
+                    <div className="flex items-center gap-1">
+                      <label className="text-[10px] font-medium text-stone-500 uppercase">Carência Terceiros</label>
+                      <Tooltip text="Dias sem cobrança quando a venda é PARA FORA do armazém (contagem desde o depósito). Normalmente ~30 dias." position="bottom">
+                        <HelpCircle size={10} className="text-stone-300" />
+                      </Tooltip>
+                    </div>
                     <input type="number" value={paramForm.carencia_dias}
                       onChange={(e) => setParamForm({ ...paramForm, carencia_dias: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
+                    <span className="text-[10px] text-stone-400">dias</span>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1">
+                      <label className="text-[10px] font-medium text-stone-500 uppercase">Carência Armazém</label>
+                      <Tooltip text="Dias sem cobrança quando a venda é PARA O PRÓPRIO armazém (Copasul). Vem da normativa anual e muda por produto/ano — ex.: milho 25/26 teve carência até 30/mai." position="bottom">
+                        <HelpCircle size={10} className="text-stone-300" />
+                      </Tooltip>
+                    </div>
+                    <input type="number" value={paramForm.carencia_armazem_dias}
+                      onChange={(e) => setParamForm({ ...paramForm, carencia_armazem_dias: e.target.value })}
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                    />
+                    <span className="text-[10px] text-stone-400">dias (normativa anual)</span>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1">
+                      <label className="text-[10px] font-medium text-stone-500 uppercase">Recepção/saca</label>
+                      <Tooltip text="Taxa de recepção (R$/saca), cobrada só na venda a terceiros. Deixe 0 se a normativa isentar (caso do milho atual)." position="bottom">
+                        <HelpCircle size={10} className="text-stone-300" />
+                      </Tooltip>
+                    </div>
+                    <input type="number" step="0.01" value={paramForm.taxa_recepcao_por_saca}
+                      onChange={(e) => setParamForm({ ...paramForm, taxa_recepcao_por_saca: e.target.value })}
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                    />
+                    <span className="text-[10px] text-stone-400">0 = isenta</span>
                   </div>
                   <div>
                     <label className="text-[10px] font-medium text-stone-500 uppercase">Armaz. kg/quinz</label>
@@ -470,6 +515,7 @@ export function EstoquePage() {
                       onChange={(e) => setParamForm({ ...paramForm, devolucao_por_saca: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
+                    <span className="text-[10px] text-stone-400">retirada/expedição</span>
                   </div>
                   <div className="col-span-2">
                     <label className="text-[10px] font-medium text-stone-500 uppercase">kg por saca</label>
@@ -487,62 +533,121 @@ export function EstoquePage() {
           </CardContent>
         </Card>
 
-        {/* Cálculo consolidado de taxas */}
+        {/* Cálculos consolidados — dois cenários (call 24-jun): venda a terceiros × venda ao armazém */}
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>
-              Cálculo Consolidado
-              <Tooltip text="Resumo dos custos da safra na data definida acima. 'Saldo a receber' = receita simulada - todas as taxas." position="bottom">
+              Cálculo Consolidado — dois cenários de venda
+              <Tooltip text="Mesmas tarifas, carências diferentes: a terceiros conta desde o depósito (carência curta); ao próprio armazém a contagem começa depois da carência da normativa anual. Compare os dois saldos para decidir a venda." position="bottom">
                 <HelpCircle size={12} className="inline-block ml-1 text-stone-300" />
               </Tooltip>
             </CardTitle>
             <Calendar size={16} className="text-stone-400" />
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-              <div className="rounded-lg bg-stone-50 p-3">
-                <p className="text-[10px] uppercase text-stone-500 font-medium tracking-wide">Quebra Técnica</p>
-                <p className="text-base font-bold text-red-600">{fmtKg(resumo.total_quebra_kg)}</p>
-                <p className="text-[10px] text-stone-400 mt-0.5">do total bruto</p>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {/* Cenário 1 — Venda a terceiros */}
+              <div className="rounded-xl border border-stone-200 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-stone-700 uppercase tracking-wide">🚚 Venda a Terceiros</p>
+                  <span className="text-[10px] text-stone-400">
+                    carência {paramForm?.carencia_dias ?? "—"} dias · desde o depósito
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-stone-50 p-2.5">
+                    <p className="text-[10px] uppercase text-stone-500 font-medium">Quebra Técnica</p>
+                    <p className="text-sm font-bold text-red-600">{fmtKg(resumo.total_quebra_kg)}</p>
+                    <p className="text-[10px] text-stone-400">líquido: {fmtSc(resumo.total_sc_liquida)}</p>
+                  </div>
+                  <div className="rounded-lg bg-stone-50 p-2.5">
+                    <p className="text-[10px] uppercase text-stone-500 font-medium">Tx Armazenagem</p>
+                    <p className="text-sm font-bold text-orange-600">{formatCurrency(resumo.total_taxa_armazenagem)}</p>
+                  </div>
+                  <div className="rounded-lg bg-stone-50 p-2.5">
+                    <p className="text-[10px] uppercase text-stone-500 font-medium">Tx Retirada</p>
+                    <p className="text-sm font-bold text-orange-600">{formatCurrency(resumo.total_taxa_devolucao)}</p>
+                  </div>
+                  <div className="rounded-lg bg-stone-50 p-2.5">
+                    <p className="text-[10px] uppercase text-stone-500 font-medium">Tx Recepção</p>
+                    <p className="text-sm font-bold text-orange-600">
+                      {resumo.total_taxa_recepcao > 0 ? formatCurrency(resumo.total_taxa_recepcao) : "isenta"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-red-50 border border-red-100 p-2.5">
+                    <p className="text-[10px] uppercase text-red-700 font-medium flex items-center gap-1">
+                      <TrendingDown size={10}/> Total a Descontar
+                    </p>
+                    <p className="text-sm font-bold text-red-700">{formatCurrency(resumo.total_a_descontar)}</p>
+                  </div>
+                  <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2.5">
+                    <p className="text-[10px] uppercase text-emerald-700 font-medium flex items-center gap-1">
+                      <Coins size={10}/> Venda (simulada)
+                    </p>
+                    <p className="text-sm font-bold text-emerald-700">{formatCurrency(resumo.total_valor_venda)}</p>
+                  </div>
+                </div>
+                <div className="rounded-lg bg-gradient-to-r from-[#0f1f1c] to-[#1a3028] px-3 py-2.5 text-white flex items-center justify-between">
+                  <p className="text-[10px] uppercase text-[#7ab8aa] font-medium flex items-center gap-1">
+                    <ArrowDownToLine size={11}/> Saldo se vender a terceiros
+                  </p>
+                  <p className="text-lg font-bold">{formatCurrency(resumo.saldo_a_receber)}</p>
+                </div>
               </div>
-              <div className="rounded-lg bg-stone-50 p-3">
-                <p className="text-[10px] uppercase text-stone-500 font-medium tracking-wide">Líquido após quebra</p>
-                <p className="text-base font-bold text-stone-800">{fmtKg(resumo.total_kg_liquido)}</p>
-                <p className="text-[10px] text-stone-400 mt-0.5">{fmtSc(resumo.total_sc_liquida)}</p>
-              </div>
-              <div className="rounded-lg bg-stone-50 p-3">
-                <p className="text-[10px] uppercase text-stone-500 font-medium tracking-wide">Taxa Armazenagem</p>
-                <p className="text-base font-bold text-orange-600">{formatCurrency(resumo.total_taxa_armazenagem)}</p>
-              </div>
-              <div className="rounded-lg bg-stone-50 p-3">
-                <p className="text-[10px] uppercase text-stone-500 font-medium tracking-wide">Taxa Devolução</p>
-                <p className="text-base font-bold text-orange-600">{formatCurrency(resumo.total_taxa_devolucao)}</p>
-              </div>
-              <div className="rounded-lg bg-red-50 border border-red-100 p-3">
-                <p className="text-[10px] uppercase text-red-700 font-medium tracking-wide flex items-center gap-1">
-                  <TrendingDown size={11}/> Total a Descontar
-                </p>
-                <p className="text-base font-bold text-red-700">{formatCurrency(resumo.total_a_descontar)}</p>
-              </div>
-              <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3">
-                <p className="text-[10px] uppercase text-emerald-700 font-medium tracking-wide flex items-center gap-1">
-                  <Coins size={11}/> Valor de Venda (simulado)
-                </p>
-                <p className="text-base font-bold text-emerald-700">{formatCurrency(resumo.total_valor_venda)}</p>
+
+              {/* Cenário 2 — Venda ao próprio armazém */}
+              <div className="rounded-xl border border-stone-200 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-stone-700 uppercase tracking-wide">
+                    🏬 Venda ao Armazém {armazem?.apelido ? `(${armazem.apelido})` : ""}
+                  </p>
+                  <span className="text-[10px] text-stone-400">
+                    carência {paramForm?.carencia_armazem_dias ?? "—"} dias · normativa anual
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-stone-50 p-2.5">
+                    <p className="text-[10px] uppercase text-stone-500 font-medium">Quebra Técnica</p>
+                    <p className="text-sm font-bold text-red-600">{fmtKg(resumo.armazem_total_quebra_kg)}</p>
+                    <p className="text-[10px] text-stone-400">líquido: {fmtSc(resumo.armazem_total_sc_liquida)}</p>
+                  </div>
+                  <div className="rounded-lg bg-stone-50 p-2.5">
+                    <p className="text-[10px] uppercase text-stone-500 font-medium">Tx Armazenagem</p>
+                    <p className="text-sm font-bold text-orange-600">{formatCurrency(resumo.armazem_total_taxa_armazenagem)}</p>
+                  </div>
+                  <div className="rounded-lg bg-stone-50 p-2.5">
+                    <p className="text-[10px] uppercase text-stone-500 font-medium">Tx Retirada</p>
+                    <p className="text-sm font-bold text-stone-400">não cobrada</p>
+                  </div>
+                  <div className="rounded-lg bg-stone-50 p-2.5">
+                    <p className="text-[10px] uppercase text-stone-500 font-medium">Tx Recepção</p>
+                    <p className="text-sm font-bold text-stone-400">não cobrada</p>
+                  </div>
+                  <div className="rounded-lg bg-red-50 border border-red-100 p-2.5">
+                    <p className="text-[10px] uppercase text-red-700 font-medium flex items-center gap-1">
+                      <TrendingDown size={10}/> Total a Descontar
+                    </p>
+                    <p className="text-sm font-bold text-red-700">{formatCurrency(resumo.armazem_total_a_descontar)}</p>
+                  </div>
+                  <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-2.5">
+                    <p className="text-[10px] uppercase text-emerald-700 font-medium flex items-center gap-1">
+                      <Coins size={10}/> Venda (simulada)
+                    </p>
+                    <p className="text-sm font-bold text-emerald-700">{formatCurrency(resumo.armazem_total_valor_venda)}</p>
+                  </div>
+                </div>
+                <div className="rounded-lg bg-gradient-to-r from-[#0f1f1c] to-[#1a3028] px-3 py-2.5 text-white flex items-center justify-between">
+                  <p className="text-[10px] uppercase text-[#7ab8aa] font-medium flex items-center gap-1">
+                    <ArrowDownToLine size={11}/> Saldo se vender ao armazém
+                  </p>
+                  <p className="text-lg font-bold">{formatCurrency(resumo.armazem_saldo_a_receber)}</p>
+                </div>
               </div>
             </div>
-            <div className="mt-4 rounded-lg bg-gradient-to-r from-[#0f1f1c] to-[#1a3028] p-4 text-white flex items-center justify-between">
-              <div>
-                <p className="text-[10px] uppercase text-[#7ab8aa] font-medium tracking-wide flex items-center gap-1">
-                  <ArrowDownToLine size={11}/> Saldo a receber se vender hoje
-                </p>
-                <p className="text-2xl font-bold">{formatCurrency(resumo.saldo_a_receber)}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase text-[#7ab8aa]">{resumo.qtd_depositos} DFe(s)</p>
-                <p className="text-xs">{fmtKg(resumo.total_kg_bruto)} brutos</p>
-              </div>
-            </div>
+            <p className="mt-3 text-[11px] text-stone-400">
+              {resumo.qtd_depositos} DFe(s) · {fmtKg(resumo.total_kg_bruto)} brutos · valores recalculados em tempo real
+              pela {"“Data Atual”"} dos parâmetros. Colunas da tabela abaixo seguem o cenário de venda a terceiros.
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -617,7 +722,8 @@ export function EstoquePage() {
                 )}
                 {!loading && paged.length === 0 && (
                   <tr><td colSpan={16} className="px-4 py-12 text-center text-stone-400">
-                    Nenhum depósito encontrado. Clique em &quot;Novo Depósito&quot; para começar.
+                    Sem depósitos nesta seleção — estoque zerado ou ainda não lançado.
+                    Clique em &quot;Novo Depósito&quot; para registrar uma entrada.
                   </td></tr>
                 )}
                 {!loading && paged.map((r) => (
