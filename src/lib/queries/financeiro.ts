@@ -82,16 +82,18 @@ export async function listarTransacoesEmpresa(
   filtros: ListarTransacoesFiltros = {},
   page = 1,
   pageSize = 25,
+  sortDir: "asc" | "desc" = "asc",
 ): Promise<ListarTransacoesResult> {
   const supabase = createClient();
 
-  // Ordem CRESCENTE por vencimento (UX-03): do mais antigo p/ o mais recente,
-  // com created_at como desempate estável.
+  // Ordem por vencimento — default CRESCENTE (UX-03), invertível pelo clique
+  // no cabeçalho "Vencimento" da tela. created_at desempata de forma estável.
+  const asc = sortDir === "asc";
   let q = supabase
     .from("transacoes_empresa")
     .select(TRANS_SELECT, { count: "exact" })
-    .order("data", { ascending: true })
-    .order("created_at", { ascending: true });
+    .order("data", { ascending: asc })
+    .order("created_at", { ascending: asc });
 
   q = aplicarFiltros(q, filtros);
 

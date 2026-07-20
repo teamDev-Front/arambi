@@ -15,6 +15,7 @@ import {
   Plus, FileText, Search, Edit2, Trash2,
   TrendingUp, TrendingDown, Loader2,
   FileDown, FileSpreadsheet, CalendarRange,
+  ChevronUp, ChevronDown,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
@@ -123,6 +124,8 @@ export function FinanceiroPage() {
   const [filterDataDe, setFilterDataDe] = useState("");
   const [filterDataAte, setFilterDataAte] = useState("");
   const [page, setPage] = useState(1);
+  // Ordenação por vencimento — alternada pelo clique no cabeçalho da coluna.
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   // ---- exportação (REL-01/02) ----
   const [exportandoPdf, setExportandoPdf] = useState(false);
@@ -309,7 +312,7 @@ export function FinanceiroPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const { rows, total } = await listarTransacoesEmpresa(filtrosAtuais, page, PAGE_SIZE);
+      const { rows, total } = await listarTransacoesEmpresa(filtrosAtuais, page, PAGE_SIZE, sortDir);
       setRows(rows);
       setTotal(total);
     } catch (e: unknown) {
@@ -318,7 +321,7 @@ export function FinanceiroPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtrosAtuais, page]);
+  }, [filtrosAtuais, page, sortDir]);
   // fetchData sincroniza a tabela com os filtros/página — o setState interno é intencional.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -614,7 +617,18 @@ export function FinanceiroPage() {
                       className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
                     />
                   </th>
-                  {["Vencimento","Emissão","Conta","Centro de Custo","Descrição","Fornecedor","Banco","Status","Valor","Ações"].map((h) => (
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => { setSortDir((d) => (d === "asc" ? "desc" : "asc")); setPage(1); }}
+                      title={sortDir === "asc" ? "Mais antigos primeiro — clique para inverter" : "Mais recentes primeiro — clique para inverter"}
+                      className="inline-flex items-center gap-1 uppercase tracking-wide font-semibold text-stone-500 hover:text-stone-800 transition-colors cursor-pointer select-none"
+                    >
+                      Vencimento
+                      {sortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    </button>
+                  </th>
+                  {["Emissão","Conta","Centro de Custo","Descrição","Fornecedor","Banco","Status","Valor","Ações"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
