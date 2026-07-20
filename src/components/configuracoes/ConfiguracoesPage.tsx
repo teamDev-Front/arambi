@@ -1,15 +1,17 @@
 "use client";
 import { useEffect, useState } from "react";
-import { ListTree, Palette, ShieldAlert } from "lucide-react";
+import { ListTree, Palette, ShieldAlert, Users } from "lucide-react";
 import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import { PlanoContasTab } from "./PlanoContasTab";
 import { StatusCoresTab } from "./StatusCoresTab";
+import { ColaboradoresTab } from "./ColaboradoresTab";
 
-type Aba = "plano" | "status";
+type Aba = "plano" | "status" | "colaboradores";
 
 const ABAS: { id: Aba; label: string; icon: typeof ListTree }[] = [
   { id: "plano", label: "Plano de Contas", icon: ListTree },
   { id: "status", label: "Status & Cores", icon: Palette },
+  { id: "colaboradores", label: "Colaboradores", icon: Users },
 ];
 
 export function ConfiguracoesPage() {
@@ -31,7 +33,7 @@ export function ConfiguracoesPage() {
       <div>
         <h1 className="text-xl font-bold text-[#0f1f1c]">Configurações</h1>
         <p className="text-sm text-stone-500">
-          Gerencie o plano de contas, os status dos lançamentos e suas cores. Alterações valem para todo o sistema.
+          Gerencie o plano de contas, os status dos lançamentos, suas cores e os colaboradores do portal. Alterações valem para todo o sistema.
         </p>
       </div>
 
@@ -62,7 +64,9 @@ export function ConfiguracoesPage() {
         ))}
       </div>
 
-      {aba === "plano" ? <PlanoContasTab canEdit={canEdit} /> : <StatusCoresTab canEdit={canEdit} />}
+      {aba === "plano" && <PlanoContasTab canEdit={canEdit} />}
+      {aba === "status" && <StatusCoresTab canEdit={canEdit} />}
+      {aba === "colaboradores" && <ColaboradoresTab canEdit={canEdit} />}
     </div>
   );
 }

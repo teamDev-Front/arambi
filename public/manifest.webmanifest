@@ -1,0 +1,19 @@
+{
+  "name": "AramBI – Portal do Colaborador",
+  "short_name": "AramBI Campo",
+  "description": "Talões de uso de máquinas/veículos e abastecimentos — Agropecuária Aramburu",
+  "id": "/colaborador",
+  "start_url": "/colaborador",
+  "scope": "/colaborador",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f0e8",
+  "theme_color": "#1a2e28",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon-arambi.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

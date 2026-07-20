@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#3a6230"/>
+  <g transform="translate(256 276)">
+    <path d="M0 -150 C 95 -110 120 -10 40 90 C 20 115 8 128 0 136 C -8 128 -20 115 -40 90 C -120 -10 -95 -110 0 -150 Z"
+          fill="#f5f0e8" opacity="0.96"/>
+    <path d="M0 -128 L0 120 M0 -40 L-52 -84 M0 20 L54 -30 M0 76 L-46 34"
+          stroke="#3a6230" stroke-width="14" stroke-linecap="round" fill="none"/>
+  </g>
+  <text x="256" y="470" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold"
+        font-size="64" fill="#f5f0e8" letter-spacing="4">ARAMBI</text>
+</svg>

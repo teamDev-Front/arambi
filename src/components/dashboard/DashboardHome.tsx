@@ -23,6 +23,7 @@ import { STATUS_ARAMBURU_LABEL } from "@/types";
 import { BancoDetalheModal } from "@/components/dashboard/BancoDetalheModal";
 import { LancamentoDetalheModal } from "@/components/dashboard/LancamentoDetalheModal";
 import { SaldosBancariosGrid } from "@/components/dashboard/SaldosBancariosGrid";
+import { AgroPanoramaSection } from "@/components/dashboard/AgroPanoramaSection";
 import { useToast } from "@/components/ui/Toast";
 
 const PIE_COLORS = ["#246354", "#a67c20", "#3a6230", "#c49830", "#7aa870", "#d9b455", "#1a4d40", "#836016"];
@@ -170,6 +171,9 @@ export function DashboardHome() {
           </Link>
         ))}
       </div>
+
+      {/* Panorama Agro — calendários de chuva/vacinação + alertas (call 14/jul) */}
+      <AgroPanoramaSection />
 
       {/* Saldos por Banco — fileira em destaque */}
       <SaldosBancariosGrid

@@ -57,12 +57,42 @@ export type {
   DistribuicaoLucroYtdRow,
   FazendaAramburuYtdRow,
   ValidacaoConsistenciaRow,
+  // Módulos agro jul/2026
+  AnimalLoteStatus,
+  AnimalEventoTipo,
+  OcorrenciaSeveridade,
+  EquipamentoTipo,
+  EquipamentoStatus,
+  MedidorTipo,
+  CombustivelTipo,
+  ColaboradorStatus,
+  TalaoStatus,
+  CombustivelFonte,
+  CanteiroCicloStatus,
+  AnimalEspecieRow,
+  AnimalLoteRow,
+  AnimalEventoRow,
+  AnimalOcorrenciaRow,
+  EquipamentoRow,
+  EquipamentoManutencaoRow,
+  EquipamentoDocumentoRow,
+  ChuvaRow,
+  ColaboradorRow,
+  TalaoUsoRow,
+  AbastecimentoRow,
+  ReservatorioEntradaRow,
+  HortaCulturaRow,
+  CanteiroRow,
+  CanteiroCicloRow,
 } from "./database";
 
 import type {
   StatusAramburu, StatusDL, FormaPgto, TipoDespesa, ObsObra,
   CulturaSafra, VendaStatus, SafraDepositoStatus, PdfMonkeySlug,
   DocumentoGeradoTipo,
+  AnimalLoteStatus, AnimalEventoTipo, OcorrenciaSeveridade,
+  EquipamentoTipo, EquipamentoStatus, MedidorTipo, CombustivelTipo,
+  ColaboradorStatus, TalaoStatus, CombustivelFonte, CanteiroCicloStatus,
 } from "./database";
 
 // ----------------------------------------------------------------------------
@@ -222,4 +252,76 @@ export const DOCUMENTO_GERADO_LABEL_CURTO: Record<DocumentoGeradoTipo, string> =
   termo_autorizacao_pagamento_terceiros: "Autorização a Terceiros",
   termo_transferencia_bancaria:          "Transferência Bancária",
   contrato_prestacao_servicos:           "Contrato de Serviços",
+};
+
+// ----------------------------------------------------------------------------
+// Labels — Módulos agro jul/2026 (animais, maquinário, colaboradores, horta)
+// ----------------------------------------------------------------------------
+export const ANIMAL_LOTE_STATUS_LABEL: Record<AnimalLoteStatus, string> = {
+  ativo:    "Ativo",
+  vendido:  "Vendido",
+  abatido:  "Abatido",
+  inativo:  "Inativo",
+};
+
+export const ANIMAL_EVENTO_TIPO_LABEL: Record<AnimalEventoTipo, string> = {
+  vacina:    "Vacina",
+  vermifugo: "Vermífugo",
+  outro:     "Outro",
+};
+
+export const OCORRENCIA_SEVERIDADE_LABEL: Record<OcorrenciaSeveridade, string> = {
+  info:    "Informativo",
+  atencao: "Atenção",
+  critico: "Crítico",
+};
+
+export const EQUIPAMENTO_TIPO_LABEL: Record<EquipamentoTipo, string> = {
+  trator:     "Trator",
+  implemento: "Implemento",
+  veiculo:    "Veículo",
+  outro:      "Outro",
+};
+
+export const EQUIPAMENTO_STATUS_LABEL: Record<EquipamentoStatus, string> = {
+  em_operacao:   "Em Operação",
+  parado:        "Parado",
+  em_manutencao: "Em Manutenção",
+  estragou:      "Estragou",
+};
+
+export const MEDIDOR_TIPO_LABEL: Record<MedidorTipo, string> = {
+  horimetro: "Horímetro (h)",
+  km:        "Quilometragem (km)",
+  nenhum:    "Sem medidor",
+};
+
+export const COMBUSTIVEL_TIPO_LABEL: Record<CombustivelTipo, string> = {
+  diesel:   "Diesel",
+  gasolina: "Gasolina",
+  nenhum:   "—",
+};
+
+export const COLABORADOR_STATUS_LABEL: Record<ColaboradorStatus, string> = {
+  ativo:      "Ativo",
+  pendente:   "Aguardando aprovação",
+  desativado: "Desativado",
+};
+
+export const TALAO_STATUS_LABEL: Record<TalaoStatus, string> = {
+  aberto:  "Em uso",
+  fechado: "Finalizado",
+};
+
+export const COMBUSTIVEL_FONTE_LABEL: Record<CombustivelFonte, string> = {
+  tanque_diesel:      "Tanque de Diesel",
+  container_gasolina: "Container de Gasolina",
+  posto_externo:      "Posto Externo",
+};
+
+export const CANTEIRO_CICLO_STATUS_LABEL: Record<CanteiroCicloStatus, string> = {
+  plantado:    "Plantado",
+  crescimento: "Em Crescimento",
+  colheita:    "Pronto p/ Colheita",
+  finalizado:  "Finalizado",
 };

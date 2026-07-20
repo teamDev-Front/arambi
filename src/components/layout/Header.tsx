@@ -1,8 +1,8 @@
 "use client";
-import { Bell, User, LogOut, ChevronDown } from "lucide-react";
+import { User, LogOut, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import Link from "next/link";
-import { cn } from "@/lib/utils/cn";
+import { NotificacoesBell } from "@/components/layout/NotificacoesBell";
 
 interface HeaderProps {
   userName?: string;
@@ -23,11 +23,8 @@ export function Header({ userName = "Usuário", userRole = "Admin", pageTitle }:
       </div>
 
       <div className="flex items-center gap-3">
-        {/* Notification bell */}
-        <button className="relative p-2 rounded-lg hover:bg-stone-100 text-stone-500 transition">
-          <Bell size={18} />
-          <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full" />
-        </button>
+        {/* Notification bell — Central de Alertas */}
+        <NotificacoesBell />
 
         {/* User menu */}
         <div className="relative">

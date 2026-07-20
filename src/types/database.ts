@@ -42,6 +42,19 @@ export type DocumentoGeradoTipo =
 
 export type IAProvider = "gemini" | "openai";
 
+// Enums — módulos agro jul/2026 (animais, maquinário, portal do colaborador, horta)
+export type AnimalLoteStatus     = "ativo" | "vendido" | "abatido" | "inativo";
+export type AnimalEventoTipo     = "vacina" | "vermifugo" | "outro";
+export type OcorrenciaSeveridade = "info" | "atencao" | "critico";
+export type EquipamentoTipo      = "trator" | "implemento" | "veiculo" | "outro";
+export type EquipamentoStatus    = "em_operacao" | "parado" | "em_manutencao" | "estragou";
+export type MedidorTipo          = "horimetro" | "km" | "nenhum";
+export type CombustivelTipo      = "diesel" | "gasolina" | "nenhum";
+export type ColaboradorStatus    = "ativo" | "pendente" | "desativado";
+export type TalaoStatus          = "aberto" | "fechado";
+export type CombustivelFonte     = "tanque_diesel" | "container_gasolina" | "posto_externo";
+export type CanteiroCicloStatus  = "plantado" | "crescimento" | "colheita" | "finalizado";
+
 // ============================================================================
 // Tabelas
 // ============================================================================
@@ -664,6 +677,161 @@ export type ChatSessaoRecenteRow = {
 };
 
 // ============================================================================
+// Rows — módulos agro jul/2026 (migrations 0038–0042)
+// ============================================================================
+
+export type AnimalEspecieRow = WithTimestamps & {
+  id: string;
+  nome: string;
+  icone: string;                            // emoji do card ("🐄")
+  ordem: number | null;
+  ativo: boolean;
+};
+
+export type AnimalLoteRow = WithTimestamps & {
+  id: string;
+  codigo: string;                           // "LOTE-01"
+  especie_id: string;
+  categoria: string | null;                 // "Matriz", "Leiteiras"
+  raca: string | null;
+  idade_meses: number | null;
+  quantidade: number;
+  status: AnimalLoteStatus;
+  observacoes: string | null;
+};
+
+export type AnimalEventoRow = WithTimestamps & {
+  id: string;
+  lote_id: string;
+  tipo: AnimalEventoTipo;
+  nome: string;                             // "Brucelose"
+  data_aplicacao: string | null;
+  proxima_data: string | null;              // alimenta calendário + alertas
+  observacao: string | null;
+};
+
+export type AnimalOcorrenciaRow = WithTimestamps & {
+  id: string;
+  lote_id: string;
+  data: string;
+  descricao: string;
+  severidade: OcorrenciaSeveridade;
+  resolvida: boolean;
+};
+
+export type EquipamentoRow = WithTimestamps & {
+  id: string;
+  codigo: string;                           // "TR-001"
+  nome: string;                             // "Trator CBT"
+  tipo: EquipamentoTipo;
+  marca_modelo: string | null;
+  ano: number | null;
+  medidor_tipo: MedidorTipo;
+  medidor_atual: number | null;             // último horímetro/KM conhecido
+  status: EquipamentoStatus;
+  localizacao: string | null;
+  combustivel: CombustivelTipo;
+  observacoes: string | null;
+  ativo: boolean;
+};
+
+export type EquipamentoManutencaoRow = WithTimestamps & {
+  id: string;
+  equipamento_id: string;
+  descricao: string;                        // "Troca de óleo"
+  data_prevista: string | null;
+  medidor_previsto: number | null;          // ex.: aos 2.900h
+  realizada_em: string | null;              // null = pendente
+  observacao: string | null;
+};
+
+export type EquipamentoDocumentoRow = WithTimestamps & {
+  id: string;
+  equipamento_id: string;
+  tipo: string;                             // "Licenciamento", "Seguro"
+  descricao: string | null;
+  vencimento: string;
+};
+
+export type ChuvaRow = WithTimestamps & {
+  id: string;
+  data: string;                             // única por dia
+  milimetros: number;
+  observacao: string | null;
+};
+
+export type ColaboradorRow = WithTimestamps & {
+  id: string;
+  nome: string;
+  cpf: string;                              // só dígitos (11)
+  status: ColaboradorStatus;
+  desativado_em: string | null;
+};
+
+export type TalaoUsoRow = WithTimestamps & {
+  id: string;
+  colaborador_id: string;
+  equipamento_id: string;
+  inicio_em: string;
+  medidor_inicial: number;
+  medidor_inicial_sugerido: number | null;  // o que o sistema sugeriu (último final)
+  discrepancia: number;                     // inicial - sugerido (≠0 → alerta)
+  discrepancia_regularizada: boolean;
+  regularizada_obs: string | null;
+  fim_em: string | null;
+  medidor_final: number | null;
+  equipamento_seguranca: boolean | null;
+  observacoes: string | null;
+  defeitos: string | null;
+  status: TalaoStatus;
+};
+
+export type AbastecimentoRow = WithTimestamps & {
+  id: string;
+  colaborador_id: string;
+  equipamento_id: string | null;            // null = abasteceu veículo externo
+  fonte: CombustivelFonte;
+  data: string;                             // timestamptz
+  medidor_inicial: number | null;           // medidor da bomba/reservatório
+  medidor_final: number | null;
+  litros: number;
+  observacao: string | null;
+};
+
+export type ReservatorioEntradaRow = WithTimestamps & {
+  id: string;
+  fonte: CombustivelFonte;                  // tanque_diesel | container_gasolina
+  data: string;
+  litros: number;
+  observacao: string | null;
+};
+
+export type HortaCulturaRow = WithTimestamps & {
+  id: string;
+  nome: string;                             // "Alface"
+  ciclo_dias_padrao: number | null;         // 45 — pré-preenche a previsão
+  ativo: boolean;
+};
+
+export type CanteiroRow = WithTimestamps & {
+  id: string;
+  numero: number;                           // Canteiro 1, 2, 3...
+  area_m2: number | null;
+  ativo: boolean;
+};
+
+export type CanteiroCicloRow = WithTimestamps & {
+  id: string;
+  canteiro_id: string;
+  cultura_id: string;
+  data_plantio: string;
+  previsao_colheita: string | null;         // manual (decisão do call)
+  status: CanteiroCicloStatus;
+  colhido_em: string | null;
+  observacao: string | null;
+};
+
+// ============================================================================
 // Database type (formato esperado pelo @supabase/postgrest-js)
 // ============================================================================
 // Cada Tabela precisa de Row + Insert + Update + Relationships (mesmo vazio).
@@ -874,6 +1042,97 @@ export interface Database {
           Pick<OrcamentoMensalRow, "mes_referencia" | "tipo_despesa" | "valor_orcado"> &
           Partial<Omit<OrcamentoMensalRow, "id" | "created_at" | "updated_at">>;
         Update: Partial<Omit<OrcamentoMensalRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      // ---- Módulos agro jul/2026 (migrations 0038–0042) ----
+      animal_especies: {
+        Row: AnimalEspecieRow;
+        Insert: Pick<AnimalEspecieRow, "nome"> & Partial<Omit<AnimalEspecieRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<AnimalEspecieRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      animal_lotes: {
+        Row: AnimalLoteRow;
+        Insert: Pick<AnimalLoteRow, "codigo" | "especie_id" | "quantidade"> & Partial<Omit<AnimalLoteRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<AnimalLoteRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      animal_eventos: {
+        Row: AnimalEventoRow;
+        Insert: Pick<AnimalEventoRow, "lote_id" | "nome"> & Partial<Omit<AnimalEventoRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<AnimalEventoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      animal_ocorrencias: {
+        Row: AnimalOcorrenciaRow;
+        Insert: Pick<AnimalOcorrenciaRow, "lote_id" | "descricao"> & Partial<Omit<AnimalOcorrenciaRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<AnimalOcorrenciaRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      equipamentos: {
+        Row: EquipamentoRow;
+        Insert: Pick<EquipamentoRow, "codigo" | "nome" | "tipo"> & Partial<Omit<EquipamentoRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<EquipamentoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      equipamento_manutencoes: {
+        Row: EquipamentoManutencaoRow;
+        Insert: Pick<EquipamentoManutencaoRow, "equipamento_id" | "descricao"> & Partial<Omit<EquipamentoManutencaoRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<EquipamentoManutencaoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      equipamento_documentos: {
+        Row: EquipamentoDocumentoRow;
+        Insert: Pick<EquipamentoDocumentoRow, "equipamento_id" | "tipo" | "vencimento"> & Partial<Omit<EquipamentoDocumentoRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<EquipamentoDocumentoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      chuvas: {
+        Row: ChuvaRow;
+        Insert: Pick<ChuvaRow, "data" | "milimetros"> & Partial<Omit<ChuvaRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<ChuvaRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      colaboradores: {
+        Row: ColaboradorRow;
+        Insert: Pick<ColaboradorRow, "nome" | "cpf"> & Partial<Omit<ColaboradorRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<ColaboradorRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      talao_usos: {
+        Row: TalaoUsoRow;
+        Insert: Pick<TalaoUsoRow, "colaborador_id" | "equipamento_id" | "inicio_em" | "medidor_inicial"> & Partial<Omit<TalaoUsoRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<TalaoUsoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      abastecimentos: {
+        Row: AbastecimentoRow;
+        Insert: Pick<AbastecimentoRow, "colaborador_id" | "fonte" | "data" | "litros"> & Partial<Omit<AbastecimentoRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<AbastecimentoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      reservatorio_entradas: {
+        Row: ReservatorioEntradaRow;
+        Insert: Pick<ReservatorioEntradaRow, "fonte" | "data" | "litros"> & Partial<Omit<ReservatorioEntradaRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<ReservatorioEntradaRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      horta_culturas: {
+        Row: HortaCulturaRow;
+        Insert: Pick<HortaCulturaRow, "nome"> & Partial<Omit<HortaCulturaRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<HortaCulturaRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      canteiros: {
+        Row: CanteiroRow;
+        Insert: Pick<CanteiroRow, "numero"> & Partial<Omit<CanteiroRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<CanteiroRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      canteiro_ciclos: {
+        Row: CanteiroCicloRow;
+        Insert: Pick<CanteiroCicloRow, "canteiro_id" | "cultura_id" | "data_plantio"> & Partial<Omit<CanteiroCicloRow, "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<CanteiroCicloRow, "id" | "created_at" | "updated_at">>;
         Relationships: EmptyRels;
       };
     };
