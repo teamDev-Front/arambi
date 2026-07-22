@@ -17,6 +17,8 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Tabs } from "@/components/ui/Tabs";
 import { CalendarioMes, isoLocalHoje } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDate } from "@/lib/utils/format";
 import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import {
@@ -535,6 +537,7 @@ function LoteModal({ editando, especies, onClose, onSaved }: {
     status: editando?.status ?? "ativo",
     observacoes: editando?.observacoes ?? null,
   });
+  const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
     if (!form.codigo.trim()) { toast.warning("Informe o código do lote."); return; }
@@ -553,7 +556,7 @@ function LoteModal({ editando, especies, onClose, onSaved }: {
   }
 
   return (
-    <Modal open onClose={onClose} title={editando ? `Editar ${editando.codigo}` : "Novo Lote"} size="lg" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title={editando ? `Editar ${editando.codigo}` : "Novo Lote"} size="lg" closeOnBackdrop={false}>
       <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Input label="Código do lote *" placeholder="LOTE-01" value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} />
         <Select label="Espécie *" value={form.especie_id} onChange={(e) => setForm({ ...form, especie_id: e.target.value })}>
@@ -573,9 +576,10 @@ function LoteModal({ editando, especies, onClose, onSaved }: {
         </div>
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>{editando ? "Salvar" : "Criar Lote"}</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }
@@ -600,6 +604,7 @@ function EventoModal({ editando, loteIdInicial, lotes, onClose, onSaved }: {
     proxima_data: editando?.proxima_data ?? null,
     observacao: editando?.observacao ?? null,
   });
+  const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
     if (!form.lote_id) { toast.warning("Selecione o lote."); return; }
@@ -618,7 +623,7 @@ function EventoModal({ editando, loteIdInicial, lotes, onClose, onSaved }: {
   }
 
   return (
-    <Modal open onClose={onClose} title={editando ? "Editar Vacinação" : "Registrar Vacinação"} size="lg" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title={editando ? "Editar Vacinação" : "Registrar Vacinação"} size="lg" closeOnBackdrop={false}>
       <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Select label="Lote *" value={form.lote_id} onChange={(e) => setForm({ ...form, lote_id: e.target.value })}>
           {lotes.map((l) => <option key={l.id} value={l.id}>{l.codigo}</option>)}
@@ -637,9 +642,10 @@ function EventoModal({ editando, loteIdInicial, lotes, onClose, onSaved }: {
         </div>
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>{editando ? "Salvar" : "Registrar"}</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }
@@ -661,6 +667,7 @@ function OcorrenciaModal({ loteIdInicial, lotes, onClose, onSaved }: {
     descricao: "",
     severidade: "atencao" as OcorrenciaSeveridade,
   });
+  const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
     if (!form.lote_id) { toast.warning("Selecione o lote."); return; }
@@ -678,7 +685,7 @@ function OcorrenciaModal({ loteIdInicial, lotes, onClose, onSaved }: {
   }
 
   return (
-    <Modal open onClose={onClose} title="Nova Ocorrência de Saúde" size="lg" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title="Nova Ocorrência de Saúde" size="lg" closeOnBackdrop={false}>
       <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Select label="Lote *" value={form.lote_id} onChange={(e) => setForm({ ...form, lote_id: e.target.value })}>
           {lotes.map((l) => <option key={l.id} value={l.id}>{l.codigo}</option>)}
@@ -694,9 +701,10 @@ function OcorrenciaModal({ loteIdInicial, lotes, onClose, onSaved }: {
         </Select>
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>Registrar</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }

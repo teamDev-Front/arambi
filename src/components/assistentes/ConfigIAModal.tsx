@@ -4,6 +4,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { createClient } from "@/lib/supabase/client";
 import type { IAProvider, ConfigIARow } from "@/types";
 import { Eye, EyeOff, KeyRound, Save, Sparkles } from "lucide-react";
@@ -58,6 +60,9 @@ export function ConfigIAModal({ open, onClose }: Props) {
   const [showOpenAI, setShowOpenAI] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Snapshot só depois do load assíncrono (open && !loading) — senão o config
+  // carregado marcaria o formulário como "sujo" sem o usuário digitar nada.
+  const guard = useUnsavedGuard(open && !loading, config, onClose);
 
   useEffect(() => {
     if (!open) return;
@@ -102,7 +107,7 @@ export function ConfigIAModal({ open, onClose }: Props) {
   const openaiPronto = config.openai_api_key.trim().length > 0;
 
   return (
-    <Modal open={open} onClose={onClose} title="Configuração das IAs" size="lg">
+    <Modal open={open} onClose={guard.requestClose} title="Configuração das IAs" size="lg">
       <div className="p-6 space-y-5">
         <p className="text-xs text-stone-500 leading-relaxed">
           Cadastre as chaves de API dos provedores de IA suportados e escolha qual deles
@@ -232,7 +237,8 @@ export function ConfigIAModal({ open, onClose }: Props) {
       </div>
 
       <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-end gap-2 bg-stone-50/50">
-        <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
+        <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
+        <Button type="button" variant="ghost" onClick={guard.requestClose} disabled={saving}>
           Cancelar
         </Button>
         <Button onClick={handleSalvar} disabled={loading || saving} loading={saving}>

@@ -3,6 +3,8 @@ import { useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Input";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { FileText } from "lucide-react";
 import type { RelatorioSociosOverrides } from "@/lib/pdfmonkey/types";
 
@@ -24,6 +26,7 @@ export function SociosOverridesModal({ open, mesRef, onClose, onConfirmar, submi
     nota_impostos:            "",
     nota_distribuicao_lucro:  "",
   });
+  const guard = useUnsavedGuard(open, v, onClose);
 
   function update<K extends keyof RelatorioSociosOverrides>(k: K, val: string) {
     setV((prev) => ({ ...prev, [k]: val }));
@@ -39,7 +42,7 @@ export function SociosOverridesModal({ open, mesRef, onClose, onConfirmar, submi
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={`Relatório Sócios — Notas editáveis (${mesRef})`} size="xl">
+    <Modal open={open} onClose={guard.requestClose} title={`Relatório Sócios — Notas editáveis (${mesRef})`} size="xl">
       <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
         <p className="text-xs text-stone-500">
           Os valores e gráficos são <strong>gerados automaticamente</strong> a partir dos lançamentos do mês.
@@ -101,11 +104,12 @@ export function SociosOverridesModal({ open, mesRef, onClose, onConfirmar, submi
       </div>
 
       <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-end gap-2 bg-stone-50/50">
-        <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>Cancelar</Button>
+        <Button type="button" variant="ghost" onClick={guard.requestClose} disabled={submitting}>Cancelar</Button>
         <Button onClick={handleConfirmar} disabled={submitting} loading={submitting}>
           <FileText size={13} /> Gerar PDF
         </Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }

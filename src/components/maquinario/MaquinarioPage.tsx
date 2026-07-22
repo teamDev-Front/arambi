@@ -17,6 +17,8 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Tabs } from "@/components/ui/Tabs";
 import { isoLocalHoje } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDate } from "@/lib/utils/format";
 import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import {
@@ -474,6 +476,7 @@ function EquipamentoModal({ editando, onClose, onSaved }: {
     observacoes: editando?.observacoes ?? null,
     ativo: editando?.ativo ?? true,
   });
+  const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
     if (!form.codigo.trim()) { toast.warning("Informe o código."); return; }
@@ -492,7 +495,7 @@ function EquipamentoModal({ editando, onClose, onSaved }: {
   }
 
   return (
-    <Modal open onClose={onClose} title={editando ? `Editar ${editando.codigo}` : "Novo Equipamento"} size="lg" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title={editando ? `Editar ${editando.codigo}` : "Novo Equipamento"} size="lg" closeOnBackdrop={false}>
       <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Input label="Código *" placeholder="TR-001" value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} />
         <Input label="Nome *" placeholder="Trator CBT, Caminhonete S10..." value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} />
@@ -537,9 +540,10 @@ function EquipamentoModal({ editando, onClose, onSaved }: {
         )}
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>{editando ? "Salvar" : "Criar Equipamento"}</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }
@@ -564,6 +568,7 @@ function ManutencaoModal({ editando, equipamentoIdInicial, equipamentos, onClose
     realizada_em: editando?.realizada_em ?? null,
     observacao: editando?.observacao ?? null,
   });
+  const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
     if (!form.equipamento_id) { toast.warning("Selecione o equipamento."); return; }
@@ -582,7 +587,7 @@ function ManutencaoModal({ editando, equipamentoIdInicial, equipamentos, onClose
   }
 
   return (
-    <Modal open onClose={onClose} title={editando ? "Editar Manutenção" : "Agendar Manutenção"} size="lg" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title={editando ? "Editar Manutenção" : "Agendar Manutenção"} size="lg" closeOnBackdrop={false}>
       <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="sm:col-span-2">
           <Select label="Equipamento *" value={form.equipamento_id} onChange={(e) => setForm({ ...form, equipamento_id: e.target.value })}>
@@ -602,9 +607,10 @@ function ManutencaoModal({ editando, equipamentoIdInicial, equipamentos, onClose
         </div>
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>{editando ? "Salvar" : "Agendar"}</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }
@@ -626,6 +632,7 @@ function DocumentoModal({ equipamentoIdInicial, equipamentos, onClose, onSaved }
     descricao: null as string | null,
     vencimento: "",
   });
+  const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
     if (!form.equipamento_id) { toast.warning("Selecione o equipamento."); return; }
@@ -644,7 +651,7 @@ function DocumentoModal({ equipamentoIdInicial, equipamentos, onClose, onSaved }
   }
 
   return (
-    <Modal open onClose={onClose} title="Novo Documento" size="md" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title="Novo Documento" size="md" closeOnBackdrop={false}>
       <div className="p-6 space-y-4">
         <Select label="Equipamento *" value={form.equipamento_id} onChange={(e) => setForm({ ...form, equipamento_id: e.target.value })}>
           {equipamentos.map((eq) => <option key={eq.id} value={eq.id}>{eq.codigo} — {eq.nome}</option>)}
@@ -654,9 +661,10 @@ function DocumentoModal({ equipamentoIdInicial, equipamentos, onClose, onSaved }
         <Input label="Vencimento *" type="date" value={form.vencimento} onChange={(e) => setForm({ ...form, vencimento: e.target.value })} />
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>Cadastrar</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }

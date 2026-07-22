@@ -61,6 +61,8 @@ import {
   type ContaBancariaSocioRow,
 } from "@/types";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 
 const PAGE_SIZE = 25;
 
@@ -139,6 +141,7 @@ export function FinanceiroPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
   const [saving, setSaving] = useState(false);
 
   // ---- saída global × detalhada (call 24-jun: conta 2.8 Distribuição de Lucro) ----
@@ -722,7 +725,7 @@ export function FinanceiroPage() {
       {/* Modal CRUD */}
       <Modal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={guard.requestClose}
         title={editId ? "Editar Lançamento" : "Novo Lançamento"}
         size="lg"
       >
@@ -879,13 +882,14 @@ export function FinanceiroPage() {
             rows={2} placeholder="Anotações livres (exceções, regras especiais…)" />
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={guard.requestClose}>Cancelar</Button>
             <Button onClick={handleSave} loading={saving} disabled={saving}>
               {editId ? "Salvar Alterações" : "Adicionar"}
             </Button>
           </div>
         </div>
       </Modal>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
 
       {/* Geração de relatório pelo recorte (RF-FIN-09) */}
       <RelatorioEscopoModal

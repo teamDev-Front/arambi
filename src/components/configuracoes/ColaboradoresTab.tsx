@@ -12,6 +12,8 @@ import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDate } from "@/lib/utils/format";
 import {
   listarColaboradores, criarColaborador, atualizarColaborador,
@@ -165,6 +167,7 @@ function ColaboradorModal({ editando, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
   const [nome, setNome] = useState(editando?.nome ?? "");
   const [cpf, setCpf] = useState(editando ? formatarCpf(editando.cpf) : "");
+  const guard = useUnsavedGuard(true, { nome, cpf }, onClose);
 
   async function salvar() {
     if (nome.trim().length < 3) { toast.warning("Informe o nome completo."); return; }
@@ -189,7 +192,7 @@ function ColaboradorModal({ editando, onClose, onSaved }: {
   }
 
   return (
-    <Modal open onClose={onClose} title={editando ? `Editar ${editando.nome}` : "Novo Colaborador"} size="md" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title={editando ? `Editar ${editando.nome}` : "Novo Colaborador"} size="md" closeOnBackdrop={false}>
       <div className="p-6 space-y-4">
         <Input label="Nome completo *" placeholder="João da Silva" value={nome} onChange={(e) => setNome(e.target.value)} />
         <Input
@@ -203,9 +206,10 @@ function ColaboradorModal({ editando, onClose, onSaved }: {
         {editando && <p className="text-xs text-stone-400">O CPF não pode ser alterado (é a identificação no portal).</p>}
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>{editando ? "Salvar" : "Cadastrar"}</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }

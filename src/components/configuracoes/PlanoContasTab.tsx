@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { Plus, Edit2, Trash2, Search, Loader2, Eye, EyeOff } from "lucide-react";
 import {
   listarClassificacoesAdmin,
@@ -42,6 +44,7 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editCodigo, setEditCodigo] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY);
+  const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
   const [saving, setSaving] = useState(false);
   const [busyCodigo, setBusyCodigo] = useState<string | null>(null);
 
@@ -256,7 +259,7 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
       </CardContent>
 
       {/* Modal CRUD */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editCodigo ? "Editar classificação" : "Nova classificação"} size="md">
+      <Modal open={modalOpen} onClose={guard.requestClose} title={editCodigo ? "Editar classificação" : "Nova classificação"} size="md">
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -302,13 +305,14 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
           )}
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={guard.requestClose}>Cancelar</Button>
             <Button onClick={handleSave} loading={saving} disabled={saving || !canEdit}>
               {editCodigo ? "Salvar alterações" : "Adicionar"}
             </Button>
           </div>
         </div>
       </Modal>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Card>
   );
 }

@@ -16,6 +16,8 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Tabs } from "@/components/ui/Tabs";
 import { isoLocalHoje } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDateTime, formatDate } from "@/lib/utils/format";
 import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import {
@@ -314,6 +316,7 @@ function RegularizarModal({ talao, onClose, onSaved }: {
   const toast = useToast();
   const [obs, setObs] = useState("");
   const [busy, setBusy] = useState(false);
+  const guard = useUnsavedGuard(true, obs, onClose);
 
   async function salvar() {
     if (!obs.trim()) { toast.warning("Explique o que aconteceu (ex.: uso do proprietário no fim de semana)."); return; }
@@ -330,7 +333,7 @@ function RegularizarModal({ talao, onClose, onSaved }: {
   }
 
   return (
-    <Modal open onClose={onClose} title="Regularizar diferença de medidor" size="md" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title="Regularizar diferença de medidor" size="md" closeOnBackdrop={false}>
       <div className="p-6 space-y-4">
         <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
           <b>{talao.equipamentos?.codigo} — {talao.equipamentos?.nome}</b>: o sistema esperava{" "}
@@ -347,9 +350,10 @@ function RegularizarModal({ talao, onClose, onSaved }: {
         />
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>Regularizar</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }
@@ -366,6 +370,7 @@ function EntradaModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
     litros: "",
     observacao: null as string | null,
   });
+  const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
     const litros = Number(String(form.litros).replace(",", "."));
@@ -383,7 +388,7 @@ function EntradaModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   }
 
   return (
-    <Modal open onClose={onClose} title="Registrar Compra/Recarga" size="md" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title="Registrar Compra/Recarga" size="md" closeOnBackdrop={false}>
       <div className="p-6 space-y-4">
         <Select label="Reservatório" value={form.fonte} onChange={(e) => setForm({ ...form, fonte: e.target.value as CombustivelFonte })}>
           <option value="tanque_diesel">Tanque de Diesel</option>
@@ -394,9 +399,10 @@ function EntradaModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
         <Input label="Observação" placeholder="NF, fornecedor..." value={form.observacao ?? ""} onChange={(e) => setForm({ ...form, observacao: e.target.value || null })} />
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>Registrar</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }

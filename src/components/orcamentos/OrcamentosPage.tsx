@@ -6,6 +6,8 @@ import { Input, Select } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { createClient } from "@/lib/supabase/client";
 import {
   Plus, Pencil, Trash2, Wallet,
@@ -59,6 +61,7 @@ export function OrcamentosPage() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
+  const guard = useUnsavedGuard(editOpen, form, () => setEditOpen(false));
   const [saving, setSaving] = useState(false);
 
   const [confirmDelId, setConfirmDelId] = useState<string | null>(null);
@@ -260,7 +263,7 @@ export function OrcamentosPage() {
         </CardContent>
       </Card>
 
-      <Modal open={editOpen} onClose={() => !saving && setEditOpen(false)} title={form.id ? "Editar orçamento" : "Novo orçamento"} size="md">
+      <Modal open={editOpen} onClose={() => !saving && guard.requestClose()} title={form.id ? "Editar orçamento" : "Novo orçamento"} size="md">
         <div className="p-6 space-y-4">
           <Input
             label="Mês (YYYY-MM)"
@@ -296,12 +299,13 @@ export function OrcamentosPage() {
           />
         </div>
         <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-end gap-2 bg-stone-50/50">
-          <Button variant="ghost" onClick={() => setEditOpen(false)} disabled={saving}>Cancelar</Button>
+          <Button variant="ghost" onClick={guard.requestClose} disabled={saving}>Cancelar</Button>
           <Button onClick={salvar} loading={saving} disabled={saving}>
             {form.id ? "Salvar" : "Criar orçamento"}
           </Button>
         </div>
       </Modal>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
 
       <ConfirmDialog
         open={!!confirmDelId}

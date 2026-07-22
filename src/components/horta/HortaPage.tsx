@@ -15,6 +15,8 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Tabs } from "@/components/ui/Tabs";
 import { isoLocalHoje } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDate } from "@/lib/utils/format";
 import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import {
@@ -333,6 +335,9 @@ function PlantarModal({ canteiroIdInicial, canteiros, culturas, onClose, onSaved
     previsao_colheita: null as string | null,
     observacao: null as string | null,
   });
+  // previsao_colheita fica fora da trava: é auto-preenchida pelo efeito abaixo
+  // logo após abrir, o que marcaria o formulário como "sujo" sem o usuário digitar.
+  const guard = useUnsavedGuard(true, { ...form, previsao_colheita: undefined }, onClose);
 
   // Pré-preenche a previsão com plantio + ciclo padrão da cultura (editável — call)
   useEffect(() => {
@@ -362,7 +367,7 @@ function PlantarModal({ canteiroIdInicial, canteiros, culturas, onClose, onSaved
   const cicloDaCultura = culturas.find((c) => c.id === form.cultura_id)?.ciclo_dias_padrao;
 
   return (
-    <Modal open onClose={onClose} title="Novo Plantio" size="lg" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title="Novo Plantio" size="lg" closeOnBackdrop={false}>
       <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Select label="Canteiro *" value={form.canteiro_id} onChange={(e) => setForm({ ...form, canteiro_id: e.target.value })}>
           {canteiros.length === 0 && <option value="">Nenhum canteiro livre</option>}
@@ -390,9 +395,10 @@ function PlantarModal({ canteiroIdInicial, canteiros, culturas, onClose, onSaved
         </div>
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy} disabled={canteiros.length === 0}>Plantar</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }
@@ -409,6 +415,7 @@ function NovoCanteiroModal({ proximoNumero, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
   const [numero, setNumero] = useState(proximoNumero);
   const [area, setArea] = useState("");
+  const guard = useUnsavedGuard(true, { numero, area }, onClose);
 
   async function salvar() {
     if (!numero || numero < 1) { toast.warning("Informe o número do canteiro."); return; }
@@ -425,15 +432,16 @@ function NovoCanteiroModal({ proximoNumero, onClose, onSaved }: {
   }
 
   return (
-    <Modal open onClose={onClose} title="Novo Canteiro" size="sm" closeOnBackdrop={false}>
+    <Modal open onClose={guard.requestClose} title="Novo Canteiro" size="sm" closeOnBackdrop={false}>
       <div className="p-6 space-y-4">
         <Input label="Número *" type="number" min={1} value={numero} onChange={(e) => setNumero(Number(e.target.value) || 0)} />
         <Input label="Área (m²)" type="number" min={0} step="0.01" placeholder="Opcional" value={area} onChange={(e) => setArea(e.target.value)} />
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex justify-end gap-2 bg-stone-50/50">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+        <Button variant="ghost" onClick={guard.requestClose} disabled={busy}>Cancelar</Button>
         <Button onClick={salvar} loading={busy}>Criar</Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }

@@ -4,6 +4,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { createClient } from "@/lib/supabase/client";
 import type { AgentePromptPublicoRow, AgentePromptRow } from "@/types";
 import { BookOpen, MessageCircle, Save, Sliders, Sparkles } from "lucide-react";
@@ -82,6 +84,9 @@ export function ConfigPromptModal({ open, agenteId, nomeFallback, onClose, onSav
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [existe, setExiste] = useState(false);
+  // Snapshot só depois do load assíncrono (open && !loading) — senão o prompt
+  // carregado marcaria o formulário como "sujo" sem o usuário digitar nada.
+  const guard = useUnsavedGuard(open && !loading, edit, onClose);
 
   useEffect(() => {
     if (!open) return;
@@ -136,7 +141,7 @@ export function ConfigPromptModal({ open, agenteId, nomeFallback, onClose, onSav
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={`Treinamento — ${edit.nome || nomeFallback}`} size="xl">
+    <Modal open={open} onClose={guard.requestClose} title={`Treinamento — ${edit.nome || nomeFallback}`} size="xl">
       <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
         <p className="text-xs text-stone-500 leading-relaxed">
           Este é o &quot;treinamento&quot; do assistente: as diretrizes que ele segue em todas as
@@ -235,13 +240,14 @@ export function ConfigPromptModal({ open, agenteId, nomeFallback, onClose, onSav
       </div>
 
       <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-end gap-2 bg-stone-50/50">
-        <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
+        <Button type="button" variant="ghost" onClick={guard.requestClose} disabled={saving}>
           Cancelar
         </Button>
         <Button onClick={handleSalvar} disabled={loading || saving} loading={saving}>
           <Save size={13} /> Salvar treinamento
         </Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }

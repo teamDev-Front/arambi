@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { Plus, Edit2, Eye, EyeOff, Loader2, AlertTriangle } from "lucide-react";
 import {
   listarStatusConfig,
@@ -49,6 +51,7 @@ export function StatusCoresTab({ canEdit }: { canEdit: boolean }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editCodigo, setEditCodigo] = useState<string | null>(null);
   const [form, setForm] = useState<SForm>(EMPTY);
+  const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -202,7 +205,7 @@ export function StatusCoresTab({ canEdit }: { canEdit: boolean }) {
       </CardContent>
 
       {/* Modal CRUD */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editCodigo ? "Editar status" : "Novo status"} size="md">
+      <Modal open={modalOpen} onClose={guard.requestClose} title={editCodigo ? "Editar status" : "Novo status"} size="md">
         <div className="p-6 space-y-4">
           <Input
             label="Rótulo (exibido)"
@@ -258,13 +261,14 @@ export function StatusCoresTab({ canEdit }: { canEdit: boolean }) {
           </div>
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={guard.requestClose}>Cancelar</Button>
             <Button onClick={handleSave} loading={saving} disabled={saving || !canEdit}>
               {editCodigo ? "Salvar alterações" : "Adicionar status"}
             </Button>
           </div>
         </div>
       </Modal>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Card>
   );
 }

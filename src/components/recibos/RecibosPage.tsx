@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Pagination } from "@/components/ui/Pagination";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { Plus, Search, Edit2, Trash2, Download, Eye, FileText } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 
@@ -95,6 +97,7 @@ export function RecibosPage() {
   const [form, setForm] = useState<Omit<Recibo, "id">>({
     numero: "", modelo: "simples", beneficiario: "", descricao: "", valor: 0, data: "", status: "rascunho",
   });
+  const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
 
   const filtered = useMemo(() => recibos.filter((r) => {
     const q = search.toLowerCase();
@@ -224,7 +227,7 @@ export function RecibosPage() {
       </Card>
 
       {/* Form modal */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editRow ? "Editar Recibo" : "Novo Recibo"} size="lg">
+      <Modal open={modalOpen} onClose={guard.requestClose} title={editRow ? "Editar Recibo" : "Novo Recibo"} size="lg">
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <Input label="Número" value={form.numero} onChange={(e) => setForm({ ...form, numero: e.target.value })} />
@@ -244,12 +247,13 @@ export function RecibosPage() {
             </Select>
           </div>
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={guard.requestClose}>Cancelar</Button>
             <Button variant="outline" onClick={() => { handleSave(); }}><Download size={14}/>Salvar e Gerar PDF</Button>
             <Button onClick={handleSave}>{editRow ? "Salvar" : "Criar Recibo"}</Button>
           </div>
         </div>
       </Modal>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
 
       {/* Preview modal */}
       {previewItem && (

@@ -8,6 +8,8 @@ import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Pagination } from "@/components/ui/Pagination";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   Plus, Search, Edit2, Trash2, Loader2, Save,
   Warehouse, Sprout, Calculator, Calendar, PackageCheck,
@@ -99,6 +101,7 @@ export function EstoquePage() {
   const [depModal, setDepModal] = useState(false);
   const [depEditId, setDepEditId] = useState<string | null>(null);
   const [depForm, setDepForm] = useState<DepForm>(EMPTY_DEP);
+  const depGuard = useUnsavedGuard(depModal, depForm, () => setDepModal(false));
   const [depSaving, setDepSaving] = useState(false);
 
   // ---- Initial load: armazens & parametros ----
@@ -782,7 +785,7 @@ export function EstoquePage() {
       </Card>
 
       {/* Modal Depósito */}
-      <Modal open={depModal} onClose={() => setDepModal(false)}
+      <Modal open={depModal} onClose={depGuard.requestClose}
         title={depEditId ? "Editar Depósito" : "Novo Depósito"} size="lg">
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-2 gap-3">
@@ -814,13 +817,14 @@ export function EstoquePage() {
           <Textarea label="Observação" rows={2} value={depForm.observacao}
             onChange={(e) => setDepForm({ ...depForm, observacao: e.target.value })} />
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setDepModal(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={depGuard.requestClose}>Cancelar</Button>
             <Button onClick={saveDep} loading={depSaving} disabled={depSaving}>
               {depEditId ? "Salvar Alterações" : "Adicionar"}
             </Button>
           </div>
         </div>
       </Modal>
+      <UnsavedChangesDialog open={depGuard.confirmOpen} onStay={depGuard.stay} onDiscard={depGuard.discard} />
     </div>
   );
 }

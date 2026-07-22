@@ -8,6 +8,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Pagination } from "@/components/ui/Pagination";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Cell,
   PieChart, Pie, Legend,
@@ -96,6 +98,7 @@ export function VendasFuturasPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<Form>(EMPTY);
+  const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
   const [saving, setSaving] = useState(false);
 
   // ---- load ----
@@ -442,7 +445,7 @@ export function VendasFuturasPage() {
       </Card>
 
       {/* Modal CRUD */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)}
+      <Modal open={modalOpen} onClose={guard.requestClose}
         title={editId ? "Editar Venda" : "Nova Venda"} size="lg">
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-3 gap-3">
@@ -533,13 +536,14 @@ export function VendasFuturasPage() {
             placeholder="Ex: pagamento em 4 parcelas (jan/mar/mar/jul)" />
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={guard.requestClose}>Cancelar</Button>
             <Button onClick={save} loading={saving} disabled={saving}>
               {editId ? "Salvar Alterações" : "Adicionar"}
             </Button>
           </div>
         </div>
       </Modal>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </div>
   );
 }

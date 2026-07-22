@@ -9,6 +9,8 @@ import { Input, Select } from "@/components/ui/Input";
 import { Pagination } from "@/components/ui/Pagination";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   Plus, Search, Edit2, Trash2, Loader2, Building2, Users,
   Landmark, AlertTriangle, CheckCircle2, HelpCircle,
@@ -84,6 +86,7 @@ export function BancosPage() {
   const [empModalOpen, setEmpModalOpen] = useState(false);
   const [empEditId, setEmpEditId] = useState<string | null>(null);
   const [empForm, setEmpForm] = useState<CbeForm>(EMPTY_EMPRESA);
+  const empGuard = useUnsavedGuard(empModalOpen, empForm, () => setEmpModalOpen(false));
   const [empSaving, setEmpSaving] = useState(false);
 
   // ------- socio -------
@@ -96,6 +99,7 @@ export function BancosPage() {
   const [socioModalOpen, setSocioModalOpen] = useState(false);
   const [socioEditId, setSocioEditId] = useState<string | null>(null);
   const [socioForm, setSocioForm] = useState<CbsForm>(EMPTY_SOCIO);
+  const socioGuard = useUnsavedGuard(socioModalOpen, socioForm, () => setSocioModalOpen(false));
   const [socioSaving, setSocioSaving] = useState(false);
 
   // ---- carregar empresa ----
@@ -637,7 +641,7 @@ export function BancosPage() {
       {/* Modal — Empresa */}
       <Modal
         open={empModalOpen}
-        onClose={() => setEmpModalOpen(false)}
+        onClose={empGuard.requestClose}
         title={empEditId ? "Editar Conta da Empresa" : "Nova Conta da Empresa"}
         size="lg"
       >
@@ -724,7 +728,7 @@ export function BancosPage() {
           </label>
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setEmpModalOpen(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={empGuard.requestClose}>Cancelar</Button>
             <Button onClick={saveEmpresa} loading={empSaving} disabled={empSaving}>
               {empEditId ? "Salvar Alterações" : "Adicionar"}
             </Button>
@@ -735,7 +739,7 @@ export function BancosPage() {
       {/* Modal — Sócio */}
       <Modal
         open={socioModalOpen}
-        onClose={() => setSocioModalOpen(false)}
+        onClose={socioGuard.requestClose}
         title={socioEditId ? "Editar Conta do Sócio" : "Nova Conta do Sócio"}
         size="lg"
       >
@@ -826,13 +830,15 @@ export function BancosPage() {
           </label>
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setSocioModalOpen(false)}>Cancelar</Button>
+            <Button variant="ghost" onClick={socioGuard.requestClose}>Cancelar</Button>
             <Button onClick={saveSocio} loading={socioSaving} disabled={socioSaving}>
               {socioEditId ? "Salvar Alterações" : "Adicionar"}
             </Button>
           </div>
         </div>
       </Modal>
+      <UnsavedChangesDialog open={empGuard.confirmOpen} onStay={empGuard.stay} onDiscard={empGuard.discard} />
+      <UnsavedChangesDialog open={socioGuard.confirmOpen} onStay={socioGuard.stay} onDiscard={socioGuard.discard} />
     </div>
   );
 }

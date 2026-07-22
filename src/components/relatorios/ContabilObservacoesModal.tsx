@@ -3,6 +3,8 @@ import { useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { Plus, Trash2, FileText } from "lucide-react";
 import type { ContabilObservacao } from "@/lib/pdfmonkey/types";
 
@@ -16,6 +18,7 @@ interface Props {
 
 export function ContabilObservacoesModal({ open, mesRef, onClose, onConfirmar, submitting }: Props) {
   const [obs, setObs] = useState<ContabilObservacao[]>([{ titulo: "", texto: "" }]);
+  const guard = useUnsavedGuard(open, obs, onClose);
 
   function add() { setObs((prev) => [...prev, { titulo: "", texto: "" }]); }
   function remove(i: number) { setObs((prev) => prev.filter((_, k) => k !== i)); }
@@ -32,7 +35,7 @@ export function ContabilObservacoesModal({ open, mesRef, onClose, onConfirmar, s
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={`Observações do Relatório Contábil — ${mesRef}`} size="xl">
+    <Modal open={open} onClose={guard.requestClose} title={`Observações do Relatório Contábil — ${mesRef}`} size="xl">
       <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
         <p className="text-xs text-stone-500">
           Cada observação é um <strong>cartão</strong> no PDF, com título em negrito e texto explicativo abaixo. Use para registrar alterações de banco, NFs pendentes, avisos sobre fornecedores, etc.
@@ -80,11 +83,12 @@ export function ContabilObservacoesModal({ open, mesRef, onClose, onConfirmar, s
       </div>
 
       <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-end gap-2 bg-stone-50/50">
-        <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>Cancelar</Button>
+        <Button type="button" variant="ghost" onClick={guard.requestClose} disabled={submitting}>Cancelar</Button>
         <Button onClick={handleConfirmar} disabled={submitting} loading={submitting}>
           <FileText size={13} /> Gerar PDF
         </Button>
       </div>
+      <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
     </Modal>
   );
 }
