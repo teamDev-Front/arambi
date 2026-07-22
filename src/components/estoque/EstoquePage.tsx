@@ -405,9 +405,12 @@ export function EstoquePage() {
               <PackageCheck size={20} />
             </div>
             <div>
-              <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Quantidade Armazenada</p>
-              <p className="text-lg font-bold text-stone-800">{fmtKg(resumo.total_kg_bruto)}</p>
-              <p className="text-xs text-stone-500">{fmtSc(resumo.total_sc_bruto)} brutas</p>
+              <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Em Estoque (saldo)</p>
+              <p className="text-lg font-bold text-stone-800">{fmtKg(resumo.total_kg_saldo)}</p>
+              <p className="text-xs text-stone-500">
+                {fmtSc(resumo.total_sc_saldo)}
+                {resumo.total_kg_baixado > 0 && ` · ${fmtKg(resumo.total_kg_baixado)} baixados de ${fmtKg(resumo.total_kg_bruto)}`}
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -648,7 +651,9 @@ export function EstoquePage() {
               </div>
             </div>
             <p className="mt-3 text-[11px] text-stone-400">
-              {resumo.qtd_depositos} DFe(s) · {fmtKg(resumo.total_kg_bruto)} brutos · valores recalculados em tempo real
+              {resumo.qtd_depositos} DFe(s) · {fmtKg(resumo.total_kg_saldo)} em estoque
+              {resumo.total_kg_baixado > 0 && ` (${fmtKg(resumo.total_kg_baixado)} já baixados)`}
+              {" "}· cálculos sobre o saldo, recalculados em tempo real
               pela {"“Data Atual”"} dos parâmetros. Colunas da tabela abaixo seguem o cenário de venda a terceiros.
             </p>
           </CardContent>
@@ -712,19 +717,19 @@ export function EstoquePage() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-100">
-                  {["Data","DFe","NFP","kg Bruto","Sc Bruto","Dias","Qz","Quebra","kg Líq","Sc Líq","Tx Armaz","Tx Devol","Total Desc","Valor Venda","Status","Ações"].map((h) => (
+                  {["Data","DFe","NFP","kg Bruto","kg Baixado","kg Saldo","Dias","Qz","Quebra","kg Líq","Sc Líq","Tx Armaz","Tx Devol","Total Desc","Valor Venda","Status","Ações"].map((h) => (
                     <th key={h} className="px-2 py-3 text-left text-[10px] font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={16} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={17} className="px-4 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="inline-block animate-spin mr-2" /> Carregando…
                   </td></tr>
                 )}
                 {!loading && paged.length === 0 && (
-                  <tr><td colSpan={16} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={17} className="px-4 py-12 text-center text-stone-400">
                     Sem depósitos nesta seleção — estoque zerado ou ainda não lançado.
                     Clique em &quot;Novo Depósito&quot; para registrar uma entrada.
                   </td></tr>
@@ -735,16 +740,21 @@ export function EstoquePage() {
                     <td className="px-2 py-2 text-stone-700 font-mono">{r.dfe_entrada ?? "—"}</td>
                     <td className="px-2 py-2 text-stone-700 font-mono">{r.nfp ?? "—"}</td>
                     <td className="px-2 py-2 text-stone-800 text-right font-medium">{Number(r.kg_bruto).toLocaleString("pt-BR")}</td>
-                    <td className="px-2 py-2 text-stone-500 text-right">{Number(r.sc_bruto).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td>
+                    <td className="px-2 py-2 text-right text-stone-400">
+                      {Number(r.kg_baixado ?? 0) > 0 ? Number(r.kg_baixado).toLocaleString("pt-BR") : "—"}
+                    </td>
+                    <td className="px-2 py-2 text-right font-semibold text-stone-800">
+                      {Number(r.kg_saldo ?? r.kg_bruto).toLocaleString("pt-BR")}
+                    </td>
                     <td className="px-2 py-2 text-stone-500 text-right">{r.dias_percorridos}</td>
                     <td className="px-2 py-2 text-stone-500 text-right">{Number(r.quinzenas).toFixed(2)}</td>
-                    <td className="px-2 py-2 text-red-600 text-right">{Number(r.quebra_kg).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
-                    <td className="px-2 py-2 text-stone-700 text-right">{Number(r.kg_liquido).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
-                    <td className="px-2 py-2 text-stone-700 text-right">{Number(r.sc_liquida).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td>
-                    <td className="px-2 py-2 text-orange-700 text-right">{formatCurrency(Number(r.taxa_armazenagem))}</td>
-                    <td className="px-2 py-2 text-orange-700 text-right">{formatCurrency(Number(r.taxa_devolucao))}</td>
-                    <td className="px-2 py-2 text-red-700 font-semibold text-right">{formatCurrency(Number(r.total_a_descontar))}</td>
-                    <td className="px-2 py-2 text-emerald-700 font-semibold text-right">{formatCurrency(Number(r.valor_venda_simulado))}</td>
+                    <td className="px-2 py-2 text-red-600 text-right">{Number(r.quebra_kg_saldo ?? r.quebra_kg).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
+                    <td className="px-2 py-2 text-stone-700 text-right">{Number(r.kg_liquido_saldo ?? r.kg_liquido).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
+                    <td className="px-2 py-2 text-stone-700 text-right">{Number(r.sc_liquida_saldo ?? r.sc_liquida).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td>
+                    <td className="px-2 py-2 text-orange-700 text-right">{formatCurrency(Number(r.taxa_armazenagem_saldo ?? r.taxa_armazenagem))}</td>
+                    <td className="px-2 py-2 text-orange-700 text-right">{formatCurrency(Number(r.taxa_devolucao_saldo ?? r.taxa_devolucao))}</td>
+                    <td className="px-2 py-2 text-red-700 font-semibold text-right">{formatCurrency(Number(r.total_a_descontar_saldo ?? r.total_a_descontar))}</td>
+                    <td className="px-2 py-2 text-emerald-700 font-semibold text-right">{formatCurrency(Number(r.valor_venda_saldo ?? r.valor_venda_simulado))}</td>
                     <td className="px-2 py-2"><Badge variant={statusBadge(r.status)}>{SAFRA_DEP_STATUS_LABEL[r.status]}</Badge></td>
                     <td className="px-2 py-2">
                       <div className="flex items-center gap-0.5">
@@ -760,7 +770,10 @@ export function EstoquePage() {
                   <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700 text-[11px]">
                     <td colSpan={3} className="px-2 py-2.5 uppercase tracking-wide">Totais</td>
                     <td className="px-2 py-2.5 text-right">{resumo.total_kg_bruto.toLocaleString("pt-BR")}</td>
-                    <td className="px-2 py-2.5 text-right">{resumo.total_sc_bruto.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}</td>
+                    <td className="px-2 py-2.5 text-right text-stone-500">
+                      {resumo.total_kg_baixado > 0 ? resumo.total_kg_baixado.toLocaleString("pt-BR") : "—"}
+                    </td>
+                    <td className="px-2 py-2.5 text-right">{resumo.total_kg_saldo.toLocaleString("pt-BR")}</td>
                     <td colSpan={2}></td>
                     <td className="px-2 py-2.5 text-red-700 text-right">{resumo.total_quebra_kg.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>
                     <td className="px-2 py-2.5 text-right">{resumo.total_kg_liquido.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</td>

@@ -16,12 +16,16 @@ import {
 } from "recharts";
 import {
   Plus, Search, Edit2, Trash2, Loader2, Download, Sprout,
-  Wallet, CalendarClock, ArrowDownToLine, HandCoins,
+  Wallet, CalendarClock, ArrowDownToLine, HandCoins, PackageCheck,
 } from "lucide-react";
 import {
   listarVendas, criarVenda, atualizarVenda, deletarVenda, calcularResumo,
   type ListarVendasFiltros,
 } from "@/lib/queries/vendas";
+import {
+  baixarEstoqueFifo, desfazerBaixasVenda, obterSaldoEstoque,
+  listarKgBaixadoPorVenda, type SaldoEstoque,
+} from "@/lib/queries/safra";
 import { listarSocios } from "@/lib/queries/bancos";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
@@ -101,6 +105,11 @@ export function VendasFuturasPage() {
   const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
   const [saving, setSaving] = useState(false);
 
+  // Baixa de estoque por volume (FIFO — migration 0043)
+  const [baixarEstoque, setBaixarEstoque] = useState(true);
+  const [saldoEstoque, setSaldoEstoque] = useState<SaldoEstoque | null>(null);
+  const [kgBaixadoPorVenda, setKgBaixadoPorVenda] = useState<Map<string, number>>(new Map());
+
   // ---- load ----
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -113,8 +122,12 @@ export function VendasFuturasPage() {
         destino: filterDestino || undefined,
         mesRecebimento: filterMes || undefined,
       };
-      const data = await listarVendas(filtros);
+      const [data, baixas] = await Promise.all([
+        listarVendas(filtros),
+        listarKgBaixadoPorVenda().catch(() => new Map<string, number>()),
+      ]);
       setRows(data);
+      setKgBaixadoPorVenda(baixas);
     } catch (e: unknown) {
       toast.error("Erro carregando vendas", (e as Error).message);
     } finally {
@@ -129,6 +142,21 @@ export function VendasFuturasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Saldo em estoque da cultura×safra escolhida (só na criação; debounce leve
+  // porque o campo Safra é digitado). Falha silenciosa: o banco valida de novo.
+  useEffect(() => {
+    if (!modalOpen || editId) return;
+    const safra = form.safra.trim();
+    let cancelado = false;
+    const t = setTimeout(() => {
+      if (!safra) { if (!cancelado) setSaldoEstoque(null); return; }
+      obterSaldoEstoque(form.cultura, safra)
+        .then((s) => { if (!cancelado) setSaldoEstoque(s); })
+        .catch(() => { if (!cancelado) setSaldoEstoque(null); });
+    }, 350);
+    return () => { cancelado = true; clearTimeout(t); };
+  }, [modalOpen, editId, form.cultura, form.safra]);
+
   // ---- derivados ----
   const resumo = useMemo(() => calcularResumo(rows), [rows]);
   const safrasDistintas = useMemo(() => Array.from(new Set(rows.map((r) => r.safra))).sort(), [rows]);
@@ -140,6 +168,8 @@ export function VendasFuturasPage() {
   function openNova() {
     setEditId(null);
     setForm({ ...EMPTY });
+    setBaixarEstoque(true);
+    setSaldoEstoque(null);
     setModalOpen(true);
   }
   function openEdit(v: VendaProvisionadaRichRow) {
@@ -201,8 +231,33 @@ export function VendasFuturasPage() {
         await atualizarVenda(editId, payload);
         toast.success("Venda atualizada");
       } else {
-        await criarVenda(payload);
-        toast.success("Venda registrada");
+        const vendaId = await criarVenda(payload);
+        if (baixarEstoque) {
+          // Baixa FIFO vinculada à venda. Se falhar (ex.: estoque insuficiente),
+          // desfaz a venda recém-criada para não deixar meio-caminho.
+          try {
+            const res = await baixarEstoqueFifo({
+              cultura: form.cultura,
+              safra: form.safra.trim(),
+              kg: Number(form.kg),
+              data: form.data_venda,
+              vendaId,
+              observacao: `Baixa automática da venda ${form.numero_contrato.trim() || form.comprador.trim()}`,
+            });
+            const partes = [`${res.notas_baixadas_total} nota(s) inteira(s)`];
+            if (res.notas_parciais > 0) partes.push(`${res.notas_parciais} parcial`);
+            toast.success(
+              "Venda registrada com baixa no estoque",
+              `FIFO: ${partes.join(" + ")}. Saldo restante da safra: ${res.saldo_restante_kg.toLocaleString("pt-BR")} kg.`,
+            );
+          } catch (eBaixa: unknown) {
+            await deletarVenda(vendaId).catch(() => undefined);
+            toast.error("Baixa de estoque falhou — venda não registrada", (eBaixa as Error).message);
+            return; // modal aberto p/ ela corrigir o volume/safra
+          }
+        } else {
+          toast.success("Venda registrada", "Sem baixa de estoque (opção desmarcada).");
+        }
       }
       setModalOpen(false);
       await fetchData();
@@ -213,10 +268,18 @@ export function VendasFuturasPage() {
     }
   }
   async function remove(v: VendaProvisionadaRichRow) {
-    if (!confirm(`Excluir a venda de ${v.comprador} (${v.numero_contrato ?? "sem contrato"})?`)) return;
+    const kgBaixado = kgBaixadoPorVenda.get(v.id) ?? 0;
+    const msg = kgBaixado > 0
+      ? `Esta venda tem baixa de estoque vinculada (${kgBaixado.toLocaleString("pt-BR")} kg). Ao excluir, as baixas serão desfeitas e o volume VOLTA ao estoque.\n\nExcluir a venda de ${v.comprador} (${v.numero_contrato ?? "sem contrato"})?`
+      : `Excluir a venda de ${v.comprador} (${v.numero_contrato ?? "sem contrato"})?`;
+    if (!confirm(msg)) return;
     try {
+      if (kgBaixado > 0) await desfazerBaixasVenda(v.id);
       await deletarVenda(v.id);
-      toast.success("Venda excluída");
+      toast.success(
+        "Venda excluída",
+        kgBaixado > 0 ? `${kgBaixado.toLocaleString("pt-BR")} kg voltaram ao estoque.` : undefined,
+      );
       await fetchData();
     } catch (e: unknown) {
       toast.error("Não foi possível excluir", (e as Error).message);
@@ -393,7 +456,16 @@ export function VendasFuturasPage() {
                       {CULTURA_LABEL[v.cultura]}
                     </td>
                     <td className="px-3 py-3 text-stone-700 text-xs">{v.safra}</td>
-                    <td className="px-3 py-3 text-stone-700 font-medium">{v.comprador}</td>
+                    <td className="px-3 py-3 text-stone-700 font-medium">
+                      <span className="inline-flex items-center gap-1.5">
+                        {v.comprador}
+                        {(kgBaixadoPorVenda.get(v.id) ?? 0) > 0 && (
+                          <span title={`Baixa de estoque vinculada: ${(kgBaixadoPorVenda.get(v.id) ?? 0).toLocaleString("pt-BR")} kg (FIFO)`}>
+                            <PackageCheck size={13} className="text-emerald-600 shrink-0" />
+                          </span>
+                        )}
+                      </span>
+                    </td>
                     <td className="px-3 py-3 text-stone-500 text-xs font-mono">
                       {v.numero_contrato && <div>#{v.numero_contrato}</div>}
                       {v.nota_fiscal && <div>NF {v.nota_fiscal}</div>}
@@ -491,6 +563,55 @@ export function VendasFuturasPage() {
                 {" = "}
                 <strong>{formatCurrency((Number(form.kg) / (Number(form.kg_por_saca) || 60)) * Number(form.preco_sc))}</strong>
               </span>
+            </div>
+          )}
+
+          {/* Baixa de estoque por volume — FIFO (migration 0043) */}
+          {!editId && (
+            <div className="rounded-lg border border-stone-200 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <label className="flex items-center gap-2 cursor-pointer text-sm text-stone-700">
+                  <input
+                    type="checkbox"
+                    checked={baixarEstoque}
+                    onChange={(e) => setBaixarEstoque(e.target.checked)}
+                    className="h-4 w-4 rounded border-stone-300 accent-accent-500"
+                  />
+                  <span className="font-medium">Dar baixa no estoque</span>
+                  <span className="text-xs text-stone-400">(FIFO — notas mais antigas primeiro)</span>
+                </label>
+                {saldoEstoque && (
+                  <span className="text-xs text-stone-500">
+                    Disponível: <strong className="text-stone-700">
+                      {saldoEstoque.sacas.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} sc
+                    </strong>{" "}
+                    ({saldoEstoque.kg.toLocaleString("pt-BR")} kg em {saldoEstoque.notas} nota{saldoEstoque.notas === 1 ? "" : "s"})
+                  </span>
+                )}
+              </div>
+              {baixarEstoque && saldoEstoque && form.kg && Number(form.kg) > saldoEstoque.kg && (
+                <p className="text-xs text-red-600">
+                  Volume maior que o saldo em estoque ({saldoEstoque.kg.toLocaleString("pt-BR")} kg) — a baixa vai falhar.
+                  Ajuste a quantidade ou desmarque a baixa.
+                </p>
+              )}
+              {baixarEstoque && saldoEstoque && saldoEstoque.kg === 0 && (
+                <p className="text-xs text-amber-600">
+                  Sem estoque lançado para esta cultura/safra — a baixa vai falhar. Confira a safra (ex.: 25/25) ou desmarque.
+                </p>
+              )}
+              <p className="text-[11px] text-stone-400">
+                O sistema consome as notas mais antigas até completar o volume; se pegar parte de uma nota,
+                o restante continua em estoque com a data de depósito original. As baixas ficam registradas
+                por nota para conferência com o armazém.
+              </p>
+            </div>
+          )}
+          {editId && (kgBaixadoPorVenda.get(editId) ?? 0) > 0 && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+              Esta venda tem baixa de estoque vinculada ({(kgBaixadoPorVenda.get(editId) ?? 0).toLocaleString("pt-BR")} kg).
+              Alterar volume, cultura ou safra <b>não realoca</b> a baixa — se precisar, exclua a venda
+              (as baixas são desfeitas e o volume volta ao estoque) e lance de novo.
             </div>
           )}
 

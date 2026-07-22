@@ -158,12 +158,19 @@ export async function deletarDeposito(id: string): Promise<void> {
 // ----------------------------------------------------------------------------
 // Resumo (totais)
 // ----------------------------------------------------------------------------
+// Desde a migration 0043 (baixa por volume), os totais de cálculo (quebra,
+// líquido, taxas, valor de venda) somam apenas o SALDO remanescente de cada
+// nota (colunas *_saldo da view) — volume vendido/retirado sai da projeção,
+// como a Adriane pediu. kg/sc bruto seguem sendo o total DEPOSITADO.
 export interface SafraResumo {
   qtd_depositos: number;
   total_kg_bruto: number;
   total_kg_liquido: number;
   total_sc_bruto: number;
   total_sc_liquida: number;
+  total_kg_baixado: number;
+  total_kg_saldo: number;
+  total_sc_saldo: number;
   total_quebra_kg: number;
   total_taxa_armazenagem: number;
   total_taxa_devolucao: number;
@@ -184,28 +191,35 @@ export interface SafraResumo {
 
 export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraResumo {
   let kg_bruto = 0, kg_liquido = 0, sc_bruto = 0, sc_liquida = 0;
+  let kg_baixado = 0, kg_saldo = 0, sc_saldo = 0;
   let quebra_kg = 0, taxa_armaz = 0, taxa_dev = 0, taxa_recep = 0, descontar = 0, venda = 0;
   let a_kg_liq = 0, a_sc_liq = 0, a_quebra = 0, a_armaz = 0, a_descontar = 0, a_venda = 0;
   const aggDay = new Map<string, { kg_bruto: number; kg_liquido: number }>();
 
   for (const r of rows) {
     kg_bruto += Number(r.kg_bruto);
-    kg_liquido += Number(r.kg_liquido);
     sc_bruto += Number(r.sc_bruto);
-    sc_liquida += Number(r.sc_liquida);
-    quebra_kg += Number(r.quebra_kg);
-    taxa_armaz += Number(r.taxa_armazenagem);
-    taxa_dev += Number(r.taxa_devolucao);
-    taxa_recep += Number(r.taxa_recepcao ?? 0);
-    descontar += Number(r.total_a_descontar);
-    venda += Number(r.valor_venda_simulado);
+    kg_baixado += Number(r.kg_baixado ?? 0);
+    kg_saldo += Number(r.kg_saldo ?? r.kg_bruto);
+    sc_saldo += Number(r.sc_saldo ?? r.sc_bruto);
 
-    a_kg_liq += Number(r.kg_liquido_armazem ?? 0);
-    a_sc_liq += Number(r.sc_liquida_armazem ?? 0);
-    a_quebra += Number(r.quebra_kg_armazem ?? 0);
-    a_armaz += Number(r.taxa_armazenagem_armazem ?? 0);
-    a_descontar += Number(r.total_a_descontar_armazem ?? 0);
-    a_venda += Number(r.valor_venda_armazem ?? 0);
+    // Projeção sobre o saldo remanescente (fallback: colunas totais, caso a
+    // migration 0043 ainda não esteja aplicada — comporta-se como antes).
+    kg_liquido += Number(r.kg_liquido_saldo ?? r.kg_liquido);
+    sc_liquida += Number(r.sc_liquida_saldo ?? r.sc_liquida);
+    quebra_kg += Number(r.quebra_kg_saldo ?? r.quebra_kg);
+    taxa_armaz += Number(r.taxa_armazenagem_saldo ?? r.taxa_armazenagem);
+    taxa_dev += Number(r.taxa_devolucao_saldo ?? r.taxa_devolucao);
+    taxa_recep += Number(r.taxa_recepcao_saldo ?? r.taxa_recepcao ?? 0);
+    descontar += Number(r.total_a_descontar_saldo ?? r.total_a_descontar);
+    venda += Number(r.valor_venda_saldo ?? r.valor_venda_simulado);
+
+    a_kg_liq += Number(r.kg_liquido_saldo_armazem ?? r.kg_liquido_armazem ?? 0);
+    a_sc_liq += Number(r.sc_liquida_saldo_armazem ?? r.sc_liquida_armazem ?? 0);
+    a_quebra += Number(r.quebra_kg_saldo_armazem ?? r.quebra_kg_armazem ?? 0);
+    a_armaz += Number(r.taxa_armazenagem_saldo_armazem ?? r.taxa_armazenagem_armazem ?? 0);
+    a_descontar += Number(r.total_a_descontar_saldo_armazem ?? r.total_a_descontar_armazem ?? 0);
+    a_venda += Number(r.valor_venda_saldo_armazem ?? r.valor_venda_armazem ?? 0);
 
     const k = r.data_deposito;
     const ex = aggDay.get(k) ?? { kg_bruto: 0, kg_liquido: 0 };
@@ -220,6 +234,9 @@ export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraRes
     total_kg_liquido: kg_liquido,
     total_sc_bruto: sc_bruto,
     total_sc_liquida: sc_liquida,
+    total_kg_baixado: kg_baixado,
+    total_kg_saldo: kg_saldo,
+    total_sc_saldo: sc_saldo,
     total_quebra_kg: quebra_kg,
     total_taxa_armazenagem: taxa_armaz,
     total_taxa_devolucao: taxa_dev,
@@ -236,4 +253,116 @@ export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraRes
     armazem_saldo_a_receber: a_venda - a_descontar,
     por_data_deposito: Array.from(aggDay, ([data, v]) => ({ data, ...v })).sort((a, b) => a.data.localeCompare(b.data)),
   };
+}
+
+// ----------------------------------------------------------------------------
+// Baixa de estoque por volume — FIFO (migration 0043)
+// ----------------------------------------------------------------------------
+// O Database type mantém Functions frouxo (ver comentário em types/database.ts),
+// então as RPCs são chamadas por um wrapper mínimo tipado aqui (mesmo padrão
+// de queries/distribuicao.ts).
+type RpcCall = (
+  fn: string,
+  args?: Record<string, unknown>,
+) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+
+function rpc(): RpcCall {
+  const supabase = createClient();
+  return supabase.rpc.bind(supabase) as unknown as RpcCall;
+}
+
+export interface BaixaFifoNota {
+  deposito_id: string;
+  dfe: string | null;
+  nfp: string | null;
+  kg: number;
+  restante_na_nota: number;
+  consumo_total: boolean;
+}
+
+export interface BaixaFifoResultado {
+  kg_solicitado: number;
+  kg_baixado: number;
+  saldo_restante_kg: number;
+  notas_baixadas_total: number;
+  notas_parciais: number;
+  notas: BaixaFifoNota[];
+}
+
+/** Dá baixa de um volume no estoque da cultura×safra (FIFO — notas mais antigas primeiro). */
+export async function baixarEstoqueFifo(params: {
+  cultura: CulturaSafra;
+  safra: string;
+  kg: number;
+  data?: string;
+  vendaId?: string;
+  armazemId?: string;
+  motivo?: "venda" | "retirada" | "perda";
+  observacao?: string;
+}): Promise<BaixaFifoResultado> {
+  const { data, error } = await rpc()("fn_baixar_estoque_fifo", {
+    p_cultura: params.cultura,
+    p_safra: params.safra,
+    p_kg: params.kg,
+    p_data: params.data ?? new Date().toISOString().slice(0, 10),
+    p_venda_id: params.vendaId ?? null,
+    p_armazem_id: params.armazemId ?? null,
+    p_motivo: params.motivo ?? "venda",
+    p_observacao: params.observacao ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as BaixaFifoResultado;
+}
+
+/** Desfaz as baixas de uma venda (volume volta ao estoque). Retorna o nº de baixas removidas. */
+export async function desfazerBaixasVenda(vendaId: string): Promise<number> {
+  const { data, error } = await rpc()("fn_desfazer_baixas_venda", { p_venda_id: vendaId });
+  if (error) throw new Error(error.message);
+  return Number(data ?? 0);
+}
+
+export interface SaldoEstoque {
+  kg: number;
+  sacas: number;
+  notas: number;
+}
+
+/** Saldo em estoque (kg remanescente) de uma cultura×safra, somado da view calculada. */
+export async function obterSaldoEstoque(cultura: CulturaSafra, safra: string): Promise<SaldoEstoque> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("v_safra_depositos_calculado")
+    .select("kg_saldo, sc_saldo")
+    .eq("cultura", cultura)
+    .eq("safra", safra);
+  if (error) throw error;
+  let kg = 0, sacas = 0, notas = 0;
+  for (const r of (data ?? []) as Array<{ kg_saldo: number | null; sc_saldo: number | null }>) {
+    const s = Number(r.kg_saldo ?? 0);
+    if (s > 0) {
+      kg += s;
+      sacas += Number(r.sc_saldo ?? 0);
+      notas++;
+    }
+  }
+  return { kg, sacas, notas };
+}
+
+/** kg baixado agregado por venda (para indicadores na tela de Vendas). */
+export async function listarKgBaixadoPorVenda(): Promise<Map<string, number>> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("safra_baixas")
+    .select("venda_id, kg")
+    .not("venda_id", "is", null);
+  if (error) {
+    // Tabela ainda não existe (migration 0043 não aplicada) → sem indicadores.
+    if (/does not exist|schema cache|find the table/i.test(error.message)) return new Map();
+    throw error;
+  }
+  const m = new Map<string, number>();
+  for (const r of (data ?? []) as Array<{ venda_id: string; kg: number }>) {
+    m.set(r.venda_id, (m.get(r.venda_id) ?? 0) + Number(r.kg));
+  }
+  return m;
 }

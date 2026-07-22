@@ -51,7 +51,7 @@ export async function listarVendas(filtros: ListarVendasFiltros = {}): Promise<V
   return (data ?? []) as VendaProvisionadaRichRow[];
 }
 
-export async function criarVenda(payload: VpInsert): Promise<void> {
+export async function criarVenda(payload: VpInsert): Promise<string> {
   const supabase = createClient();
   const { error, data } = await supabase
     .from("vendas_provisionadas")
@@ -60,6 +60,7 @@ export async function criarVenda(payload: VpInsert): Promise<void> {
     .maybeSingle();
   if (error) throw error;
   if (!data) throw new Error("Falha ao criar venda (sem permissão?)");
+  return (data as { id: string }).id;
 }
 
 export async function atualizarVenda(id: string, payload: VpUpdate): Promise<void> {

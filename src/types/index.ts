@@ -35,6 +35,7 @@ export type {
   ArmazemRow,
   SafraParametrosRow,
   SafraDepositoRow,
+  SafraBaixaRow,
   SafraDepositoCalculadoRow,
   VendaProvisionadaRow,
   VendaProvisionadaRichRow,

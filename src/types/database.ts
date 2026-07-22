@@ -299,6 +299,20 @@ export type SafraDepositoRow = WithTimestamps & {
   created_by: string | null;
 };
 
+/** Livro-razão de saídas de grão por nota — migration 0043 (baixa por volume FIFO). */
+export type SafraBaixaRow = {
+  id: string;
+  deposito_id: string;
+  /** Venda que consumiu o volume (null p/ retirada/perda ou venda excluída). */
+  venda_id: string | null;
+  data_baixa: string;
+  kg: number;
+  motivo: "venda" | "retirada" | "perda";
+  observacao: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
 export type SafraDepositoCalculadoRow = {
   id: string;
   armazem_id: string;
@@ -344,6 +358,25 @@ export type SafraDepositoCalculadoRow = {
   taxa_armazenagem_armazem: number;
   total_a_descontar_armazem: number;
   valor_venda_armazem: number;
+  // Volume remanescente após baixas por volume (migration 0043).
+  // Mesmos cálculos dos dois cenários aplicados só ao saldo da nota.
+  kg_baixado: number;
+  kg_saldo: number;
+  sc_saldo: number;
+  quebra_kg_saldo: number;
+  kg_liquido_saldo: number;
+  sc_liquida_saldo: number;
+  taxa_armazenagem_saldo: number;
+  taxa_devolucao_saldo: number;
+  taxa_recepcao_saldo: number;
+  total_a_descontar_saldo: number;
+  valor_venda_saldo: number;
+  quebra_kg_saldo_armazem: number;
+  kg_liquido_saldo_armazem: number;
+  sc_liquida_saldo_armazem: number;
+  taxa_armazenagem_saldo_armazem: number;
+  total_a_descontar_saldo_armazem: number;
+  valor_venda_saldo_armazem: number;
 };
 
 export type VendaProvisionadaRow = WithTimestamps & {
@@ -965,6 +998,14 @@ export interface Database {
         Row: SafraDepositoRow;
         Insert: Omit<SafraDepositoRow, "id" | "created_at" | "updated_at">;
         Update: Partial<Omit<SafraDepositoRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      safra_baixas: {
+        Row: SafraBaixaRow;
+        // data_baixa/motivo têm default no banco → opcionais no insert.
+        Insert: Omit<SafraBaixaRow, "id" | "created_at" | "data_baixa" | "motivo">
+          & { data_baixa?: string; motivo?: SafraBaixaRow["motivo"] };
+        Update: Partial<Omit<SafraBaixaRow, "id" | "created_at">>;
         Relationships: EmptyRels;
       };
       vendas_provisionadas: {
