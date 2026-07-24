@@ -37,6 +37,10 @@ import {
   getIndicadoresVencimentos,
   STATUS_SAIDA_PENDENTE,
   STATUS_ENTRADA_PENDENTE,
+  isErroSaldoInvest,
+  criarTransacoesSemSaldoInvest,
+  atualizarTransacaoSemSaldoInvest,
+  atualizarStatusEmMassaSemSaldoInvest,
   type TransacaoEmpresaRich,
   type IndicadoresVencimentos,
 } from "@/lib/queries/financeiro";
@@ -309,6 +313,25 @@ export function FinanceiroPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   // ---- exclusão em massa dos selecionados (RF 24-jul) ----
   const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
+
+  // ---- confirmação "Executar mesmo assim" — saldo do Invest (0046) ----
+  // A validação da 0044 bloqueia; aqui viramos o bloqueio em confirmação: o
+  // erro abre um modal e, confirmando, a operação roda pelas RPCs forçadas.
+  const [confirmInvest, setConfirmInvest] = useState<{ mensagem: string; executar: () => Promise<void> } | null>(null);
+  const [confirmInvestBusy, setConfirmInvestBusy] = useState(false);
+
+  async function executarConfirmInvest() {
+    if (!confirmInvest) return;
+    setConfirmInvestBusy(true);
+    try {
+      await confirmInvest.executar();
+      setConfirmInvest(null);
+    } catch (e: unknown) {
+      toast.error("Não foi possível executar", (e as Error).message ?? String(e));
+    } finally {
+      setConfirmInvestBusy(false);
+    }
+  }
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -794,56 +817,77 @@ export function FinanceiroPage() {
         created_by: null,
       };
 
-      if (editId) {
-        await atualizarTransacaoEmpresa(editId, payload);
-        // Mantém a autossoma correta se o lançamento editado estiver selecionado.
-        if (selectedValores.has(editId)) {
-          const novoValor = Number(form.valor);
-          setSelectedValores((prev) => new Map(prev).set(editId, novoValor));
-        }
-        // Atualiza o snapshot da TAG (painel flutuante) se estiver tagueado.
-        if (tags.has(editId)) {
-          setTags((prev) => {
-            const atual = prev.get(editId);
-            if (!atual) return prev;
-            return new Map(prev).set(editId, {
-              ...atual,
-              data: form.data,
-              descricao: form.descricao || null,
-              fornecedor: fornecedorNome,
-              valor: Number(form.valor),
-            });
-          });
-        }
-        toast.success("Lançamento atualizado");
-      } else {
-        // LANÇAMENTOS PARCELADOS (RF 23-jul): "3" gera 1/3..3/3; "2/6" gera
-        // 2/6..6/6 — uma parcela por mês, mesmo valor, vencimentos mensais.
-        const serie = parseParcelas(form.parcelas);
-        if (serie && serie.total > serie.inicio) {
-          const lote: TransacaoEmpresaInsert[] = [];
-          for (let i = serie.inicio; i <= serie.total; i++) {
-            lote.push({
-              ...payload,
-              data: addMeses(form.data, i - serie.inicio),
-              parcelas: `${i}/${serie.total}`,
+      // Persistência em dois modos: normal e "forçado" (0046 — pula só a
+      // validação de saldo do Invest, depois que o usuário confirma no modal).
+      const persistir = async (forcado: boolean) => {
+        if (editId) {
+          if (forcado) await atualizarTransacaoSemSaldoInvest(editId, payload);
+          else await atualizarTransacaoEmpresa(editId, payload);
+          // Mantém a autossoma correta se o lançamento editado estiver selecionado.
+          if (selectedValores.has(editId)) {
+            const novoValor = Number(form.valor);
+            setSelectedValores((prev) => new Map(prev).set(editId, novoValor));
+          }
+          // Atualiza o snapshot da TAG (painel flutuante) se estiver tagueado.
+          if (tags.has(editId)) {
+            setTags((prev) => {
+              const atual = prev.get(editId);
+              if (!atual) return prev;
+              return new Map(prev).set(editId, {
+                ...atual,
+                data: form.data,
+                descricao: form.descricao || null,
+                fornecedor: fornecedorNome,
+                valor: Number(form.valor),
+              });
             });
           }
-          await criarTransacoesEmpresaLote(lote);
-          toast.success(
-            `${lote.length} parcelas geradas`,
-            `Parcelas ${serie.inicio}/${serie.total} a ${serie.total}/${serie.total}, vencendo mês a mês a partir de ${formatDate(form.data)}.`,
-          );
+          toast.success("Lançamento atualizado");
         } else {
-          await criarTransacaoEmpresa({
-            ...payload,
-            parcelas: serie ? `${serie.inicio}/${serie.total}` : payload.parcelas,
-          });
-          toast.success("Lançamento criado");
+          // LANÇAMENTOS PARCELADOS (RF 23-jul): "3" gera 1/3..3/3; "2/6" gera
+          // 2/6..6/6 — uma parcela por mês, mesmo valor, vencimentos mensais.
+          const serie = parseParcelas(form.parcelas);
+          if (serie && serie.total > serie.inicio) {
+            const lote: TransacaoEmpresaInsert[] = [];
+            for (let i = serie.inicio; i <= serie.total; i++) {
+              lote.push({
+                ...payload,
+                data: addMeses(form.data, i - serie.inicio),
+                parcelas: `${i}/${serie.total}`,
+              });
+            }
+            if (forcado) await criarTransacoesSemSaldoInvest(lote);
+            else await criarTransacoesEmpresaLote(lote);
+            toast.success(
+              `${lote.length} parcelas geradas`,
+              `Parcelas ${serie.inicio}/${serie.total} a ${serie.total}/${serie.total}, vencendo mês a mês a partir de ${formatDate(form.data)}.`,
+            );
+          } else {
+            const unico: TransacaoEmpresaInsert = {
+              ...payload,
+              parcelas: serie ? `${serie.inicio}/${serie.total}` : payload.parcelas,
+            };
+            if (forcado) await criarTransacoesSemSaldoInvest([unico]);
+            else await criarTransacaoEmpresa(unico);
+            toast.success("Lançamento criado");
+          }
+        }
+        setModalOpen(false);
+        await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+      };
+
+      try {
+        await persistir(false);
+      } catch (e: unknown) {
+        const msg = (e as Error).message ?? String(e);
+        if (isErroSaldoInvest(msg)) {
+          // Saldo do Invest insuficiente → vira confirmação (Cancelar /
+          // Executar mesmo assim) em vez de bloquear direto (RF 24-jul tarde).
+          setConfirmInvest({ mensagem: msg, executar: () => persistir(true) });
+        } else {
+          toast.error(editId ? "Não foi possível atualizar" : "Não foi possível criar", msg);
         }
       }
-      setModalOpen(false);
-      await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     } catch (e: unknown) {
       const msg = (e as Error).message ?? String(e);
       toast.error(editId ? "Não foi possível atualizar" : "Não foi possível criar", msg);
@@ -875,28 +919,61 @@ export function FinanceiroPage() {
 
   // ---- status direto na tela (1 linha) — padrão da Distribuição (RF 23-jul) ----
   async function mudarStatusInline(row: TransacaoEmpresaRich, status: StatusAramburu) {
-    try {
-      await atualizarTransacaoEmpresa(row.id, { status });
+    const concluir = async () => {
       toast.success("Status atualizado", `${row.descricao ?? "Lançamento"}: ${getStatusLabel(status)}.`);
       await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+    };
+    try {
+      await atualizarTransacaoEmpresa(row.id, { status });
+      await concluir();
     } catch (e: unknown) {
-      toast.error("Não foi possível mudar o status", (e as Error).message ?? String(e));
-      await fetchData(); // recarrega para o select voltar ao status real
+      const msg = (e as Error).message ?? String(e);
+      if (isErroSaldoInvest(msg)) {
+        // Confirmação em vez de bloqueio (0046).
+        setConfirmInvest({
+          mensagem: msg,
+          executar: async () => {
+            await atualizarTransacaoSemSaldoInvest(row.id, { status });
+            await concluir();
+          },
+        });
+        await fetchData(); // o select volta ao status real enquanto decide
+      } else {
+        toast.error("Não foi possível mudar o status", msg);
+        await fetchData(); // recarrega para o select voltar ao status real
+      }
     }
   }
 
   // ---- status em massa dos selecionados (RF 23-jul) ----
   async function aplicarStatusEmMassa() {
     if (!bulkStatus || selectedIds.size === 0) return;
-    setBulkBusy(true);
-    try {
-      const n = await atualizarStatusEmMassa(Array.from(selectedIds), bulkStatus as StatusAramburu);
-      toast.success("Status aplicado", `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"} para "${getStatusLabel(bulkStatus)}".`);
+    const ids = Array.from(selectedIds);
+    const status = bulkStatus as StatusAramburu;
+    const concluir = async (n: number) => {
+      toast.success("Status aplicado", `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"} para "${getStatusLabel(status)}".`);
       limparSelecao();
       setBulkStatus("");
       await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+    };
+    setBulkBusy(true);
+    try {
+      const n = await atualizarStatusEmMassa(ids, status);
+      await concluir(n);
     } catch (e: unknown) {
-      toast.error("Não foi possível aplicar o status", (e as Error).message ?? String(e));
+      const msg = (e as Error).message ?? String(e);
+      if (isErroSaldoInvest(msg)) {
+        // Confirmação em vez de bloqueio (0046).
+        setConfirmInvest({
+          mensagem: msg,
+          executar: async () => {
+            const n = await atualizarStatusEmMassaSemSaldoInvest(ids, status);
+            await concluir(n);
+          },
+        });
+      } else {
+        toast.error("Não foi possível aplicar o status", msg);
+      }
     } finally {
       setBulkBusy(false);
     }
@@ -1642,6 +1719,34 @@ export function FinanceiroPage() {
         transacaoIds={Array.from(selectedIds)}
         mesReferenciaDefault={competenciaSugerida}
       />
+
+      {/* Confirmação "Executar mesmo assim" — saldo insuficiente no Invest (0046) */}
+      <Modal
+        open={!!confirmInvest}
+        onClose={() => { if (!confirmInvestBusy) setConfirmInvest(null); }}
+        title="Saldo insuficiente no Sicredi Invest"
+        size="sm"
+      >
+        <div className="p-6 space-y-3">
+          <div className="flex gap-2.5 items-start rounded-lg bg-red-50 border border-red-100 px-3 py-2.5">
+            <AlertTriangle size={16} className="text-red-500 shrink-0 mt-0.5" />
+            <p className="text-sm text-stone-700 leading-relaxed">{confirmInvest?.mensagem}</p>
+          </div>
+          <p className="text-xs text-stone-500 leading-relaxed">
+            Você pode <b>executar mesmo assim</b>: a operação será gravada e o resgate agendado ficará
+            acima do saldo disponível do Invest — ajuste o saldo (ou os valores) depois. A regra continua
+            valendo: esta confirmação vale só para esta operação; na próxima o sistema alerta de novo.
+          </p>
+        </div>
+        <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-end gap-2 bg-stone-50/50">
+          <Button variant="ghost" onClick={() => setConfirmInvest(null)} disabled={confirmInvestBusy}>
+            Cancelar
+          </Button>
+          <Button variant="danger" onClick={executarConfirmInvest} loading={confirmInvestBusy} disabled={confirmInvestBusy}>
+            Executar mesmo assim
+          </Button>
+        </div>
+      </Modal>
 
       {/* Painel flutuante das TAGs do dia (RF 24-jul) */}
       {tags.size > 0 && (

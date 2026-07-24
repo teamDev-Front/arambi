@@ -407,6 +407,55 @@ export async function deletarTransacoesEmpresaEmMassa(ids: string[]): Promise<nu
   return n;
 }
 
+// ----------------------------------------------------------------------------
+// "Executar mesmo assim" (migration 0046) — a validação de saldo do Sicredi
+// Invest (0044) bloqueia a gravação; quando o usuário confirma no modal, a
+// operação é refeita pelas RPCs abaixo, que pulam SÓ essa validação (a RLS de
+// escrita continua valendo). O bypass é local da transação — a operação
+// seguinte volta a validar normalmente.
+// ----------------------------------------------------------------------------
+
+/** Detecta o erro da validação de saldo do Invest (0044). */
+export function isErroSaldoInvest(msg: string): boolean {
+  return msg.includes("Saldo insuficiente na conta Sicredi Invest");
+}
+
+export async function criarTransacoesSemSaldoInvest(payloads: TransacaoEmpresaInsert[]): Promise<void> {
+  if (payloads.length === 0) return;
+  const supabase = createClient();
+  const { error } = await supabase.rpc(
+    "fn_criar_transacoes_sem_saldo_invest" as never,
+    { p_payloads: payloads } as never,
+  );
+  if (error) throw error;
+}
+
+export async function atualizarTransacaoSemSaldoInvest(
+  id: string,
+  payload: TransacaoEmpresaUpdate,
+): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.rpc(
+    "fn_atualizar_transacao_sem_saldo_invest" as never,
+    { p_id: id, p_payload: payload } as never,
+  );
+  if (error) throw error;
+}
+
+export async function atualizarStatusEmMassaSemSaldoInvest(
+  ids: string[],
+  status: StatusAramburu,
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc(
+    "fn_status_massa_sem_saldo_invest" as never,
+    { p_ids: ids, p_status: status } as never,
+  );
+  if (error) throw error;
+  return (data as unknown as number) ?? 0;
+}
+
 export async function deletarTransacaoEmpresa(id: string): Promise<void> {
   const supabase = createClient();
   // Pedimos retorno da row deletada pra confirmar que de fato saiu (RLS pode
