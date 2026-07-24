@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -11,12 +11,13 @@ import {
 import {
   TrendingUp, TrendingDown, Package, FileText, Bot,
   DollarSign, ArrowUpRight, Download, LayoutDashboard, Loader2,
+  ChevronDown, ChevronRight, Landmark,
 } from "lucide-react";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils/format";
 import {
-  getKpiMensal, getPorContaContabil, getSaldoAtualPorBanco, getFluxoCaixaMensal,
-  type KpiMensalRow, type PorContaContabilRow, type SaldoAtualBanco, type FluxoCaixaMes,
+  getKpiMensal, getPorContaContabil, getSaldoAtualPorBanco, getFluxoCaixaMensal, getFluxoCaixaBancos,
+  type KpiMensalRow, type PorContaContabilRow, type SaldoAtualBanco, type FluxoCaixaMes, type FluxoCaixaBancoMes,
 } from "@/lib/queries/dashboard";
 import { listarTransacoesEmpresa, type TransacaoEmpresaRich } from "@/lib/queries/financeiro";
 import { STATUS_ARAMBURU_LABEL } from "@/types";
@@ -53,6 +54,8 @@ export function DashboardHome() {
   const [byConta, setByConta]   = useState<PorContaContabilRow[]>([]);
   const [saldosBanco, setSaldosBanco] = useState<SaldoAtualBanco[]>([]);
   const [fluxo, setFluxo]       = useState<FluxoCaixaMes[]>([]);
+  const [fluxoBancos, setFluxoBancos] = useState<FluxoCaixaBancoMes[]>([]);
+  const [mesesAbertos, setMesesAbertos] = useState<Set<string>>(new Set());
   const [recent, setRecent]     = useState<TransacaoEmpresaRich[]>([]);
   const [loading, setLoading]   = useState(true);
 
@@ -64,17 +67,20 @@ export function DashboardHome() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [k, c, sb, fx, r] = await Promise.all([
+      const [k, c, sb, fx, fxb, r] = await Promise.all([
         getKpiMensal(),
         getPorContaContabil(mesFiltro || undefined),
         getSaldoAtualPorBanco(),
         getFluxoCaixaMensal(),
+        // View da migration 0044 — se ainda não aplicada, degrada sem quebrar.
+        getFluxoCaixaBancos().catch(() => [] as FluxoCaixaBancoMes[]),
         listarTransacoesEmpresa(mesFiltro ? { mesReferencia: mesFiltro } : {}, 1, 5),
       ]);
       setKpiAll(k);
       setByConta(c);
       setSaldosBanco(sb);
       setFluxo(fx);
+      setFluxoBancos(fxb);
       setRecent(r.rows);
     } catch (e: unknown) {
       toast.error("Erro carregando dashboard", (e as Error).message ?? String(e));
@@ -132,6 +138,25 @@ export function DashboardHome() {
 
   const meses = useMemo(() => kpiAll.map((r) => r.mes_referencia), [kpiAll]);
 
+  // Saldos por banco de cada mês (conferência com extrato — RF 23-jul).
+  const bancosPorMes = useMemo(() => {
+    const m = new Map<string, FluxoCaixaBancoMes[]>();
+    for (const b of fluxoBancos) {
+      const arr = m.get(b.mes_referencia) ?? [];
+      arr.push(b);
+      m.set(b.mes_referencia, arr);
+    }
+    return m;
+  }, [fluxoBancos]);
+
+  const toggleMesAberto = (mes: string) => {
+    setMesesAbertos((prev) => {
+      const next = new Set(prev);
+      if (next.has(mes)) next.delete(mes); else next.add(mes);
+      return next;
+    });
+  };
+
   return (
     <div className="space-y-6 max-w-[1400px]">
       {/* Header */}
@@ -158,6 +183,18 @@ export function DashboardHome() {
         </div>
       </div>
 
+      {/* Saldos por Banco — informação principal, no início da página (RF 23-jul) */}
+      <SaldosBancariosGrid
+        saldos={saldosBanco}
+        loading={loading}
+        onSelect={setBancoModal}
+      />
+
+      {/* Corpo em duas colunas: conteúdo financeiro à esquerda; calendários e
+          alertas à DIREITA (RF 23-jul). Em telas menores tudo empilha. */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+      <div className="xl:col-span-2 space-y-6 min-w-0">
+
       {/* Quick access */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {quickAccess.map(({ label, href, icon: Icon, color }) => (
@@ -171,16 +208,6 @@ export function DashboardHome() {
           </Link>
         ))}
       </div>
-
-      {/* Panorama Agro — calendários de chuva/vacinação + alertas (call 14/jul) */}
-      <AgroPanoramaSection />
-
-      {/* Saldos por Banco — fileira em destaque */}
-      <SaldosBancariosGrid
-        saldos={saldosBanco}
-        loading={loading}
-        onSelect={setBancoModal}
-      />
 
       {/* KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -337,11 +364,27 @@ export function DashboardHome() {
                     const ok = ind >= 0;
                     const atual = f.mes_referencia === mesAtual;
                     const entradas = Number(f.entradas_garantidas_proximo_mes);
+                    const bancosMes = bancosPorMes.get(f.mes_referencia) ?? [];
+                    const aberto = mesesAbertos.has(f.mes_referencia);
                     return (
-                      <tr key={f.mes_referencia} className={`border-b border-stone-50 hover:bg-stone-50 ${atual ? "bg-accent-50/40" : ""}`}>
+                      <Fragment key={f.mes_referencia}>
+                      <tr className={`border-b border-stone-50 hover:bg-stone-50 ${atual ? "bg-accent-50/40" : ""}`}>
                         <td className="px-4 py-2.5 text-stone-700 font-medium whitespace-nowrap">
-                          {mesShort(f.mes_referencia)}
-                          {atual && <span className="ml-1.5 text-[9px] text-accent-600 font-semibold uppercase">atual</span>}
+                          <span className="inline-flex items-center gap-1">
+                            {bancosMes.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => toggleMesAberto(f.mes_referencia)}
+                                className="p-0.5 rounded hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition"
+                                title="Saldos por banco (conferência com os extratos)"
+                                aria-label={`${aberto ? "Ocultar" : "Ver"} saldos por banco de ${mesShort(f.mes_referencia)}`}
+                              >
+                                {aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                              </button>
+                            )}
+                            {mesShort(f.mes_referencia)}
+                            {atual && <span className="ml-1.5 text-[9px] text-accent-600 font-semibold uppercase">atual</span>}
+                          </span>
                         </td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-stone-700 whitespace-nowrap">{formatCurrency(Number(f.saldo_final_acumulado))}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-red-600 whitespace-nowrap">{formatCurrency(Number(f.saidas_proximo_mes))}</td>
@@ -352,6 +395,29 @@ export function DashboardHome() {
                           </span>
                         </td>
                       </tr>
+                      {/* Saldos por banco do mês — conferência com os extratos (RF 23-jul) */}
+                      {aberto && bancosMes.length > 0 && (
+                        <tr className="border-b border-stone-100 bg-stone-50/60">
+                          <td colSpan={5} className="px-4 py-2.5">
+                            <div className="flex flex-wrap gap-x-8 gap-y-1.5 pl-5">
+                              {bancosMes.map((b) => (
+                                <div key={b.conta_bancaria_id} className="flex items-center gap-2 text-xs">
+                                  <Landmark size={12} className="text-stone-400 shrink-0" />
+                                  <span className="font-semibold text-stone-600">{b.banco_apelido ?? b.banco_nome}</span>
+                                  <span className="text-stone-400">inicial</span>
+                                  <span className="tabular-nums font-medium text-stone-700">{formatCurrency(Number(b.saldo_inicial))}</span>
+                                  <span className="text-stone-300">→</span>
+                                  <span className="text-stone-400">final</span>
+                                  <span className={`tabular-nums font-semibold ${Number(b.saldo_final) < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                                    {formatCurrency(Number(b.saldo_final))}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -360,6 +426,9 @@ export function DashboardHome() {
           )}
           <p className="text-[11px] text-stone-400 px-4 py-3 border-t border-stone-100 leading-relaxed">
             <strong className="text-stone-500">Saldo após o próximo mês</strong> = saldo no fim do mês + saídas e entradas garantidas (resgates/outras) do mês seguinte, <strong className="text-stone-500">sem contar vendas</strong>. Verde = passa o mês tranquila; vermelho = vai precisar de vendas ou resgates pra cobrir.
+            {fluxoBancos.length > 0 && (
+              <> Clique na setinha do mês para ver o <strong className="text-stone-500">saldo inicial e final de cada banco</strong> (CORA, SICREDI e INTER) — valores realizados, para bater com os extratos no fechamento.</>
+            )}
           </p>
         </CardContent>
       </Card>
@@ -417,6 +486,14 @@ export function DashboardHome() {
           </div>
         </CardContent>
       </Card>
+
+      </div>{/* /coluna esquerda */}
+
+      {/* Coluna direita: calendários (chuva/vacinação) + central de alertas */}
+      <div className="space-y-6 min-w-0">
+        <AgroPanoramaSection layout="column" />
+      </div>
+      </div>{/* /grid duas colunas */}
 
       {/* Modais de drill-down */}
       <BancoDetalheModal banco={bancoModal} onClose={() => setBancoModal(null)} />

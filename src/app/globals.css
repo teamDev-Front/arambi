@@ -54,3 +54,16 @@ body {
 
 /* Table alternating rows */
 .table-row-alt:nth-child(even) { background-color: #faf7f2; }
+
+/* Campos numéricos: sem setas de incremento/decremento (ajuste 23-jul).
+   O valor deve ser preenchido exclusivamente por digitação — o scroll do mouse
+   sobre o campo alterava valores sem a operadora perceber. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

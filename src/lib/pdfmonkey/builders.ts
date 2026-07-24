@@ -46,16 +46,23 @@ function aplicarEscopo<T>(query: T, scope: ReportScope | undefined, mesFallback:
   // por_filtros
   const f = scope.filtros ?? {};
   let r = q;
+  const eqOuIn = (col: string, v: string | string[] | undefined) => {
+    if (!v) return;
+    if (Array.isArray(v)) { if (v.length > 0) r = r.in(col, v); }
+    else r = r.eq(col, v);
+  };
   if (f.mes_referencia)            r = r.eq("mes_referencia", f.mes_referencia);
-  if (f.status) {
-    if (Array.isArray(f.status)) { if (f.status.length > 0) r = r.in("status", f.status); }
-    else r = r.eq("status", f.status);
-  }
-  if (f.conta_contabil_cod)        r = r.eq("conta_contabil_cod", f.conta_contabil_cod);
+  eqOuIn("status", f.status);
+  eqOuIn("conta_contabil_cod", f.conta_contabil_cod);
   if (f.centro_custo_cod?.length)  r = r.in("centro_custo_cod", f.centro_custo_cod);
-  if (f.conta_bancaria_id)         r = r.eq("conta_bancaria_id", f.conta_bancaria_id);
+  eqOuIn("conta_bancaria_id", f.conta_bancaria_id);
   if (f.data_de)                   r = r.gte("data", f.data_de);
   if (f.data_ate)                  r = r.lte("data", f.data_ate);
+  if (f.emissao_de)                r = r.gte("data_emissao", f.emissao_de);
+  if (f.emissao_ate)               r = r.lte("data_emissao", f.emissao_ate);
+  // Valor por magnitude (mesma regra da tela Financeiro — 23-jul).
+  if (f.valor_min != null && f.valor_min > 0) r = r.or(`valor.gte.${f.valor_min},valor.lte.${-f.valor_min}`);
+  if (f.valor_max != null && f.valor_max > 0) r = r.gte("valor", -f.valor_max).lte("valor", f.valor_max);
   if (f.search) {
     const s = f.search.replace(/[%_,]/g, " ").trim();
     if (s) r = r.or(`descricao.ilike.%${s}%,fornecedor_nome.ilike.%${s}%,ref.ilike.%${s}%`);

@@ -246,11 +246,15 @@ export interface ReportScopeFiltros {
   mes_referencia?: string;          // "YYYY-MM"
   search?: string;                  // descrição/fornecedor/ref
   status?: string | string[];       // status_aramburu (1 ou vários)
-  conta_contabil_cod?: string;      // "2.7"
+  conta_contabil_cod?: string | string[]; // "2.7" (1 ou várias — 23-jul)
   centro_custo_cod?: string[];      // multi-seleção
-  conta_bancaria_id?: string;
-  data_de?: string;                 // "YYYY-MM-DD"
+  conta_bancaria_id?: string | string[];  // 1 banco ou vários (23-jul)
+  data_de?: string;                 // "YYYY-MM-DD" (vencimento)
   data_ate?: string;                // "YYYY-MM-DD"
+  emissao_de?: string;              // "YYYY-MM-DD" (emissão — 23-jul)
+  emissao_ate?: string;             // "YYYY-MM-DD"
+  valor_min?: number;               // magnitude em R$ (ignora o sinal — 23-jul)
+  valor_max?: number;
 }
 
 export interface ReportScope {

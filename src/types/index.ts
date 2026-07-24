@@ -22,6 +22,7 @@ export type {
   StatusConfigRow,
   ClassificacaoPessoalRow,
   SocioRow,
+  FornecedorRow,
   ContaBancariaEmpresaRow,
   ContaBancariaSocioRow,
   TransacaoEmpresaRow,
@@ -119,11 +120,21 @@ export const STATUS_ARAMBURU_LABEL: Record<StatusAramburu, string> = {
 };
 
 // Status da Distribuição de Lucro (detalhado por sócio). Na linguagem da
-// planilha da Adriane: Provisionado → A pagar → Repassado.
+// planilha da Adriane: Provisionado → A repassar → Repassado. (O código
+// 'a_pagar' permanece no banco; só o rótulo mudou — ajuste 23-jul-2026.)
 export const STATUS_DL_LABEL: Record<StatusDL, string> = {
   provisionado: "Provisionado",
-  a_pagar:      "A pagar",
+  a_pagar:      "A repassar",
   realizado:    "Repassado",
+};
+
+// Cores dos status da DL — mesma paleta do módulo Financeiro (legenda do
+// Excel / status_config): Provisionado amarelo, A repassar vermelho,
+// Repassado verde. Usadas no select inline e nos badges da tela.
+export const STATUS_DL_COLOR: Record<StatusDL, { bg: string; text: string }> = {
+  provisionado: { bg: "#f7b500", text: "#1c1917" },
+  a_pagar:      { bg: "#ed1c24", text: "#ffffff" },
+  realizado:    { bg: "#22b14c", text: "#ffffff" },
 };
 
 export const FORMA_PGTO_LABEL: Record<FormaPgto, string> = {

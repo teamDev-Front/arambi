@@ -190,13 +190,17 @@ export type TransacaoEmpresaRow = {
   status: StatusAramburu;
   valor: number;
   observacao: string | null;
+  /** Resgate automático Sicredi Invest que cobre este título (triggers da migration 0044). */
+  resgate_auto_id: string | null;
   origem_planilha: string | null;
   created_at: string;
   updated_at: string;
   created_by: string | null;
 };
 
-export type TransacaoEmpresaInsert = Omit<TransacaoEmpresaRow, "id" | "mes_referencia" | "created_at" | "updated_at">;
+export type TransacaoEmpresaInsert =
+  Omit<TransacaoEmpresaRow, "id" | "mes_referencia" | "created_at" | "updated_at" | "resgate_auto_id">
+  & { resgate_auto_id?: string | null };
 export type TransacaoEmpresaUpdate = Partial<TransacaoEmpresaInsert>;
 
 // Resumo mensal da Distribuição de Lucro (view v_dl_mensal_resumo — migration 0036)
@@ -235,7 +239,10 @@ export type TransacaoSocioRow = {
   conta_bancaria_socio_id: string | null;
   conta_bancaria_socio_nome: string | null;
   valor: number;
+  /** "Data do Repasse" na UI — data programada do repasse ao sócio. */
   data_vencimento: string | null;
+  /** "Vencimento" na UI — vencimento da despesa/fatura (migration 0044). */
+  data_vencimento_despesa: string | null;
   status: StatusDL;
   /** Lançamento global (transacoes_empresa) que consolidou esta linha — migration 0036. */
   repasse_id: string | null;
@@ -247,8 +254,8 @@ export type TransacaoSocioRow = {
 };
 
 export type TransacaoSocioInsert =
-  Omit<TransacaoSocioRow, "id" | "mes_referencia" | "created_at" | "updated_at" | "repasse_id">
-  & { repasse_id?: string | null };
+  Omit<TransacaoSocioRow, "id" | "mes_referencia" | "created_at" | "updated_at" | "repasse_id" | "data_vencimento_despesa">
+  & { repasse_id?: string | null; data_vencimento_despesa?: string | null };
 export type TransacaoSocioUpdate = Partial<TransacaoSocioInsert>;
 
 // ============================================================================
@@ -1201,6 +1208,21 @@ export interface Database {
           saidas_proximo_mes: number;
           entradas_garantidas_proximo_mes: number;
           saldo_menos_proximo_mes: number;
+        };
+        Relationships: EmptyRels;
+      };
+      // Saldo inicial/final realizado por banco por mês (migration 0044).
+      v_fluxo_caixa_bancos: {
+        Row: {
+          mes_referencia: string;
+          conta_bancaria_id: string;
+          banco_nome: string;
+          banco_apelido: string | null;
+          banco_instituicao: string | null;
+          banco_ordem: number | null;
+          saldo_inicial: number;
+          movimento_mes: number;
+          saldo_final: number;
         };
         Relationships: EmptyRels;
       };

@@ -38,7 +38,13 @@ const SEV_VARIANT: Record<AlertaItem["severidade"], BadgeVariant> = {
 
 function pad(n: number) { return String(n).padStart(2, "0"); }
 
-export function AgroPanoramaSection() {
+interface AgroPanoramaSectionProps {
+  /** "row" = 3 cards lado a lado (padrão antigo); "column" = empilhados na
+   *  coluna da direita da Home (ajuste 23-jul: calendários e alertas à direita). */
+  layout?: "row" | "column";
+}
+
+export function AgroPanoramaSection({ layout = "row" }: AgroPanoramaSectionProps) {
   const toast = useToast();
   const agora = new Date();
   const [canEdit, setCanEdit] = useState(false);
@@ -150,7 +156,7 @@ export function AgroPanoramaSection() {
 
   return (
     <>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className={layout === "column" ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 lg:grid-cols-3 gap-4"}>
         {/* Calendário de Chuva */}
         <Card>
           <CardHeader className="py-3">

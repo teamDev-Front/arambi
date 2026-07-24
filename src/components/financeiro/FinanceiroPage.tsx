@@ -3,32 +3,38 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { MultiSelect } from "@/components/ui/MultiSelect";
+import { ComboBox } from "@/components/ui/ComboBox";
+import { StatusSelect } from "@/components/ui/StatusSelect";
+import { BankLogo } from "@/components/ui/BankLogo";
 import { Pagination } from "@/components/ui/Pagination";
 import { RelatorioEscopoModal } from "@/components/financeiro/RelatorioEscopoModal";
 import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
-  Plus, FileText, Search, Edit2, Trash2,
+  Plus, FileText, Search, Edit2, Trash2, Copy,
   TrendingUp, TrendingDown, Loader2,
   FileDown, FileSpreadsheet, CalendarRange,
-  ChevronUp, ChevronDown,
+  ChevronUp, ChevronDown, Wallet,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
   listarTransacoesEmpresa,
   listarTransacoesParaExport,
   criarTransacaoEmpresa,
+  criarTransacoesEmpresaLote,
   atualizarTransacaoEmpresa,
+  atualizarStatusEmMassa,
   deletarTransacaoEmpresa,
   listarClassificacoes,
   listarContasEmpresa,
-  listarMesesDisponiveis,
+  listarFornecedores,
+  garantirFornecedor,
   type TransacaoEmpresaRich,
 } from "@/lib/queries/financeiro";
+import { getSaldoAtualPorBanco, type SaldoAtualBanco } from "@/lib/queries/dashboard";
 import {
   exportFinanceiroPdf,
   exportFinanceiroXlsx,
@@ -54,6 +60,7 @@ import {
   type ObsObra,
   type ClassificacaoFinanceiraRow,
   type ContaBancariaEmpresaRow,
+  type FornecedorRow,
   type TransacaoEmpresaInsert,
   type TransacaoSocioInsert,
   type SocioRow,
@@ -84,6 +91,40 @@ type FormState = {
   observacao: string;
 };
 
+/**
+ * Interpreta o campo Parcelas para a geração automática (RF 23-jul):
+ *   "6"   → parcelas 1/6..6/6   (quantidade informada)
+ *   "2/6" → parcelas 2/6..6/6   (série começando no meio)
+ * Qualquer outro texto (livre, ex.: "6x cartão") não gera série.
+ */
+function parseParcelas(texto: string): { inicio: number; total: number } | null {
+  const t = texto.trim();
+  if (!t) return null;
+  let m = t.match(/^(\d{1,3})\s*\/\s*(\d{1,3})$/);
+  if (m) {
+    const inicio = Number(m[1]), total = Number(m[2]);
+    if (inicio >= 1 && total >= inicio && total <= 120) return { inicio, total };
+    return null;
+  }
+  m = t.match(/^(\d{1,3})$/);
+  if (m) {
+    const total = Number(m[1]);
+    if (total >= 1 && total <= 120) return { inicio: 1, total };
+  }
+  return null;
+}
+
+/** Soma meses a uma data ISO preservando o dia (trava no fim do mês curto). */
+function addMeses(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const totalMeses = (m - 1) + n;
+  const ano = y + Math.floor(totalMeses / 12);
+  const mes = (totalMeses % 12) + 1;
+  const ultimoDia = new Date(ano, mes, 0).getDate();
+  const dia = Math.min(d, ultimoDia);
+  return `${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+}
+
 const EMPTY_FORM: FormState = {
   data: new Date().toISOString().slice(0, 10),
   data_emissao: "",
@@ -113,18 +154,25 @@ export function FinanceiroPage() {
   // ---- lookups (carregados uma vez) ----
   const [classificacoes, setClassificacoes] = useState<ClassificacaoFinanceiraRow[]>([]);
   const [bancos, setBancos] = useState<ContaBancariaEmpresaRow[]>([]);
-  const [meses, setMeses] = useState<string[]>([]);
+  const [fornecedores, setFornecedores] = useState<FornecedorRow[]>([]);
 
-  // ---- filtros / UI ----
+  // ---- resumo dos saldos bancários no cabeçalho (RF 23-jul) ----
+  const [saldosBanco, setSaldosBanco] = useState<SaldoAtualBanco[]>([]);
+
+  // ---- filtros / UI (todos multi-seleção — RF 23-jul) ----
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<StatusAramburu[]>([]);
-  const [filterContaContabil, setFilterContaContabil] = useState("");
+  const [filterContaContabil, setFilterContaContabil] = useState<string[]>([]);
   const [filterCentroCusto, setFilterCentroCusto] = useState<string[]>([]);
-  const [filterMes, setFilterMes] = useState("");
-  const [filterBanco, setFilterBanco] = useState("");
-  // Filtro por período/intervalo de dias (UX-02). Mutuamente exclusivo com o mês.
+  const [filterBanco, setFilterBanco] = useState<string[]>([]);
+  // Períodos: vencimento E emissão (o filtro de mês saiu — RF 23-jul).
   const [filterDataDe, setFilterDataDe] = useState("");
   const [filterDataAte, setFilterDataAte] = useState("");
+  const [filterEmissaoDe, setFilterEmissaoDe] = useState("");
+  const [filterEmissaoAte, setFilterEmissaoAte] = useState("");
+  // Filtro por valor (magnitude R$ — ignora o sinal).
+  const [filterValorMin, setFilterValorMin] = useState("");
+  const [filterValorMax, setFilterValorMax] = useState("");
   const [page, setPage] = useState(1);
   // Ordenação por vencimento — alternada pelo clique no cabeçalho da coluna.
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -137,6 +185,10 @@ export function FinanceiroPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [escopoOpen, setEscopoOpen] = useState(false);
   const [escopoTipo, setEscopoTipo] = useState<"por_filtros" | "por_selecao">("por_filtros");
+
+  // ---- status em massa dos selecionados (RF 23-jul) ----
+  const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -193,7 +245,7 @@ export function FinanceiroPage() {
   );
 
   // Status data-driven (Admin → Status & Cores). Ativos para os filtros/seleções.
-  const { entries: statusEntries } = useStatusConfig();
+  const { entries: statusEntries, map: statusMap } = useStatusConfig();
   const statusAtivos = useMemo(() => statusEntries.filter((e) => e.ativo), [statusEntries]);
 
   // KPI rápida das linhas exibidas (nem todas as 731 — é "do que tá em tela")
@@ -231,14 +283,18 @@ export function FinanceiroPage() {
   const filtrosAtuais: ListarTransacoesFiltros = useMemo(() => ({
     search: search || undefined,
     status: filterStatus.length ? filterStatus : undefined,
-    contaContabilCod: filterContaContabil || undefined,
+    contaContabilCod: filterContaContabil.length ? filterContaContabil : undefined,
     centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
-    contaBancariaId: filterBanco || undefined,
-    mesReferencia: filterMes || undefined,
+    contaBancariaId: filterBanco.length ? filterBanco : undefined,
     dataDe: filterDataDe || undefined,
     dataAte: filterDataAte || undefined,
-  }), [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco, filterMes, filterDataDe, filterDataAte]);
-  const competenciaSugerida = filterMes || new Date().toISOString().slice(0, 7);
+    emissaoDe: filterEmissaoDe || undefined,
+    emissaoAte: filterEmissaoAte || undefined,
+    valorMin: filterValorMin ? Math.abs(Number(filterValorMin)) || undefined : undefined,
+    valorMax: filterValorMax ? Math.abs(Number(filterValorMax)) || undefined : undefined,
+  }), [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
+       filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte, filterValorMin, filterValorMax]);
+  const competenciaSugerida = filterDataDe?.slice(0, 7) || new Date().toISOString().slice(0, 7);
 
   function abrirEscopo() {
     setEscopoTipo(selectedIds.size > 0 ? "por_selecao" : "por_filtros");
@@ -250,9 +306,11 @@ export function FinanceiroPage() {
     const f: string[] = [];
     if (search) f.push(`Busca: "${search}"`);
     if (filterStatus.length) f.push(`Status: ${filterStatus.map((s) => getStatusLabel(s)).join(", ")}`);
-    if (filterContaContabil) {
-      const c = classificacoesN2.find((x) => x.codigo === filterContaContabil);
-      f.push(`Conta: ${filterContaContabil}${c ? ` – ${c.nome}` : ""}`);
+    if (filterContaContabil.length) {
+      f.push(`Conta: ${filterContaContabil.map((cod) => {
+        const c = classificacoesN2.find((x) => x.codigo === cod);
+        return c ? `${cod} – ${c.nome}` : cod;
+      }).join(", ")}`);
     }
     if (filterCentroCusto.length) {
       f.push(`Centro de custo: ${filterCentroCusto.map((cod) => {
@@ -260,20 +318,28 @@ export function FinanceiroPage() {
         return c ? `${cod} – ${c.nome}` : cod;
       }).join(", ")}`);
     }
-    if (filterBanco) {
-      const b = bancos.find((x) => x.id === filterBanco);
-      f.push(`Banco: ${b?.apelido ?? b?.nome ?? filterBanco}`);
+    if (filterBanco.length) {
+      f.push(`Banco: ${filterBanco.map((id) => {
+        const b = bancos.find((x) => x.id === id);
+        return b?.apelido ?? b?.nome ?? id;
+      }).join(", ")}`);
     }
-    if (filterMes) f.push(`Mês: ${filterMes}`);
     if (filterDataDe || filterDataAte) {
-      f.push(`Período: ${filterDataDe ? formatDate(filterDataDe) : "…"} a ${filterDataAte ? formatDate(filterDataAte) : "…"}`);
+      f.push(`Vencimento: ${filterDataDe ? formatDate(filterDataDe) : "…"} a ${filterDataAte ? formatDate(filterDataAte) : "…"}`);
+    }
+    if (filterEmissaoDe || filterEmissaoAte) {
+      f.push(`Emissão: ${filterEmissaoDe ? formatDate(filterEmissaoDe) : "…"} a ${filterEmissaoAte ? formatDate(filterEmissaoAte) : "…"}`);
+    }
+    if (filterValorMin || filterValorMax) {
+      f.push(`Valor: ${filterValorMin ? formatCurrency(Number(filterValorMin)) : "…"} a ${filterValorMax ? formatCurrency(Number(filterValorMax)) : "…"}`);
     }
     const escopo = selectedIds.size > 0
       ? `Seleção manual — ${selectedIds.size} lançamento${selectedIds.size === 1 ? "" : "s"}`
       : "Recorte pelos filtros aplicados na tela";
     return { titulo: "Relatório de Lançamentos Financeiros", escopo, filtros: f };
-  }, [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco, filterMes,
-      filterDataDe, filterDataAte, selectedIds, classificacoesN2, classificacoesN3, bancos]);
+  }, [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
+      filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte,
+      filterValorMin, filterValorMax, selectedIds, classificacoesN2, classificacoesN3, bancos]);
 
   async function handleExport(formato: "pdf" | "xlsx") {
     const setBusy = formato === "pdf" ? setExportandoPdf : setExportandoXlsx;
@@ -303,13 +369,24 @@ export function FinanceiroPage() {
   // ---- effects ----
   // lookups
   useEffect(() => {
-    Promise.all([listarClassificacoes(), listarContasEmpresa(), listarMesesDisponiveis()])
-      .then(([cf, cb, m]) => { setClassificacoes(cf); setBancos(cb); setMeses(m); })
+    Promise.all([listarClassificacoes(), listarContasEmpresa(), listarFornecedores()])
+      .then(([cf, cb, forn]) => { setClassificacoes(cf); setBancos(cb); setFornecedores(forn); })
       .catch((e: unknown) =>
         toast.error("Erro carregando cadastros", (e as Error).message ?? String(e))
       );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Resumo dos saldos bancários no cabeçalho — recarregado após cada mutação.
+  const fetchSaldos = useCallback(async () => {
+    try {
+      setSaldosBanco(await getSaldoAtualPorBanco());
+    } catch {
+      // silencioso: o resumo é informativo; a tabela continua funcionando.
+    }
+  }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { fetchSaldos(); }, [fetchSaldos]);
 
   // dados (refetch sempre que filtros / page mudam)
   const fetchData = useCallback(async () => {
@@ -337,9 +414,8 @@ export function FinanceiroPage() {
     setDlSocioId(""); setDlClassif(""); setDlContaSocioId(""); setDlStatus("provisionado");
     setModalOpen(true);
   }
-  function openEdit(row: TransacaoEmpresaRich) {
-    setEditId(row.id);
-    setForm({
+  function rowToForm(row: TransacaoEmpresaRich): FormState {
+    return {
       data: row.data,
       data_emissao: row.data_emissao ?? "",
       conta_contabil_cod: row.conta_contabil_cod,
@@ -355,8 +431,21 @@ export function FinanceiroPage() {
       status: row.status,
       valor: String(row.valor),
       observacao: row.observacao ?? "",
-    });
+    };
+  }
+  function openEdit(row: TransacaoEmpresaRich) {
+    setEditId(row.id);
+    setForm(rowToForm(row));
     setModalOpen(true);
+  }
+  // Duplicar lançamento (RF 23-jul): abre o modal de NOVO já preenchido com os
+  // dados do existente — a Lola ajusta só a descrição (ou o que precisar) e salva.
+  function openDuplicate(row: TransacaoEmpresaRich) {
+    setEditId(null);
+    setTipoSaida("global");
+    setForm(rowToForm(row));
+    setModalOpen(true);
+    toast.info("Duplicando lançamento", "Revise os campos (ex.: descrição) e clique em Adicionar.");
   }
 
   async function handleSave() {
@@ -376,7 +465,10 @@ export function FinanceiroPage() {
         conta_bancaria_socio_id: dlContaSocioId || null,
         conta_bancaria_socio_nome: contaSel?.nome ?? null,
         valor: Math.abs(Number(form.valor)),
-        data_vencimento: form.data,
+        // O campo "Vencimento" do modal é o vencimento da DESPESA; a Data do
+        // Repasse é definida depois, na tela Distribuição (ajuste 23-jul).
+        data_vencimento: null,
+        data_vencimento_despesa: form.data,
         status: dlStatus,
         observacao: form.observacao || null,
         origem_planilha: null,
@@ -399,37 +491,75 @@ export function FinanceiroPage() {
     }
 
     if (!form.data || !form.conta_contabil_cod || !form.centro_custo_cod || !form.valor) return;
-    const payload: TransacaoEmpresaInsert = {
-      data: form.data,
-      data_emissao: form.data_emissao || null,
-      conta_contabil_cod: form.conta_contabil_cod,
-      centro_custo_cod: form.centro_custo_cod,
-      tipo_despesa: form.tipo_despesa,
-      fornecedor_id: null,
-      fornecedor_nome: form.fornecedor_nome || null,
-      descricao: form.descricao || null,
-      obs_obra: form.obs_obra,
-      ref: form.ref || null,
-      parcelas: form.parcelas || null,
-      forma_pgto: form.forma_pgto,
-      conta_bancaria_id: form.conta_bancaria_id || null,
-      status: form.status,
-      valor: Number(form.valor),
-      observacao: form.observacao || null,
-      origem_planilha: null,
-      created_by: null,
-    };
     setSaving(true);
     try {
+      // Fornecedor digitado vira cadastro (id) automaticamente (RF 23-jul).
+      let fornecedorId: string | null = null;
+      let fornecedorNome: string | null = form.fornecedor_nome.trim() || null;
+      if (fornecedorNome) {
+        const f = await garantirFornecedor(fornecedorNome, fornecedores);
+        if (f) {
+          fornecedorId = f.id;
+          fornecedorNome = f.nome;
+          if (!fornecedores.some((x) => x.id === f.id)) {
+            setFornecedores(await listarFornecedores().catch(() => fornecedores));
+          }
+        }
+      }
+
+      const payload: TransacaoEmpresaInsert = {
+        data: form.data,
+        data_emissao: form.data_emissao || null,
+        conta_contabil_cod: form.conta_contabil_cod,
+        centro_custo_cod: form.centro_custo_cod,
+        tipo_despesa: form.tipo_despesa,
+        fornecedor_id: fornecedorId,
+        fornecedor_nome: fornecedorNome,
+        descricao: form.descricao || null,
+        obs_obra: form.obs_obra,
+        ref: form.ref || null,
+        parcelas: form.parcelas.trim() || null,
+        forma_pgto: form.forma_pgto,
+        conta_bancaria_id: form.conta_bancaria_id || null,
+        status: form.status,
+        valor: Number(form.valor),
+        observacao: form.observacao || null,
+        origem_planilha: null,
+        created_by: null,
+      };
+
       if (editId) {
         await atualizarTransacaoEmpresa(editId, payload);
         toast.success("Lançamento atualizado");
       } else {
-        await criarTransacaoEmpresa(payload);
-        toast.success("Lançamento criado");
+        // LANÇAMENTOS PARCELADOS (RF 23-jul): "3" gera 1/3..3/3; "2/6" gera
+        // 2/6..6/6 — uma parcela por mês, mesmo valor, vencimentos mensais.
+        const serie = parseParcelas(form.parcelas);
+        if (serie && serie.total > serie.inicio) {
+          const lote: TransacaoEmpresaInsert[] = [];
+          for (let i = serie.inicio; i <= serie.total; i++) {
+            lote.push({
+              ...payload,
+              data: addMeses(form.data, i - serie.inicio),
+              parcelas: `${i}/${serie.total}`,
+            });
+          }
+          await criarTransacoesEmpresaLote(lote);
+          toast.success(
+            `${lote.length} parcelas geradas`,
+            `Parcelas ${serie.inicio}/${serie.total} a ${serie.total}/${serie.total}, vencendo mês a mês a partir de ${formatDate(form.data)}.`,
+          );
+        } else {
+          await criarTransacaoEmpresa({
+            ...payload,
+            parcelas: serie ? `${serie.inicio}/${serie.total}` : payload.parcelas,
+          });
+          toast.success("Lançamento criado");
+        }
       }
       setModalOpen(false);
       await fetchData();
+      await fetchSaldos();
     } catch (e: unknown) {
       const msg = (e as Error).message ?? String(e);
       toast.error(editId ? "Não foi possível atualizar" : "Não foi possível criar", msg);
@@ -444,8 +574,40 @@ export function FinanceiroPage() {
       await deletarTransacaoEmpresa(id);
       toast.success("Lançamento excluído");
       await fetchData();
+      await fetchSaldos();
     } catch (e: unknown) {
       toast.error("Não foi possível excluir", (e as Error).message ?? String(e));
+    }
+  }
+
+  // ---- status direto na tela (1 linha) — padrão da Distribuição (RF 23-jul) ----
+  async function mudarStatusInline(row: TransacaoEmpresaRich, status: StatusAramburu) {
+    try {
+      await atualizarTransacaoEmpresa(row.id, { status });
+      toast.success("Status atualizado", `${row.descricao ?? "Lançamento"}: ${getStatusLabel(status)}.`);
+      await fetchData();
+      await fetchSaldos();
+    } catch (e: unknown) {
+      toast.error("Não foi possível mudar o status", (e as Error).message ?? String(e));
+      await fetchData(); // recarrega para o select voltar ao status real
+    }
+  }
+
+  // ---- status em massa dos selecionados (RF 23-jul) ----
+  async function aplicarStatusEmMassa() {
+    if (!bulkStatus || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const n = await atualizarStatusEmMassa(Array.from(selectedIds), bulkStatus as StatusAramburu);
+      toast.success("Status aplicado", `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"} para "${getStatusLabel(bulkStatus)}".`);
+      setSelectedIds(new Set());
+      setBulkStatus("");
+      await fetchData();
+      await fetchSaldos();
+    } catch (e: unknown) {
+      toast.error("Não foi possível aplicar o status", (e as Error).message ?? String(e));
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -480,6 +642,39 @@ export function FinanceiroPage() {
           <Button size="sm" onClick={openNew}><Plus size={14} /> Nova Transação</Button>
         </div>
       </div>
+
+      {/* Resumo dos saldos bancários (RF 23-jul) */}
+      {saldosBanco.length > 0 && (
+        <div className="rounded-xl border border-stone-200 bg-white shadow-sm px-4 py-3">
+          <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-2 flex items-center gap-1">
+            <Wallet size={11} /> Saldos por banco
+          </p>
+          <div className="flex flex-wrap gap-x-6 gap-y-2">
+            {saldosBanco.map((b) => {
+              const saldo = Number(b.saldo_atual);
+              return (
+                <div key={b.conta_bancaria_id} className="flex items-center gap-2" title={b.banco_nome}>
+                  <BankLogo banco={b.banco_instituicao} apelido={b.banco_apelido} size={22} />
+                  <div className="leading-tight">
+                    <p className="text-[10px] text-stone-400">{b.banco_apelido ?? b.banco_nome}</p>
+                    <p className={`text-sm font-bold tabular-nums ${saldo > 0 ? "text-emerald-700" : saldo < 0 ? "text-red-600" : "text-stone-400"}`}>
+                      {formatCurrency(saldo)}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="flex items-center gap-2 pl-4 border-l border-stone-100 ml-auto">
+              <div className="leading-tight text-right">
+                <p className="text-[10px] text-stone-400 uppercase">Total geral</p>
+                <p className="text-sm font-bold tabular-nums text-stone-800">
+                  {formatCurrency(saldosBanco.reduce((s, b) => s + Number(b.saldo_atual), 0))}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* KPIs (página atual) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -527,16 +722,16 @@ export function FinanceiroPage() {
               searchPlaceholder="Buscar status…"
               unitLabel="status"
             />
-            <select
+            <MultiSelect
+              className="w-40"
               value={filterContaContabil}
-              onChange={(e) => { setFilterContaContabil(e.target.value); setPage(1); }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
-            >
-              <option value="">Todas as contas</option>
-              {classificacoesN2.map((c) => (
-                <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>
-              ))}
-            </select>
+              onChange={(v) => { setFilterContaContabil(v); setPage(1); }}
+              options={classificacoesN2.map((c) => ({ value: c.codigo, label: `${c.codigo} – ${c.nome}` }))}
+              placeholder="Todas as contas"
+              searchPlaceholder="Buscar conta…"
+              emptyText="Nenhuma conta"
+              unitLabel="contas"
+            />
             <MultiSelect
               className="w-44"
               value={filterCentroCusto}
@@ -547,40 +742,29 @@ export function FinanceiroPage() {
               emptyText="Nenhum centro de custo"
               unitLabel="centros"
             />
-            <select
-              value={filterMes}
-              onChange={(e) => {
-                setFilterMes(e.target.value);
-                // Mês e período são mutuamente exclusivos (UX-02/3.3).
-                if (e.target.value) { setFilterDataDe(""); setFilterDataAte(""); }
-                setPage(1);
-              }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
-              title="Filtra pelo mês de vencimento. Limpa o filtro por período."
-            >
-              <option value="">Todos os meses</option>
-              {meses.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <select
+            <MultiSelect
+              className="w-36"
               value={filterBanco}
-              onChange={(e) => { setFilterBanco(e.target.value); setPage(1); }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
-            >
-              <option value="">Todos os bancos</option>
-              {bancos.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
-            </select>
-            {/* Filtro por período/intervalo de dias (vencimento). Substitui o mês. */}
+              onChange={(v) => { setFilterBanco(v); setPage(1); }}
+              options={bancos.map((b) => ({ value: b.id, label: b.apelido ?? b.nome }))}
+              placeholder="Todos os bancos"
+              searchPlaceholder="Buscar banco…"
+              emptyText="Nenhum banco"
+              unitLabel="bancos"
+            />
+            {/* Período por VENCIMENTO (RF 23-jul: substitui o filtro de mês) */}
             <div
               className="flex items-center gap-1"
-              title="Filtra por intervalo de datas de vencimento. Substitui o filtro de mês. Use a mesma data nos dois campos para um único dia."
+              title="Período pelo VENCIMENTO. Use a mesma data nos dois campos para um único dia."
             >
               <CalendarRange size={14} className="text-stone-400 shrink-0" />
+              <span className="text-[10px] uppercase text-stone-400 font-medium">Venc.</span>
               <input
                 type="date"
                 value={filterDataDe}
                 max={filterDataAte || undefined}
                 aria-label="Vencimento de"
-                onChange={(e) => { setFilterDataDe(e.target.value); if (e.target.value) setFilterMes(""); setPage(1); }}
+                onChange={(e) => { setFilterDataDe(e.target.value); setPage(1); }}
                 className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
               />
               <span className="text-stone-400 text-xs">até</span>
@@ -589,7 +773,7 @@ export function FinanceiroPage() {
                 value={filterDataAte}
                 min={filterDataDe || undefined}
                 aria-label="Vencimento até"
-                onChange={(e) => { setFilterDataAte(e.target.value); if (e.target.value) setFilterMes(""); setPage(1); }}
+                onChange={(e) => { setFilterDataAte(e.target.value); setPage(1); }}
                 className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
               />
               {(filterDataDe || filterDataAte) && (
@@ -597,8 +781,84 @@ export function FinanceiroPage() {
                   type="button"
                   onClick={() => { setFilterDataDe(""); setFilterDataAte(""); setPage(1); }}
                   className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
-                  title="Limpar período"
-                  aria-label="Limpar período"
+                  title="Limpar período de vencimento"
+                  aria-label="Limpar período de vencimento"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            {/* Período por EMISSÃO (RF 23-jul) */}
+            <div
+              className="flex items-center gap-1"
+              title="Período pela EMISSÃO da NF/documento."
+            >
+              <CalendarRange size={14} className="text-stone-400 shrink-0" />
+              <span className="text-[10px] uppercase text-stone-400 font-medium">Emissão</span>
+              <input
+                type="date"
+                value={filterEmissaoDe}
+                max={filterEmissaoAte || undefined}
+                aria-label="Emissão de"
+                onChange={(e) => { setFilterEmissaoDe(e.target.value); setPage(1); }}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              <span className="text-stone-400 text-xs">até</span>
+              <input
+                type="date"
+                value={filterEmissaoAte}
+                min={filterEmissaoDe || undefined}
+                aria-label="Emissão até"
+                onChange={(e) => { setFilterEmissaoAte(e.target.value); setPage(1); }}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              {(filterEmissaoDe || filterEmissaoAte) && (
+                <button
+                  type="button"
+                  onClick={() => { setFilterEmissaoDe(""); setFilterEmissaoAte(""); setPage(1); }}
+                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
+                  title="Limpar período de emissão"
+                  aria-label="Limpar período de emissão"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            {/* Filtro por VALOR (magnitude R$ — RF 23-jul) */}
+            <div className="flex items-center gap-1" title="Filtra pelo valor (em R$, ignora se é entrada ou saída).">
+              <span className="text-[10px] uppercase text-stone-400 font-medium">R$</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                placeholder="de"
+                value={filterValorMin}
+                aria-label="Valor mínimo"
+                onWheel={(e) => e.currentTarget.blur()}
+                onChange={(e) => { setFilterValorMin(e.target.value); setPage(1); }}
+                className="h-8 w-20 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              <span className="text-stone-400 text-xs">até</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                placeholder="até"
+                value={filterValorMax}
+                aria-label="Valor máximo"
+                onWheel={(e) => e.currentTarget.blur()}
+                onChange={(e) => { setFilterValorMax(e.target.value); setPage(1); }}
+                className="h-8 w-20 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              {(filterValorMin || filterValorMax) && (
+                <button
+                  type="button"
+                  onClick={() => { setFilterValorMin(""); setFilterValorMax(""); setPage(1); }}
+                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
+                  title="Limpar filtro de valor"
+                  aria-label="Limpar filtro de valor"
                 >
                   ×
                 </button>
@@ -606,6 +866,33 @@ export function FinanceiroPage() {
             </div>
           </div>
         </CardHeader>
+
+        {/* Barra de ações em massa — status dos selecionados (RF 23-jul) */}
+        {selectedIds.size > 0 && (
+          <div className="mx-4 mb-1 rounded-lg bg-accent-50 border border-accent-200 px-3 py-2 flex items-center gap-2 flex-wrap text-xs">
+            <span className="font-medium text-stone-700">
+              {selectedIds.size} selecionado{selectedIds.size === 1 ? "" : "s"}:
+            </span>
+            <select
+              value={bulkStatus}
+              onChange={(e) => setBulkStatus(e.target.value)}
+              className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+              title="Status a aplicar em todos os selecionados"
+            >
+              <option value="">Escolher status…</option>
+              {statusAtivos.map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
+            </select>
+            <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy}
+              loading={bulkBusy}
+              onClick={aplicarStatusEmMassa}
+              title="Aplica o status escolhido em todos os lançamentos selecionados de uma vez">
+              Aplicar status
+            </Button>
+            <button onClick={() => setSelectedIds(new Set())} className="text-stone-400 hover:text-stone-600 underline ml-auto">
+              limpar seleção
+            </button>
+          </div>
+        )}
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -631,20 +918,20 @@ export function FinanceiroPage() {
                       {sortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                     </button>
                   </th>
-                  {["Emissão","Conta","Centro de Custo","Descrição","Fornecedor","Banco","Status","Valor","Ações"].map((h) => (
+                  {["Emissão","Conta","Centro de Custo","Descrição","Fornecedor","Ref.","Banco","Status","Valor","Ações"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="inline-block animate-spin mr-2" />
                     Carregando…
                   </td></tr>
                 )}
                 {!loading && rows.length === 0 && (
-                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
                     Nenhuma transação encontrada.
                   </td></tr>
                 )}
@@ -680,11 +967,23 @@ export function FinanceiroPage() {
                       <td className="px-4 py-3 text-stone-500 text-xs max-w-[160px] truncate" title={t.fornecedor_nome ?? ""}>
                         {t.fornecedor_nome || <span className="text-stone-300">—</span>}
                       </td>
+                      <td className="px-4 py-3 text-stone-500 text-xs max-w-[120px] truncate" title={t.ref ?? ""}>
+                        {t.ref || <span className="text-stone-300">—</span>}
+                      </td>
                       <td className="px-4 py-3 text-stone-500 text-xs">
                         {t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? <span className="text-stone-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={t.status} />
+                        <StatusSelect
+                          value={t.status}
+                          onChange={(v) => mudarStatusInline(t, v as StatusAramburu)}
+                          options={(statusAtivos.some((e) => e.codigo === t.status)
+                            ? statusAtivos
+                            : [statusMap.get(t.status) ?? { codigo: t.status, label: getStatusLabel(t.status), cor_bg: "#6b7280", cor_text: "#ffffff", kind: "neutro" as const, ordem: 0, ativo: false, is_sistema: true }, ...statusAtivos]
+                          ).map((e) => ({ value: e.codigo, label: e.label, bg: e.cor_bg, text: e.cor_text }))}
+                          title="Mudar o status deste lançamento direto na tela"
+                          aria-label={`Status de ${t.descricao ?? "lançamento"}`}
+                        />
                       </td>
                       <td className={`px-4 py-3 font-semibold text-sm whitespace-nowrap ${kind === "entrada" ? "text-green-700" : kind === "saida" ? "text-red-600" : "text-stone-700"}`}>
                         {formatCurrency(t.valor)}
@@ -693,6 +992,9 @@ export function FinanceiroPage() {
                         <div className="flex items-center gap-1">
                           <button onClick={() => openEdit(t)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar">
                             <Edit2 size={13} />
+                          </button>
+                          <button onClick={() => openDuplicate(t)} className="p-1.5 rounded hover:bg-accent-50 text-stone-400 hover:text-accent-600 transition" title="Duplicar (abre um novo lançamento já preenchido)">
+                            <Copy size={13} />
                           </button>
                           <button onClick={() => handleDelete(t.id)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
                             <Trash2 size={13} />
@@ -837,8 +1139,13 @@ export function FinanceiroPage() {
 
           <div className="grid grid-cols-2 gap-3">
             {!salvandoDetalhada && (
-              <Input label="Fornecedor / contraparte" value={form.fornecedor_nome}
-                onChange={(e) => setForm({ ...form, fornecedor_nome: e.target.value })} />
+              <ComboBox
+                label="Fornecedor / contraparte"
+                value={form.fornecedor_nome}
+                onChange={(v) => setForm({ ...form, fornecedor_nome: v })}
+                options={fornecedores.map((f) => ({ value: f.id, label: f.nome }))}
+                placeholder="Digite para buscar o cadastrado…"
+              />
             )}
             <Input
               label={salvandoDetalhada ? "Valor (R$)" : "Valor (R$, negativo = saída)"}
@@ -871,9 +1178,22 @@ export function FinanceiroPage() {
               <Input label="Referência (NF / recibo)" value={form.ref}
                 onChange={(e) => setForm({ ...form, ref: e.target.value })}
                 placeholder='NF 12345 / "AGUARDANDO NF"' />
-              <Input label="Parcelas (n/N)" value={form.parcelas}
-                onChange={(e) => setForm({ ...form, parcelas: e.target.value })}
-                placeholder="2/12" />
+              <div className="flex flex-col gap-1.5">
+                <Input label="Parcelas (quantidade ou n/N)" value={form.parcelas}
+                  onChange={(e) => setForm({ ...form, parcelas: e.target.value })}
+                  placeholder={editId ? "2/12" : "ex.: 6 (gera 1/6 a 6/6) ou 2/12"} />
+                {!editId && (() => {
+                  const serie = parseParcelas(form.parcelas);
+                  if (!serie || serie.total <= serie.inicio) return null;
+                  const qtd = serie.total - serie.inicio + 1;
+                  return (
+                    <p className="text-[11px] text-accent-700 bg-accent-50 border border-accent-200 rounded-lg px-2 py-1">
+                      Ao adicionar, serão geradas <b>{qtd} parcelas</b> ({serie.inicio}/{serie.total} a {serie.total}/{serie.total}),
+                      uma por mês a partir de {form.data ? formatDate(form.data) : "…"} — cada uma com o valor informado.
+                    </p>
+                  );
+                })()}
+              </div>
             </div>
           )}
 

@@ -593,11 +593,20 @@ export function EstoquePage() {
                     <p className="text-sm font-bold text-emerald-700">{formatCurrency(resumo.total_valor_venda)}</p>
                   </div>
                 </div>
-                <div className="rounded-lg bg-gradient-to-r from-[#0f1f1c] to-[#1a3028] px-3 py-2.5 text-white flex items-center justify-between">
-                  <p className="text-[10px] uppercase text-[#7ab8aa] font-medium flex items-center gap-1">
-                    <ArrowDownToLine size={11}/> Saldo se vender a terceiros
-                  </p>
-                  <p className="text-lg font-bold">{formatCurrency(resumo.saldo_a_receber)}</p>
+                <div className="rounded-lg bg-gradient-to-r from-[#0f1f1c] to-[#1a3028] px-3 py-2.5 text-white space-y-1">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] uppercase text-[#7ab8aa] font-medium flex items-center gap-1">
+                      <ArrowDownToLine size={11}/> Saldo se vender a terceiros
+                    </p>
+                    <p className="text-lg font-bold">{formatCurrency(resumo.saldo_a_receber)}</p>
+                  </div>
+                  {/* Valor final por saca = saldo líquido ÷ sacas líquidas (RF 23-jul) */}
+                  <div className="flex items-center justify-between border-t border-white/10 pt-1">
+                    <p className="text-[10px] text-emerald-300 font-medium">Valor final por sc:</p>
+                    <p className="text-sm font-bold text-emerald-300 tabular-nums">
+                      {resumo.total_sc_liquida > 0 ? formatCurrency(resumo.saldo_a_receber / resumo.total_sc_liquida) : "—"}
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -642,11 +651,20 @@ export function EstoquePage() {
                     <p className="text-sm font-bold text-emerald-700">{formatCurrency(resumo.armazem_total_valor_venda)}</p>
                   </div>
                 </div>
-                <div className="rounded-lg bg-gradient-to-r from-[#0f1f1c] to-[#1a3028] px-3 py-2.5 text-white flex items-center justify-between">
-                  <p className="text-[10px] uppercase text-[#7ab8aa] font-medium flex items-center gap-1">
-                    <ArrowDownToLine size={11}/> Saldo se vender ao armazém
-                  </p>
-                  <p className="text-lg font-bold">{formatCurrency(resumo.armazem_saldo_a_receber)}</p>
+                <div className="rounded-lg bg-gradient-to-r from-[#0f1f1c] to-[#1a3028] px-3 py-2.5 text-white space-y-1">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] uppercase text-[#7ab8aa] font-medium flex items-center gap-1">
+                      <ArrowDownToLine size={11}/> Saldo se vender ao armazém
+                    </p>
+                    <p className="text-lg font-bold">{formatCurrency(resumo.armazem_saldo_a_receber)}</p>
+                  </div>
+                  {/* Valor final por saca = saldo líquido ÷ sacas líquidas (RF 23-jul) */}
+                  <div className="flex items-center justify-between border-t border-white/10 pt-1">
+                    <p className="text-[10px] text-emerald-300 font-medium">Valor final por sc:</p>
+                    <p className="text-sm font-bold text-emerald-300 tabular-nums">
+                      {resumo.armazem_total_sc_liquida > 0 ? formatCurrency(resumo.armazem_saldo_a_receber / resumo.armazem_total_sc_liquida) : "—"}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

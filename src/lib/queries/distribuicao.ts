@@ -33,11 +33,16 @@ const TS_SELECT = `
 `;
 
 export interface ListarDetalhadoFiltros {
-  mesReferencia?: string;        // "YYYY-MM"
+  mesReferencia?: string;        // "YYYY-MM" (competência — opcional desde 23-jul)
   socioId?: string;
   classificacao?: string;        // "1.01".."1.06"
   status?: StatusDL;
   search?: string;               // descrição / observação
+  // Períodos (23-jul): consulta pela Data do Repasse e/ou pelo Vencimento.
+  repasseDe?: string;            // data_vencimento >= (Data do Repasse)
+  repasseAte?: string;
+  vencimentoDe?: string;         // data_vencimento_despesa >= (Vencimento da fatura)
+  vencimentoAte?: string;
 }
 
 class PermissionOrNotFoundError extends Error {
@@ -64,6 +69,10 @@ export async function listarDetalhado(
   if (filtros.socioId)       q = q.eq("socio_id", filtros.socioId);
   if (filtros.classificacao) q = q.eq("classificacao_pessoal", filtros.classificacao);
   if (filtros.status)        q = q.eq("status", filtros.status);
+  if (filtros.repasseDe)     q = q.gte("data_vencimento", filtros.repasseDe);
+  if (filtros.repasseAte)    q = q.lte("data_vencimento", filtros.repasseAte);
+  if (filtros.vencimentoDe)  q = q.gte("data_vencimento_despesa", filtros.vencimentoDe);
+  if (filtros.vencimentoAte) q = q.lte("data_vencimento_despesa", filtros.vencimentoAte);
   if (filtros.search) {
     const s = filtros.search.replace(/[%_,]/g, " ").trim();
     if (s) q = q.or(`descricao.ilike.%${s}%,observacao.ilike.%${s}%`);
@@ -117,7 +126,7 @@ export async function deletarDetalhado(id: string): Promise<void> {
 // aplica o mesmo vencimento — "1 do 7, 1 do 7, 1 do 7").
 export async function atualizarDetalhadoEmMassa(
   ids: string[],
-  payload: { status?: StatusDL; data_vencimento?: string },
+  payload: { status?: StatusDL; data_vencimento?: string; data_vencimento_despesa?: string },
 ): Promise<number> {
   if (ids.length === 0) return 0;
   const supabase = createClient();

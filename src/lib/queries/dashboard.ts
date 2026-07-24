@@ -112,3 +112,29 @@ export async function getFluxoCaixaMensal(): Promise<FluxoCaixaMes[]> {
   if (error) throw error;
   return (data ?? []) as FluxoCaixaMes[];
 }
+
+// Saldo inicial/final REALIZADO por banco por mês (contas correntes ativas:
+// CORA, SICREDI 0913, INTER) — conferência com os extratos bancários no
+// fechamento de cada período (ajuste 23-jul, view v_fluxo_caixa_bancos).
+export interface FluxoCaixaBancoMes {
+  mes_referencia: string;
+  conta_bancaria_id: string;
+  banco_nome: string;
+  banco_apelido: string | null;
+  banco_instituicao: string | null;
+  banco_ordem: number | null;
+  saldo_inicial: number;
+  movimento_mes: number;
+  saldo_final: number;
+}
+
+export async function getFluxoCaixaBancos(): Promise<FluxoCaixaBancoMes[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("v_fluxo_caixa_bancos")
+    .select("*")
+    .order("mes_referencia")
+    .order("banco_ordem");
+  if (error) throw error;
+  return (data ?? []) as FluxoCaixaBancoMes[];
+}

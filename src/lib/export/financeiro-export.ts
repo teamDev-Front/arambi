@@ -16,7 +16,7 @@ import { buildXlsx, xtext, xmoney, type XlsxValue } from "./xlsx";
 // ---------------------------------------------------------------------------
 // Modelo de linha "achatado" — fonte única para PDF e XLSX (mesmas colunas
 // que a tela: Vencimento, Emissão, Conta, Centro de Custo, Descrição,
-// Fornecedor, Banco, Status, Valor).
+// Fornecedor, Ref., Banco, Status, Valor).
 // ---------------------------------------------------------------------------
 export interface FinanceiroExportRow {
   vencimento: string;
@@ -25,6 +25,7 @@ export interface FinanceiroExportRow {
   centro: string;
   descricao: string;
   fornecedor: string;
+  ref: string;         // Referência (NF / recibo) — coluna nova 23-jul
   banco: string;       // apelido/nome exibível
   status: string;      // label PT-BR
   valorNum: number;    // valor com sinal (negativo = saída)
@@ -53,6 +54,7 @@ export function toExportRows(rows: TransacaoEmpresaRich[]): FinanceiroExportRow[
       centro: centroNome ? `${r.centro_custo_cod} ${centroNome}` : r.centro_custo_cod,
       descricao: r.descricao ?? "",
       fornecedor: r.fornecedor_nome ?? "",
+      ref: r.ref ?? "",
       banco,
       status: getStatusLabel(r.status),
       valorNum: Number(r.valor) || 0,
@@ -125,23 +127,24 @@ export function exportFinanceiroXlsx(
     xtext(r.centro),
     xtext(r.descricao),
     xtext(r.fornecedor),
+    xtext(r.ref),
     xtext(r.banco),
     xtext(r.status),
     xmoney(r.valorNum),
   ]);
 
   // Linha em branco + subtotais por banco + total geral.
-  const empty: XlsxValue[] = [xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext("")];
+  const empty: XlsxValue[] = [xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext("")];
   dataRows.push(empty);
   for (const b of porBanco) {
     dataRows.push([
-      xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""),
+      xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""),
       xtext(`Subtotal ${b.banco}`, { bold: true }),
       xmoney(b.total, { bold: true }),
     ]);
   }
   dataRows.push([
-    xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""),
+    xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""),
     xtext("TOTAL GERAL", { bold: true }),
     xmoney(totalGeral, { bold: true }),
   ]);
@@ -156,6 +159,7 @@ export function exportFinanceiroXlsx(
       { header: "Centro de Custo", width: 30 },
       { header: "Descrição", width: 46 },
       { header: "Fornecedor", width: 26 },
+      { header: "Ref.", width: 16 },
       { header: "Banco", width: 14 },
       { header: "Status", width: 16 },
       { header: "Valor", width: 16 },
@@ -177,7 +181,7 @@ const A4_LANDSCAPE = { w: 841.89, h: 595.28 };
 const MARGIN = { top: 40, bottom: 38, left: 32, right: 32 };
 
 interface ColDef {
-  key: keyof Pick<FinanceiroExportRow, "vencimento" | "emissao" | "conta" | "centro" | "descricao" | "fornecedor" | "banco" | "status" | "valorStr">;
+  key: keyof Pick<FinanceiroExportRow, "vencimento" | "emissao" | "conta" | "centro" | "descricao" | "fornecedor" | "ref" | "banco" | "status" | "valorStr">;
   header: string;
   width: number;
   align: "left" | "right";
@@ -187,10 +191,11 @@ interface ColDef {
 const COLS: ColDef[] = [
   { key: "vencimento", header: "Vencimento", width: 54, align: "left", wrap: 1 },
   { key: "emissao", header: "Emissão", width: 50, align: "left", wrap: 1 },
-  { key: "conta", header: "Conta", width: 96, align: "left", wrap: 2 },
-  { key: "centro", header: "Centro de Custo", width: 96, align: "left", wrap: 2 },
-  { key: "descricao", header: "Descrição", width: 150, align: "left", wrap: 3 },
-  { key: "fornecedor", header: "Fornecedor", width: 96, align: "left", wrap: 2 },
+  { key: "conta", header: "Conta", width: 90, align: "left", wrap: 2 },
+  { key: "centro", header: "Centro de Custo", width: 90, align: "left", wrap: 2 },
+  { key: "descricao", header: "Descrição", width: 132, align: "left", wrap: 3 },
+  { key: "fornecedor", header: "Fornecedor", width: 88, align: "left", wrap: 2 },
+  { key: "ref", header: "Ref.", width: 54, align: "left", wrap: 1 },
   { key: "banco", header: "Banco", width: 52, align: "left", wrap: 1 },
   { key: "status", header: "Status", width: 64, align: "left", wrap: 1 },
   { key: "valorStr", header: "Valor", width: 70, align: "right", wrap: 1 },

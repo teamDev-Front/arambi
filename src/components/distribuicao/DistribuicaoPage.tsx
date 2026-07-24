@@ -15,6 +15,7 @@ import {
   ArrowRightLeft, Undo2, CalendarCheck, PiggyBank, Landmark, AlertTriangle,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
+import { StatusSelect } from "@/components/ui/StatusSelect";
 import {
   listarDetalhado, criarDetalhado, atualizarDetalhado, deletarDetalhado,
   atualizarDetalhadoEmMassa, obterResumoMensal, obterGlobalEmpresaMes,
@@ -23,19 +24,29 @@ import {
   type TransacaoSocioRich, type GlobalEmpresaMes, type RepasseConsolidado,
 } from "@/lib/queries/distribuicao";
 import {
-  STATUS_DL_LABEL,
+  STATUS_DL_LABEL, STATUS_DL_COLOR,
   type StatusDL, type SocioRow, type ClassificacaoPessoalRow,
   type ContaBancariaSocioRow, type DlMensalResumoRow, type TransacaoSocioInsert,
 } from "@/types";
 
+// Cores padronizadas com o Financeiro (RF 23-jul): Provisionado amarelo,
+// A repassar vermelho, Repassado verde.
 const DL_BADGE: Record<StatusDL, BadgeVariant> = {
   provisionado: "warning",
-  a_pagar:      "info",
+  a_pagar:      "danger",
   realizado:    "success",
 };
 
+const DL_SELECT_OPTIONS = (Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) => ({
+  value: s,
+  label: STATUS_DL_LABEL[s],
+  bg: STATUS_DL_COLOR[s].bg,
+  text: STATUS_DL_COLOR[s].text,
+}));
+
 const STATUS_EMPRESA_LABEL: Record<string, string> = {
   a_pagar: "A pagar",
+  a_repassar: "A repassar",
   repassado: "Repassado",
   pago: "Pago",
   recebido: "Recebido",
@@ -48,7 +59,8 @@ type FormState = {
   descricao: string;
   conta_bancaria_socio_id: string;
   competencia: string;        // "YYYY-MM" → grava data = YYYY-MM-01
-  data_vencimento: string;
+  data_vencimento: string;            // Data do Repasse (RF 23-jul)
+  data_vencimento_despesa: string;    // Vencimento da despesa/fatura (RF 23-jul)
   valor: string;
   status: StatusDL;
   observacao: string;
@@ -62,13 +74,19 @@ const mesCorrente = () => {
 export function DistribuicaoPage() {
   const toast = useToast();
 
-  // ---- filtros ----
+  // ---- competência (KPIs / consolidação / repasses do mês) ----
   const [mes, setMes] = useState(mesCorrente());
   const [meses, setMeses] = useState<string[]>([]);
+
+  // ---- filtros da listagem (RF 23-jul: períodos em vez de mês) ----
   const [filterSocio, setFilterSocio] = useState("");
   const [filterClassif, setFilterClassif] = useState("");
   const [filterStatus, setFilterStatus] = useState<StatusDL | "">("");
   const [search, setSearch] = useState("");
+  const [filterRepasseDe, setFilterRepasseDe] = useState("");
+  const [filterRepasseAte, setFilterRepasseAte] = useState("");
+  const [filterVencDe, setFilterVencDe] = useState("");
+  const [filterVencAte, setFilterVencAte] = useState("");
 
   // ---- dados ----
   const [rows, setRows] = useState<TransacaoSocioRich[]>([]);
@@ -118,17 +136,23 @@ export function DistribuicaoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form?.socio_id]);
 
-  // ---- dados do mês ----
+  // ---- dados ----
+  // A LISTAGEM segue os filtros de período (Data do Repasse / Vencimento) —
+  // sem o modo de pesquisa por mês (RF 23-jul, "idem ao Financeiro"). KPIs,
+  // repasses consolidados e consolidação seguem a COMPETÊNCIA do seletor.
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const [r, res, glob, reps] = await Promise.all([
         listarDetalhado({
-          mesReferencia: mes,
           socioId: filterSocio || undefined,
           classificacao: filterClassif || undefined,
           status: filterStatus || undefined,
           search: search || undefined,
+          repasseDe: filterRepasseDe || undefined,
+          repasseAte: filterRepasseAte || undefined,
+          vencimentoDe: filterVencDe || undefined,
+          vencimentoAte: filterVencAte || undefined,
         }),
         obterResumoMensal(mes),
         obterGlobalEmpresaMes(mes),
@@ -144,14 +168,17 @@ export function DistribuicaoPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mes, filterSocio, filterClassif, filterStatus, search]);
+  }, [mes, filterSocio, filterClassif, filterStatus, search,
+      filterRepasseDe, filterRepasseAte, filterVencDe, filterVencAte]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); setSelectedIds(new Set()); }, [fetchData]);
 
   // ---- derivados ----
+  // Consolidáveis exibidos no modal: recorte da COMPETÊNCIA (a listagem pode
+  // estar mostrando outros meses agora que o filtro é por período).
   const consolidaveis = useMemo(
-    () => rows.filter((r) => r.status === "a_pagar" && !r.repasse_id),
-    [rows],
+    () => rows.filter((r) => r.status === "a_pagar" && !r.repasse_id && r.mes_referencia === mes),
+    [rows, mes],
   );
   // Total consolidável do MÊS (independe dos filtros de sócio/classificação da tela)
   const totalConsolidavel = resumo?.a_pagar_sem_repasse ?? 0;
@@ -233,6 +260,7 @@ export function DistribuicaoPage() {
       conta_bancaria_socio_id: "",
       competencia: mes,
       data_vencimento: "",
+      data_vencimento_despesa: "",
       valor: "",
       status: "provisionado",
       observacao: "",
@@ -248,6 +276,7 @@ export function DistribuicaoPage() {
       conta_bancaria_socio_id: row.conta_bancaria_socio_id ?? "",
       competencia: row.mes_referencia,
       data_vencimento: row.data_vencimento ?? "",
+      data_vencimento_despesa: row.data_vencimento_despesa ?? "",
       valor: String(row.valor),
       status: row.status,
       observacao: row.observacao ?? "",
@@ -271,6 +300,7 @@ export function DistribuicaoPage() {
       conta_bancaria_socio_nome: contaSel?.nome ?? (editRow?.conta_bancaria_socio_nome ?? null),
       valor: Number(form.valor),
       data_vencimento: form.data_vencimento || null,
+      data_vencimento_despesa: form.data_vencimento_despesa || null,
       status: form.status,
       observacao: form.observacao || null,
       origem_planilha: null,
@@ -339,7 +369,7 @@ export function DistribuicaoPage() {
   }
 
   async function handleConcluir(rep: RepasseConsolidado) {
-    if (!confirm(`Dar baixa no repasse de ${formatCurrency(-rep.valor)}? O global vira "Repassado", a transferência Cora → Inter vira "Pago/Recebido" e o detalhado vinculado vira "Repassado".`)) return;
+    if (!confirm(`Dar baixa no repasse de ${formatCurrency(-rep.valor)}? O global "A repassar" vira "Repassado", a transferência Cora → Inter vira "Pago/Recebido" e o detalhado vinculado vira "Repassado".`)) return;
     try {
       await concluirRepasse(rep.id);
       toast.success("Baixa registrada", "Repasse concluído — saldos do Cora e do Inter atualizados.");
@@ -359,14 +389,21 @@ export function DistribuicaoPage() {
             Detalhado por sócio — espelho da planilha {`"Distribuição de Lucro_Mensal"`}
           </p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="flex items-center gap-1.5 text-xs text-stone-500" title="Competência dos KPIs, dos repasses consolidados e da consolidação. A tabela abaixo é filtrada pelos períodos de data.">
+            Competência
+            <select value={mes} onChange={(e) => setMes(e.target.value)}
+              className="h-8 rounded-lg border border-stone-200 px-2 text-xs bg-white">
+              {(meses.includes(mes) ? meses : [mes, ...meses]).map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
           <Button
             size="sm"
             onClick={() => setConsolidarOpen(true)}
             disabled={qtdConsolidavel === 0}
             title={qtdConsolidavel === 0
-              ? 'Marque lançamentos como "A pagar" para liberar a consolidação'
-              : "Cria o lançamento global no Financeiro a partir do detalhado marcado como A pagar"}
+              ? 'Marque lançamentos como "A repassar" para liberar a consolidação'
+              : "Cria o lançamento global no Financeiro a partir do detalhado marcado como A repassar"}
           >
             <ArrowRightLeft size={14} />
             Consolidar repasse{totalConsolidavel > 0 ? ` (${formatCurrency(totalConsolidavel)})` : ""}
@@ -379,7 +416,7 @@ export function DistribuicaoPage() {
 
       {/* Passo a passo (para quem vem da planilha) */}
       <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-600 flex flex-wrap gap-x-6 gap-y-1">
-        <span><b className="text-stone-800">1.</b> Confira o detalhado do mês (valores, faturas, vencimentos) e marque item a item como <b>A pagar</b>.</span>
+        <span><b className="text-stone-800">1.</b> Confira o detalhado do mês (valores, faturas, vencimentos) e marque item a item como <b>A repassar</b>.</span>
         <span><b className="text-stone-800">2.</b> Clique em <b>Consolidar repasse</b> — o sistema cria o valor global no Financeiro (Cora → Inter) automaticamente.</span>
         <span><b className="text-stone-800">3.</b> Feito o repasse aos sócios, clique em <b>Dar baixa</b> — tudo vira Repassado de uma vez.</span>
       </div>
@@ -393,10 +430,10 @@ export function DistribuicaoPage() {
           helpText="Soma do detalhado com status Provisionado neste mês. É o que ainda falta conferir/marcar."
         />
         <KpiCard
-          label="A pagar (pronto p/ repasse)"
+          label="A repassar (pronto p/ repasse)"
           value={formatCurrency(resumo?.a_pagar ?? 0)}
           icon={<CalendarCheck size={16} />}
-          helpText="Soma do detalhado marcado como A pagar. A parte ainda não consolidada aparece no botão Consolidar."
+          helpText="Soma do detalhado marcado como A repassar. A parte ainda não consolidada aparece no botão Consolidar."
         />
         <KpiCard
           label="Repassado (mês)"
@@ -450,12 +487,12 @@ export function DistribuicaoPage() {
                     <td className="px-4 py-2.5 text-xs text-stone-500">{rep.qtd_detalhados} lançamento{rep.qtd_detalhados === 1 ? "" : "s"}</td>
                     <td className="px-4 py-2.5 font-semibold text-red-600 whitespace-nowrap">{formatCurrency(rep.valor)}</td>
                     <td className="px-4 py-2.5">
-                      <Badge variant={rep.status === "repassado" ? "success" : "info"}>
+                      <Badge variant={rep.status === "repassado" ? "success" : "danger"}>
                         {STATUS_EMPRESA_LABEL[rep.status] ?? rep.status}
                       </Badge>
                     </td>
                     <td className="px-4 py-2.5">
-                      {rep.status === "a_pagar" && (
+                      {(rep.status === "a_pagar" || rep.status === "a_repassar") && (
                         <div className="flex gap-2">
                           <Button size="sm" variant="outline" onClick={() => handleConcluir(rep)}
                             title="Marca global, transferência e detalhado como repassados/pagos de uma vez">
@@ -490,10 +527,6 @@ export function DistribuicaoPage() {
                 className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-52 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
             </div>
-            <select value={mes} onChange={(e) => setMes(e.target.value)}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs" title="Mês de competência">
-              {(meses.includes(mes) ? meses : [mes, ...meses]).map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
             <select value={filterSocio} onChange={(e) => setFilterSocio(e.target.value)}
               className="h-8 rounded-lg border border-stone-200 px-2 text-xs">
               <option value="">Todos os sócios</option>
@@ -510,6 +543,42 @@ export function DistribuicaoPage() {
               {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
                 <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
             </select>
+            {/* Período pela DATA DO REPASSE (RF 23-jul — substitui a pesquisa por mês) */}
+            <div className="flex items-center gap-1" title="Período pela Data do Repasse.">
+              <span className="text-[10px] uppercase text-stone-400 font-medium">Repasse</span>
+              <input type="date" value={filterRepasseDe} max={filterRepasseAte || undefined}
+                aria-label="Data do repasse de"
+                onChange={(e) => setFilterRepasseDe(e.target.value)}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs" />
+              <span className="text-stone-400 text-xs">até</span>
+              <input type="date" value={filterRepasseAte} min={filterRepasseDe || undefined}
+                aria-label="Data do repasse até"
+                onChange={(e) => setFilterRepasseAte(e.target.value)}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs" />
+              {(filterRepasseDe || filterRepasseAte) && (
+                <button type="button" onClick={() => { setFilterRepasseDe(""); setFilterRepasseAte(""); }}
+                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
+                  title="Limpar período de repasse" aria-label="Limpar período de repasse">×</button>
+              )}
+            </div>
+            {/* Período pelo VENCIMENTO da despesa (RF 23-jul) */}
+            <div className="flex items-center gap-1" title="Período pelo Vencimento da despesa/fatura.">
+              <span className="text-[10px] uppercase text-stone-400 font-medium">Venc.</span>
+              <input type="date" value={filterVencDe} max={filterVencAte || undefined}
+                aria-label="Vencimento de"
+                onChange={(e) => setFilterVencDe(e.target.value)}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs" />
+              <span className="text-stone-400 text-xs">até</span>
+              <input type="date" value={filterVencAte} min={filterVencDe || undefined}
+                aria-label="Vencimento até"
+                onChange={(e) => setFilterVencAte(e.target.value)}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs" />
+              {(filterVencDe || filterVencAte) && (
+                <button type="button" onClick={() => { setFilterVencDe(""); setFilterVencAte(""); }}
+                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
+                  title="Limpar período de vencimento" aria-label="Limpar período de vencimento">×</button>
+              )}
+            </div>
           </div>
         </CardHeader>
 
@@ -522,19 +591,19 @@ export function DistribuicaoPage() {
               value={bulkVencimento}
               onChange={(e) => setBulkVencimento(e.target.value)}
               className="h-7 rounded-lg border border-stone-200 px-2 text-xs"
-              title="Data de vencimento a aplicar nos selecionados"
+              title="Data do Repasse a aplicar nos selecionados"
             />
             <Button size="sm" variant="outline" disabled={!bulkVencimento || bulkBusy}
-              onClick={() => aplicarEmMassa({ data_vencimento: bulkVencimento }, "Vencimento aplicado")}>
-              Aplicar vencimento
+              onClick={() => aplicarEmMassa({ data_vencimento: bulkVencimento }, "Data do repasse aplicada")}>
+              Aplicar data do repasse
             </Button>
             <Button size="sm" variant="outline" disabled={bulkBusy}
               onClick={() => aplicarEmMassa(
                 bulkVencimento ? { status: "a_pagar", data_vencimento: bulkVencimento } : { status: "a_pagar" },
-                'Marcado como "A pagar"',
+                'Marcado como "A repassar"',
               )}
-              title="Marca os selecionados como A pagar (aplica também o vencimento, se preenchido)">
-              Marcar A pagar
+              title="Marca os selecionados como A repassar (aplica também a data do repasse, se preenchida)">
+              Marcar A repassar
             </Button>
             <Button size="sm" variant="ghost" disabled={bulkBusy}
               onClick={() => aplicarEmMassa({ status: "provisionado" }, "Voltou a Provisionado")}>
@@ -555,20 +624,20 @@ export function DistribuicaoPage() {
                     <input type="checkbox" aria-label="Selecionar todos" checked={allSelected} onChange={toggleAll}
                       className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer" />
                   </th>
-                  {["Sócio","Classificação","Descrição","Conta destino","Vencimento","Valor","Status","Repasse","Ações"].map((h) => (
+                  {["Data do Repasse","Sócio","Classificação","Descrição","Conta destino","Vencimento","Valor","Status","Repasse","Ações"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={10} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="inline-block animate-spin mr-2" /> Carregando…
                   </td></tr>
                 )}
                 {!loading && rows.length === 0 && (
-                  <tr><td colSpan={10} className="px-4 py-12 text-center text-stone-400">
-                    Nenhum lançamento detalhado em {mes}. Clique em {"“Novo lançamento detalhado”"} para começar
+                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
+                    Nenhum lançamento detalhado no recorte. Clique em {"“Novo lançamento detalhado”"} para começar
                     — ou lance pelo Financeiro escolhendo {"“Saída detalhada”"} na conta 2.8.
                   </td></tr>
                 )}
@@ -587,6 +656,9 @@ export function DistribuicaoPage() {
                           className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer disabled:opacity-30"
                         />
                       </td>
+                      <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">
+                        {r.data_vencimento ? formatDate(r.data_vencimento) : <span className="text-stone-300">—</span>}
+                      </td>
                       <td className="px-4 py-3 text-stone-700 text-xs font-medium whitespace-nowrap">
                         {r.socio?.apelido ?? r.socio?.nome_completo ?? "—"}
                       </td>
@@ -600,7 +672,7 @@ export function DistribuicaoPage() {
                         {r.conta_bancaria_socio?.nome ?? r.conta_bancaria_socio_nome ?? <span className="text-stone-300">—</span>}
                       </td>
                       <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">
-                        {r.data_vencimento ? formatDate(r.data_vencimento) : <span className="text-stone-300">—</span>}
+                        {r.data_vencimento_despesa ? formatDate(r.data_vencimento_despesa) : <span className="text-stone-300">—</span>}
                       </td>
                       <td className="px-4 py-3 font-semibold text-sm whitespace-nowrap text-stone-800">
                         {formatCurrency(Number(r.valor))}
@@ -609,15 +681,13 @@ export function DistribuicaoPage() {
                         {vinculado ? (
                           <Badge variant={DL_BADGE[r.status]}>{STATUS_DL_LABEL[r.status]}</Badge>
                         ) : (
-                          <select
+                          <StatusSelect
                             value={r.status}
-                            onChange={(e) => mudarStatus(r, e.target.value as StatusDL)}
-                            className="h-7 rounded-lg border border-stone-200 px-1.5 text-xs bg-white"
+                            options={DL_SELECT_OPTIONS}
+                            onChange={(v) => mudarStatus(r, v as StatusDL)}
                             title="Mudar status deste lançamento"
-                          >
-                            {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
-                              <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
-                          </select>
+                            aria-label={`Status de ${r.descricao}`}
+                          />
                         )}
                       </td>
                       <td className="px-4 py-3 text-xs">
@@ -642,7 +712,7 @@ export function DistribuicaoPage() {
               {!loading && rows.length > 0 && (
                 <tfoot>
                   <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700 text-xs">
-                    <td colSpan={6} className="px-4 py-2.5 uppercase tracking-wide">Total do recorte</td>
+                    <td colSpan={7} className="px-4 py-2.5 uppercase tracking-wide">Total do recorte</td>
                     <td className="px-4 py-2.5">{formatCurrency(rows.reduce((s, r) => s + Number(r.valor), 0))}</td>
                     <td colSpan={3}></td>
                   </tr>
@@ -692,11 +762,15 @@ export function DistribuicaoPage() {
               <Input label="Valor (R$) *" type="number" step="0.01" min="0" value={form.valor}
                 onChange={(e) => setForm({ ...form, valor: e.target.value })} />
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <Input label="Competência (mês) *" type="month" value={form.competencia}
                 onChange={(e) => setForm({ ...form, competencia: e.target.value })} />
-              <Input label="Vencimento (dia do repasse)" type="date" value={form.data_vencimento}
+              <Input label="Data do Repasse" type="date" value={form.data_vencimento}
+                title="Data programada para a realização do repasse ao sócio"
                 onChange={(e) => setForm({ ...form, data_vencimento: e.target.value })} />
+              <Input label="Vencimento" type="date" value={form.data_vencimento_despesa}
+                title="Data de vencimento da despesa/fatura"
+                onChange={(e) => setForm({ ...form, data_vencimento_despesa: e.target.value })} />
               <Select label="Status" value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value as StatusDL })}>
                 {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
@@ -722,7 +796,7 @@ export function DistribuicaoPage() {
         <div className="p-6 space-y-4">
           <p className="text-sm text-stone-600">
             Serão consolidados <b>{qtdConsolidavel}</b> lançamento{qtdConsolidavel === 1 ? "" : "s"} detalhado{qtdConsolidavel === 1 ? "" : "s"} de <b>{mes}</b> com
-            status {"“A pagar”"} — total de <b className="text-stone-800">{formatCurrency(totalConsolidavel)}</b>.
+            status {"“A repassar”"} — total de <b className="text-stone-800">{formatCurrency(totalConsolidavel)}</b>.
           </p>
 
           {porSocioConsolidavel.length > 0 && (
@@ -738,7 +812,7 @@ export function DistribuicaoPage() {
           {consolidaveis.length < qtdConsolidavel && (
             <p className="text-xs text-stone-400">
               (O resumo acima considera só o recorte filtrado na tela; a consolidação usa TODOS os lançamentos
-              {" “A pagar”"} do mês, totalizando {formatCurrency(totalConsolidavel)}.)
+              {" “A repassar”"} do mês, totalizando {formatCurrency(totalConsolidavel)}.)
             </p>
           )}
 
@@ -761,10 +835,11 @@ export function DistribuicaoPage() {
                 <p>• Entrada no <b>Inter</b> de {formatCurrency(totalConsolidavel)} (Transf. Entre Contas — 1.9)</p>
               </>
             )}
-            <p>• Saída global no <b>Inter</b> de {formatCurrency(totalConsolidavel)} (Distribuição de Lucro — 2.8), status {"“A pagar”"}</p>
+            <p>• Saída global no <b>Inter</b> de {formatCurrency(totalConsolidavel)} (Distribuição de Lucro — 2.8), status {"“A repassar”"}</p>
             <p className="text-stone-400 pt-1">
-              Tudo nasce como {"“A pagar/A receber”"}. Depois de efetivar o repasse aos sócios, use {"“Dar baixa”"} aqui
-              nesta tela para marcar tudo como Pago/Recebido/Repassado de uma vez.
+              O global nasce {"“A repassar”"} (é um repasse de distribuição de lucros) e a transferência {"“A pagar/A receber”"}.
+              Depois de efetivar o repasse aos sócios, use {"“Dar baixa”"} aqui nesta tela para marcar tudo como
+              Pago/Recebido/Repassado de uma vez.
             </p>
           </div>
 

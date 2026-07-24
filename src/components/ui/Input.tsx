@@ -31,6 +31,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             className
           )}
           {...props}
+          // Campos numéricos: o scroll do mouse alterava o valor sem a operadora
+          // perceber (ajuste 23-jul) — só digitação muda o valor.
+          onWheel={props.type === "number"
+            ? (e) => { e.currentTarget.blur(); props.onWheel?.(e); }
+            : props.onWheel}
         />
       </div>
       {error && <p className="text-xs text-red-600">{error}</p>}

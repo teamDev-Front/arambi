@@ -124,6 +124,10 @@ export function RelatorioEscopoModal({
         conta_bancaria_id: filtros.contaBancariaId,
         data_de: filtros.dataDe,
         data_ate: filtros.dataAte,
+        emissao_de: filtros.emissaoDe,
+        emissao_ate: filtros.emissaoAte,
+        valor_min: filtros.valorMin,
+        valor_max: filtros.valorMax,
       },
       totais,
     };
