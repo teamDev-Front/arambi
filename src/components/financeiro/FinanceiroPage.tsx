@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { KpiCard } from "@/components/ui/KpiCard";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { MultiSelect } from "@/components/ui/MultiSelect";
@@ -15,9 +14,11 @@ import { RelatorioEscopoModal } from "@/components/financeiro/RelatorioEscopoMod
 import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
   Plus, FileText, Search, Edit2, Trash2, Copy,
-  TrendingUp, TrendingDown, Loader2,
+  TrendingUp, Loader2,
   FileDown, FileSpreadsheet, CalendarRange,
-  ChevronUp, ChevronDown, Wallet,
+  ChevronUp, ChevronDown, Wallet, FilterX,
+  AlertTriangle, CalendarClock, CalendarDays,
+  Tag, X,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
@@ -28,11 +29,16 @@ import {
   atualizarTransacaoEmpresa,
   atualizarStatusEmMassa,
   deletarTransacaoEmpresa,
+  deletarTransacoesEmpresaEmMassa,
   listarClassificacoes,
   listarContasEmpresa,
   listarFornecedores,
   garantirFornecedor,
+  getIndicadoresVencimentos,
+  STATUS_SAIDA_PENDENTE,
+  STATUS_ENTRADA_PENDENTE,
   type TransacaoEmpresaRich,
+  type IndicadoresVencimentos,
 } from "@/lib/queries/financeiro";
 import { getSaldoAtualPorBanco, type SaldoAtualBanco } from "@/lib/queries/dashboard";
 import {
@@ -114,6 +120,13 @@ function parseParcelas(texto: string): { inicio: number; total: number } | null 
   return null;
 }
 
+/** Soma dias a uma data ISO no fuso LOCAL (sem o recuo de dia do parse UTC). */
+function isoAddDias(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
 /** Soma meses a uma data ISO preservando o dia (trava no fim do mês curto). */
 function addMeses(iso: string, n: number): string {
   const [y, m, d] = iso.split("-").map(Number);
@@ -123,6 +136,41 @@ function addMeses(iso: string, n: number): string {
   const ultimoDia = new Date(ano, mes, 0).getDate();
   const dia = Math.min(d, ultimoDia);
   return `${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+}
+
+/**
+ * TAG do dia (RF 24-jul) — o "pintar de amarelo" da planilha: marca os
+ * lançamentos que estão sendo trabalhados hoje (agendados/enviados ao banco)
+ * para depois gerar relatório/capa só com eles. Persistida no NAVEGADOR
+ * (localStorage): sobrevive a filtros, paginação e recarregamento; some só
+ * quando a própria pessoa limpa. Guardamos um snapshot leve para o painel
+ * flutuante funcionar mesmo com o lançamento fora da página atual.
+ */
+type TagSnapshot = {
+  id: string;
+  data: string;
+  descricao: string | null;
+  fornecedor: string | null;
+  valor: number;
+};
+
+const TAGS_STORAGE_KEY = "arambi.financeiro.tags.v1";
+
+function carregarTags(): Map<string, TagSnapshot> {
+  if (typeof window === "undefined") return new Map();
+  try {
+    const raw = window.localStorage.getItem(TAGS_STORAGE_KEY);
+    if (!raw) return new Map();
+    const arr = JSON.parse(raw) as TagSnapshot[];
+    if (!Array.isArray(arr)) return new Map();
+    return new Map(
+      arr
+        .filter((t) => t && typeof t.id === "string")
+        .map((t) => [t.id, { ...t, valor: Number(t.valor) || 0 }]),
+    );
+  } catch {
+    return new Map();
+  }
 }
 
 const EMPTY_FORM: FormState = {
@@ -159,6 +207,73 @@ export function FinanceiroPage() {
   // ---- resumo dos saldos bancários no cabeçalho (RF 23-jul) ----
   const [saldosBanco, setSaldosBanco] = useState<SaldoAtualBanco[]>([]);
 
+  // ---- indicadores de vencimento nos cards do topo (ajuste 24-jul) ----
+  const [indicadores, setIndicadores] = useState<IndicadoresVencimentos | null>(null);
+
+  // ---- TAGs do dia (RF 24-jul) ----
+  // Carregadas do localStorage APÓS a montagem (evita mismatch de hidratação);
+  // só gravamos de volta depois de carregar, para não sobrescrever o salvo.
+  const [tags, setTags] = useState<Map<string, TagSnapshot>>(new Map());
+  const [tagsCarregadas, setTagsCarregadas] = useState(false);
+  const [tagPanelOpen, setTagPanelOpen] = useState(false);
+  const [mostrarSoTagueados, setMostrarSoTagueados] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hidratação do localStorage pós-mount
+    setTags(carregarTags());
+    setTagsCarregadas(true);
+  }, []);
+  useEffect(() => {
+    if (!tagsCarregadas) return;
+    try {
+      window.localStorage.setItem(TAGS_STORAGE_KEY, JSON.stringify(Array.from(tags.values())));
+    } catch {
+      // localStorage indisponível (modo privado/cota) — tags seguem em memória.
+    }
+  }, [tags, tagsCarregadas]);
+  // Sem tags não existe "só tagueados" — desliga o recorte automaticamente.
+  useEffect(() => {
+    if (tags.size === 0 && mostrarSoTagueados) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMostrarSoTagueados(false);
+    }
+  }, [tags, mostrarSoTagueados]);
+
+  const toggleTag = useCallback((row: TransacaoEmpresaRich) => {
+    setTags((prev) => {
+      const next = new Map(prev);
+      if (next.has(row.id)) next.delete(row.id);
+      else next.set(row.id, {
+        id: row.id,
+        data: row.data,
+        descricao: row.descricao ?? null,
+        fornecedor: row.fornecedor_nome ?? null,
+        valor: Number(row.valor),
+      });
+      return next;
+    });
+  }, []);
+
+  const removerTag = useCallback((id: string) => {
+    setTags((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const somaTags = useMemo(() => {
+    let s = 0;
+    tags.forEach((t) => { s += t.valor; });
+    return s;
+  }, [tags]);
+
+  function limparTags() {
+    if (!confirm(`Limpar ${tags.size === 1 ? "a tag" : `as ${tags.size} tags`} do dia? Os lançamentos em si não são alterados.`)) return;
+    setTags(new Map());
+    setTagPanelOpen(false);
+  }
+
   // ---- filtros / UI (todos multi-seleção — RF 23-jul) ----
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<StatusAramburu[]>([]);
@@ -183,12 +298,17 @@ export function FinanceiroPage() {
 
   // ---- seleção manual p/ relatório por escopo (RF-FIN-09) ----
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Valores dos selecionados (id → valor) — alimenta a autossoma estilo Excel
+  // (RF 24-jul) mesmo quando a seleção atravessa páginas.
+  const [selectedValores, setSelectedValores] = useState<Map<string, number>>(new Map());
   const [escopoOpen, setEscopoOpen] = useState(false);
   const [escopoTipo, setEscopoTipo] = useState<"por_filtros" | "por_selecao">("por_filtros");
 
   // ---- status em massa dos selecionados (RF 23-jul) ----
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
+  // ---- exclusão em massa dos selecionados (RF 24-jul) ----
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -244,40 +364,167 @@ export function FinanceiroPage() {
     [classificacoesN3],
   );
 
+  // Filtros dependentes (RF 24-jul): com Conta(s) Contábil(is) selecionada(s), o
+  // filtro de Centro de Custo mostra só os centros vinculados — mesma lógica do
+  // modal "Nova Transação".
+  const centrosFiltraveis = useMemo(
+    () => (filterContaContabil.length
+      ? classificacoesN3.filter((c) => c.parent_codigo && filterContaContabil.includes(c.parent_codigo))
+      : classificacoesN3),
+    [classificacoesN3, filterContaContabil],
+  );
+
   // Status data-driven (Admin → Status & Cores). Ativos para os filtros/seleções.
   const { entries: statusEntries, map: statusMap } = useStatusConfig();
   const statusAtivos = useMemo(() => statusEntries.filter((e) => e.ativo), [statusEntries]);
 
-  // KPI rápida das linhas exibidas (nem todas as 731 — é "do que tá em tela")
-  const kpis = useMemo(() => {
-    const r: { entradas: number; saidas: number; aPagar: number } = { entradas: 0, saidas: 0, aPagar: 0 };
-    for (const t of rows) {
-      const k = STATUS_KIND[t.status];
-      if (t.status === "a_pagar" || t.status === "a_repassar" || t.status === "a_aplicar") {
-        r.aPagar += -t.valor;
-      } else if (k === "entrada") r.entradas += t.valor;
-      else if (k === "saida")   r.saidas   += -t.valor;
+  // Cards de vencimento no topo (ajuste 24-jul — substituem os KPIs "da página").
+  // Clicar num card espelha o recorte dele nos filtros da tabela.
+  type IndicadorKey = "atraso" | "hoje" | "pagar" | "receber";
+  const indicadorCards = useMemo(() => {
+    if (!indicadores) return [];
+    const hojeFmt = formatDate(indicadores.hoje);
+    const fimFmt = formatDate(indicadores.fimDoMes);
+    const ateDia = fimFmt.slice(0, 5); // "31/07"
+    return [
+      {
+        key: "atraso" as IndicadorKey,
+        label: "Contas em atraso",
+        unidade: "conta",
+        icon: <AlertTriangle size={15} />,
+        iconClass: "bg-red-50 text-red-600",
+        labelClass: "text-red-700",
+        valorClass: "text-red-600",
+        ...indicadores.emAtraso,
+        help: `Saídas em aberto (A pagar, A repassar, A aplicar e Provisionados) vencidas antes de hoje (${hojeFmt}). Clique para ver esses lançamentos na tabela.`,
+      },
+      {
+        key: "hoje" as IndicadorKey,
+        label: "Vencem hoje",
+        unidade: "conta",
+        icon: <CalendarClock size={15} />,
+        iconClass: "bg-orange-50 text-orange-600",
+        labelClass: "text-orange-700",
+        valorClass: "text-orange-600",
+        ...indicadores.vencemHoje,
+        help: `Saídas em aberto que vencem hoje (${hojeFmt}). Clique para ver na tabela.`,
+      },
+      {
+        key: "pagar" as IndicadorKey,
+        label: `A pagar até ${ateDia}`,
+        unidade: "conta",
+        icon: <CalendarDays size={15} />,
+        iconClass: "bg-amber-50 text-amber-700",
+        labelClass: "text-amber-700",
+        valorClass: "text-amber-700",
+        ...indicadores.aPagarAteFimDoMes,
+        help: `Saídas em aberto (inclui provisionados) vencendo de hoje até ${fimFmt}. As atrasadas ficam no card "Contas em atraso". Clique para ver na tabela.`,
+      },
+      {
+        key: "receber" as IndicadorKey,
+        label: `A receber até ${ateDia}`,
+        unidade: "recebimento",
+        icon: <TrendingUp size={15} />,
+        iconClass: "bg-emerald-50 text-emerald-600",
+        labelClass: "text-emerald-700",
+        valorClass: "text-emerald-600",
+        ...indicadores.aReceberAteFimDoMes,
+        help: `Entradas em aberto (A receber e A resgatar) com vencimento até ${fimFmt} — inclui as atrasadas. Clique para ver na tabela.`,
+      },
+    ];
+  }, [indicadores]);
+
+  // Há algum filtro aplicado? (controla a visibilidade do "Limpar todos os filtros")
+  const temFiltrosAtivos = Boolean(
+    search || filterStatus.length || filterContaContabil.length || filterCentroCusto.length ||
+    filterBanco.length || filterDataDe || filterDataAte || filterEmissaoDe || filterEmissaoAte ||
+    filterValorMin || filterValorMax || mostrarSoTagueados,
+  );
+
+  // "Limpar todos os filtros" (RF 24-jul) — volta a listagem ao estado completo.
+  // Desliga também o recorte "só tagueados", mas NÃO apaga as tags em si.
+  function limparTodosFiltros() {
+    setSearch("");
+    setFilterStatus([]);
+    setFilterContaContabil([]);
+    setFilterCentroCusto([]);
+    setFilterBanco([]);
+    setFilterDataDe("");
+    setFilterDataAte("");
+    setFilterEmissaoDe("");
+    setFilterEmissaoAte("");
+    setFilterValorMin("");
+    setFilterValorMax("");
+    setMostrarSoTagueados(false);
+    setPage(1);
+  }
+
+  function aplicarFiltroIndicador(key: IndicadorKey) {
+    if (!indicadores) return;
+    // Zera os filtros e aplica só o recorte do card — a tabela espelha o número.
+    limparTodosFiltros();
+    const { hoje, fimDoMes } = indicadores;
+    if (key === "atraso") {
+      setFilterStatus([...STATUS_SAIDA_PENDENTE]);
+      setFilterDataDe("");
+      setFilterDataAte(isoAddDias(hoje, -1));
+    } else if (key === "hoje") {
+      setFilterStatus([...STATUS_SAIDA_PENDENTE]);
+      setFilterDataDe(hoje);
+      setFilterDataAte(hoje);
+    } else if (key === "pagar") {
+      setFilterStatus([...STATUS_SAIDA_PENDENTE]);
+      setFilterDataDe(hoje);
+      setFilterDataAte(fimDoMes);
+    } else {
+      setFilterStatus([...STATUS_ENTRADA_PENDENTE]);
+      setFilterDataDe("");
+      setFilterDataAte(fimDoMes);
     }
-    return r;
-  }, [rows]);
+    setPage(1);
+  }
 
   // ---- seleção (RF-FIN-09) ----
   const allPageSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
   const togglePageSelection = useCallback(() => {
+    if (rows.length === 0) return;
+    const allSel = rows.every((r) => selectedIds.has(r.id));
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (rows.length > 0 && rows.every((r) => next.has(r.id))) rows.forEach((r) => next.delete(r.id));
-      else rows.forEach((r) => next.add(r.id));
+      rows.forEach((r) => { if (allSel) next.delete(r.id); else next.add(r.id); });
       return next;
     });
-  }, [rows]);
-  const toggleOneSelection = useCallback((id: string) => {
+    setSelectedValores((prev) => {
+      const next = new Map(prev);
+      rows.forEach((r) => { if (allSel) next.delete(r.id); else next.set(r.id, Number(r.valor)); });
+      return next;
+    });
+  }, [rows, selectedIds]);
+  const toggleOneSelection = useCallback((row: TransacaoEmpresaRich) => {
+    const marcado = selectedIds.has(row.id);
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (marcado) next.delete(row.id); else next.add(row.id);
       return next;
     });
+    setSelectedValores((prev) => {
+      const next = new Map(prev);
+      if (marcado) next.delete(row.id); else next.set(row.id, Number(row.valor));
+      return next;
+    });
+  }, [selectedIds]);
+  const limparSelecao = useCallback(() => {
+    setSelectedIds(new Set());
+    setSelectedValores(new Map());
   }, []);
+
+  // Autossoma estilo Excel (RF 24-jul): soma COM SINAL dos selecionados — serve
+  // pra conferir, p.ex., se "A pagar" × "A resgatar" do mesmo título zeram.
+  const somaSelecionados = useMemo(() => {
+    let s = 0;
+    selectedValores.forEach((v) => { s += v; });
+    return s;
+  }, [selectedValores]);
 
   // Filtros atuais (para gerar relatório pelo recorte) e competência sugerida.
   const filtrosAtuais: ListarTransacoesFiltros = useMemo(() => ({
@@ -292,8 +539,12 @@ export function FinanceiroPage() {
     emissaoAte: filterEmissaoAte || undefined,
     valorMin: filterValorMin ? Math.abs(Number(filterValorMin)) || undefined : undefined,
     valorMax: filterValorMax ? Math.abs(Number(filterValorMax)) || undefined : undefined,
+    // "Ver só tagueados" (RF 24-jul): restringe a listagem — e, por tabela,
+    // exportações/relatórios "pelos filtros" — aos lançamentos com TAG.
+    ids: mostrarSoTagueados && tags.size > 0 ? Array.from(tags.keys()) : undefined,
   }), [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
-       filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte, filterValorMin, filterValorMax]);
+       filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte, filterValorMin, filterValorMax,
+       mostrarSoTagueados, tags]);
   const competenciaSugerida = filterDataDe?.slice(0, 7) || new Date().toISOString().slice(0, 7);
 
   function abrirEscopo() {
@@ -333,13 +584,17 @@ export function FinanceiroPage() {
     if (filterValorMin || filterValorMax) {
       f.push(`Valor: ${filterValorMin ? formatCurrency(Number(filterValorMin)) : "…"} a ${filterValorMax ? formatCurrency(Number(filterValorMax)) : "…"}`);
     }
+    if (mostrarSoTagueados && tags.size > 0) {
+      f.push(`Apenas lançamentos tagueados (${tags.size})`);
+    }
     const escopo = selectedIds.size > 0
       ? `Seleção manual — ${selectedIds.size} lançamento${selectedIds.size === 1 ? "" : "s"}`
       : "Recorte pelos filtros aplicados na tela";
     return { titulo: "Relatório de Lançamentos Financeiros", escopo, filtros: f };
   }, [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
       filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte,
-      filterValorMin, filterValorMax, selectedIds, classificacoesN2, classificacoesN3, bancos]);
+      filterValorMin, filterValorMax, selectedIds, classificacoesN2, classificacoesN3, bancos,
+      mostrarSoTagueados, tags]);
 
   async function handleExport(formato: "pdf" | "xlsx") {
     const setBusy = formato === "pdf" ? setExportandoPdf : setExportandoXlsx;
@@ -387,6 +642,17 @@ export function FinanceiroPage() {
   }, []);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchSaldos(); }, [fetchSaldos]);
+
+  // Indicadores de vencimento — recarregados após cada mutação (ajuste 24-jul).
+  const fetchIndicadores = useCallback(async () => {
+    try {
+      setIndicadores(await getIndicadoresVencimentos());
+    } catch {
+      // silencioso: os cards são informativos; a tabela continua funcionando.
+    }
+  }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { fetchIndicadores(); }, [fetchIndicadores]);
 
   // dados (refetch sempre que filtros / page mudam)
   const fetchData = useCallback(async () => {
@@ -530,6 +796,25 @@ export function FinanceiroPage() {
 
       if (editId) {
         await atualizarTransacaoEmpresa(editId, payload);
+        // Mantém a autossoma correta se o lançamento editado estiver selecionado.
+        if (selectedValores.has(editId)) {
+          const novoValor = Number(form.valor);
+          setSelectedValores((prev) => new Map(prev).set(editId, novoValor));
+        }
+        // Atualiza o snapshot da TAG (painel flutuante) se estiver tagueado.
+        if (tags.has(editId)) {
+          setTags((prev) => {
+            const atual = prev.get(editId);
+            if (!atual) return prev;
+            return new Map(prev).set(editId, {
+              ...atual,
+              data: form.data,
+              descricao: form.descricao || null,
+              fornecedor: fornecedorNome,
+              valor: Number(form.valor),
+            });
+          });
+        }
         toast.success("Lançamento atualizado");
       } else {
         // LANÇAMENTOS PARCELADOS (RF 23-jul): "3" gera 1/3..3/3; "2/6" gera
@@ -558,8 +843,7 @@ export function FinanceiroPage() {
         }
       }
       setModalOpen(false);
-      await fetchData();
-      await fetchSaldos();
+      await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     } catch (e: unknown) {
       const msg = (e as Error).message ?? String(e);
       toast.error(editId ? "Não foi possível atualizar" : "Não foi possível criar", msg);
@@ -572,9 +856,18 @@ export function FinanceiroPage() {
     if (!confirm("Excluir este lançamento?")) return;
     try {
       await deletarTransacaoEmpresa(id);
+      // Tira o excluído da seleção (se estava) para não somar/exportar fantasma.
+      setSelectedIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev); next.delete(id); return next;
+      });
+      setSelectedValores((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Map(prev); next.delete(id); return next;
+      });
+      removerTag(id);
       toast.success("Lançamento excluído");
-      await fetchData();
-      await fetchSaldos();
+      await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     } catch (e: unknown) {
       toast.error("Não foi possível excluir", (e as Error).message ?? String(e));
     }
@@ -585,8 +878,7 @@ export function FinanceiroPage() {
     try {
       await atualizarTransacaoEmpresa(row.id, { status });
       toast.success("Status atualizado", `${row.descricao ?? "Lançamento"}: ${getStatusLabel(status)}.`);
-      await fetchData();
-      await fetchSaldos();
+      await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     } catch (e: unknown) {
       toast.error("Não foi possível mudar o status", (e as Error).message ?? String(e));
       await fetchData(); // recarrega para o select voltar ao status real
@@ -600,15 +892,57 @@ export function FinanceiroPage() {
     try {
       const n = await atualizarStatusEmMassa(Array.from(selectedIds), bulkStatus as StatusAramburu);
       toast.success("Status aplicado", `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"} para "${getStatusLabel(bulkStatus)}".`);
-      setSelectedIds(new Set());
+      limparSelecao();
       setBulkStatus("");
-      await fetchData();
-      await fetchSaldos();
+      await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     } catch (e: unknown) {
       toast.error("Não foi possível aplicar o status", (e as Error).message ?? String(e));
     } finally {
       setBulkBusy(false);
     }
+  }
+
+  // ---- exclusão em massa dos selecionados (RF 24-jul) ----
+  async function excluirSelecionados() {
+    const n = selectedIds.size;
+    if (n === 0) return;
+    const alvo = n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`;
+    if (!confirm(`Excluir DEFINITIVAMENTE ${alvo}? Essa ação não pode ser desfeita.`)) return;
+    setBulkDeleteBusy(true);
+    try {
+      const excluidos = await deletarTransacoesEmpresaEmMassa(Array.from(selectedIds));
+      if (excluidos < n) {
+        toast.warning("Exclusão parcial", `${excluidos} de ${n} lançamentos excluídos — os demais podem estar protegidos (permissão).`);
+      } else {
+        toast.success("Lançamentos excluídos", `${excluidos} lançamento${excluidos === 1 ? "" : "s"} excluído${excluidos === 1 ? "" : "s"} de uma vez.`);
+      }
+      // Tira os excluídos das tags também (se estavam tagueados).
+      setTags((prev) => {
+        let mudou = false;
+        const next = new Map(prev);
+        selectedIds.forEach((id) => { if (next.delete(id)) mudou = true; });
+        return mudou ? next : prev;
+      });
+      limparSelecao();
+      await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+    } catch (e: unknown) {
+      toast.error("Não foi possível excluir os selecionados", (e as Error).message ?? String(e));
+    } finally {
+      setBulkDeleteBusy(false);
+    }
+  }
+
+  // Copia as TAGs para a seleção — libera tudo que a seleção já sabe fazer:
+  // Exportar PDF/XLSX, Gerar relatório (capa), status em massa, autossoma.
+  function selecionarTagueados() {
+    if (tags.size === 0) return;
+    setSelectedIds(new Set(tags.keys()));
+    setSelectedValores(new Map(Array.from(tags.values(), (t) => [t.id, t.valor])));
+    setTagPanelOpen(false);
+    toast.info(
+      "Tagueados na seleção",
+      `${tags.size} lançamento${tags.size === 1 ? "" : "s"} selecionado${tags.size === 1 ? "" : "s"} — use Exportar PDF/XLSX ou Gerar relatório (capa) aí em cima.`,
+    );
   }
 
   // ---- render ----
@@ -676,28 +1010,36 @@ export function FinanceiroPage() {
         </div>
       )}
 
-      {/* KPIs (página atual) */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <KpiCard
-          label="Entradas (página)"
-          value={formatCurrency(kpis.entradas)}
-          icon={<TrendingUp size={16}/>}
-          helpText="Soma dos lançamentos com status de entrada (Recebido, Resgatado, Aplicação, etc.) APENAS da página atual."
-        />
-        <KpiCard
-          label="Saídas (página)"
-          value={formatCurrency(kpis.saidas)}
-          icon={<TrendingDown size={16}/>}
-          helpText="Soma das saídas realizadas (Pago, Repassado, Aplicado) APENAS da página atual."
-        />
-        <KpiCard
-          label="A pagar (página)"
-          value={formatCurrency(kpis.aPagar)}
-          icon={<TrendingDown size={16}/>}
-          trend="down"
-          helpText="Compromissos em aberto (A pagar, A repassar, A aplicar) na página atual. Use os filtros para somar o mês inteiro."
-        />
-      </div>
+      {/* Indicadores de vencimento — foto global dos lançamentos em aberto (ajuste 24-jul) */}
+      {indicadores && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {indicadorCards.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => aplicarFiltroIndicador(c.key)}
+              title={c.help}
+              className="rounded-xl border border-stone-200 bg-white shadow-sm px-3.5 py-2.5 flex items-center gap-3 text-left transition-colors hover:border-stone-300 hover:bg-stone-50 cursor-pointer"
+            >
+              <span className={`h-8 w-8 shrink-0 rounded-full flex items-center justify-center ${c.iconClass}`}>
+                {c.icon}
+              </span>
+              <span className="leading-tight min-w-0">
+                <p className={`text-[10px] font-semibold uppercase tracking-wide truncate ${c.labelClass}`}>
+                  {c.label}
+                </p>
+                <p className="text-sm font-bold tabular-nums text-stone-800 whitespace-nowrap">
+                  {c.qtd}{" "}
+                  <span className="font-normal text-stone-400">
+                    {c.unidade}{c.qtd === 1 ? "" : "s"} ·
+                  </span>{" "}
+                  <span className={c.valorClass}>{formatCurrency(c.total)}</span>
+                </p>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Tabela */}
       <Card>
@@ -725,7 +1067,20 @@ export function FinanceiroPage() {
             <MultiSelect
               className="w-40"
               value={filterContaContabil}
-              onChange={(v) => { setFilterContaContabil(v); setPage(1); }}
+              onChange={(v) => {
+                setFilterContaContabil(v);
+                // Dependência Conta ↔ Centro (RF 24-jul): descarta centros que
+                // não pertencem mais às contas selecionadas.
+                if (v.length) {
+                  const validos = new Set(
+                    classificacoesN3
+                      .filter((c) => c.parent_codigo && v.includes(c.parent_codigo))
+                      .map((c) => c.codigo),
+                  );
+                  setFilterCentroCusto((prev) => prev.filter((cod) => validos.has(cod)));
+                }
+                setPage(1);
+              }}
               options={classificacoesN2.map((c) => ({ value: c.codigo, label: `${c.codigo} – ${c.nome}` }))}
               placeholder="Todas as contas"
               searchPlaceholder="Buscar conta…"
@@ -736,7 +1091,7 @@ export function FinanceiroPage() {
               className="w-44"
               value={filterCentroCusto}
               onChange={(v) => { setFilterCentroCusto(v); setPage(1); }}
-              options={classificacoesN3.map((c) => ({ value: c.codigo, label: `${c.codigo} – ${c.nome}` }))}
+              options={centrosFiltraveis.map((c) => ({ value: c.codigo, label: `${c.codigo} – ${c.nome}` }))}
               placeholder="Todos os centros de custo"
               searchPlaceholder="Buscar centro de custo…"
               emptyText="Nenhum centro de custo"
@@ -864,6 +1219,35 @@ export function FinanceiroPage() {
                 </button>
               )}
             </div>
+            {/* Recorte "só tagueados" ativo — chip visível junto dos filtros (RF 24-jul) */}
+            {mostrarSoTagueados && (
+              <span
+                className="h-8 inline-flex items-center gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 text-xs font-medium text-amber-800"
+                title="A tabela está mostrando apenas os lançamentos tagueados"
+              >
+                <Tag size={12} fill="currentColor" /> Só tagueados
+                <button
+                  type="button"
+                  onClick={() => { setMostrarSoTagueados(false); setPage(1); }}
+                  className="text-amber-400 hover:text-amber-700 cursor-pointer"
+                  aria-label="Mostrar todos os lançamentos"
+                  title="Voltar a mostrar todos"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {/* Limpar todos os filtros de uma vez (RF 24-jul) */}
+            {temFiltrosAtivos && (
+              <button
+                type="button"
+                onClick={limparTodosFiltros}
+                className="h-8 px-2 rounded-lg text-xs font-medium text-stone-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                title="Remove todos os filtros da listagem de uma vez (busca, status, contas, bancos, períodos e valor)"
+              >
+                <FilterX size={13} /> Limpar todos os filtros
+              </button>
+            )}
           </div>
         </CardHeader>
 
@@ -882,13 +1266,31 @@ export function FinanceiroPage() {
               <option value="">Escolher status…</option>
               {statusAtivos.map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
             </select>
-            <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy}
+            <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy || bulkDeleteBusy}
               loading={bulkBusy}
               onClick={aplicarStatusEmMassa}
               title="Aplica o status escolhido em todos os lançamentos selecionados de uma vez">
               Aplicar status
             </Button>
-            <button onClick={() => setSelectedIds(new Set())} className="text-stone-400 hover:text-stone-600 underline ml-auto">
+            {/* Exclusão em massa (RF 24-jul) */}
+            <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
+              loading={bulkDeleteBusy}
+              onClick={excluirSelecionados}
+              className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+              title="Exclui DE UMA VEZ todos os lançamentos selecionados (pede confirmação)">
+              <Trash2 size={13} /> Excluir selecionados
+            </Button>
+            {/* Autossoma estilo Excel (RF 24-jul) — soma com sinal dos selecionados */}
+            <span
+              className="ml-auto inline-flex items-center gap-1.5 font-semibold text-stone-700 tabular-nums bg-white border border-accent-200 rounded-lg px-2.5 py-1"
+              title="Autossoma (estilo Excel): soma COM SINAL dos lançamentos selecionados — nas conferências, A pagar × A resgatar do mesmo título deve zerar."
+            >
+              Soma:{" "}
+              <span className={somaSelecionados > 0 ? "text-emerald-700" : somaSelecionados < 0 ? "text-red-600" : "text-stone-800"}>
+                {formatCurrency(somaSelecionados)}
+              </span>
+            </span>
+            <button onClick={limparSelecao} className="text-stone-400 hover:text-stone-600 underline">
               limpar seleção
             </button>
           </div>
@@ -906,6 +1308,9 @@ export function FinanceiroPage() {
                       onChange={togglePageSelection}
                       className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
                     />
+                  </th>
+                  <th className="px-1 py-3 w-8" title="Tag do dia — o 'pintar de amarelo' da planilha: marque o que está sendo trabalhado hoje">
+                    <Tag size={12} className="text-amber-400 mx-auto" />
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">
                     <button
@@ -925,29 +1330,43 @@ export function FinanceiroPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={13} className="px-4 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="inline-block animate-spin mr-2" />
                     Carregando…
                   </td></tr>
                 )}
                 {!loading && rows.length === 0 && (
-                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={13} className="px-4 py-12 text-center text-stone-400">
                     Nenhuma transação encontrada.
                   </td></tr>
                 )}
                 {!loading && rows.map((t) => {
                   const kind = STATUS_KIND[t.status];
                   const selected = selectedIds.has(t.id);
+                  const tagueado = tags.has(t.id);
                   return (
-                    <tr key={t.id} className={`border-b border-stone-50 transition-colors table-row-alt ${selected ? "bg-accent-50/60" : "hover:bg-stone-50"}`}>
+                    <tr key={t.id} className={`border-b border-stone-50 transition-colors table-row-alt ${tagueado ? "bg-amber-50/80" : selected ? "bg-accent-50/60" : "hover:bg-stone-50"}`}>
                       <td className="px-3 py-3">
                         <input
                           type="checkbox"
                           aria-label="Selecionar lançamento"
                           checked={selected}
-                          onChange={() => toggleOneSelection(t.id)}
+                          onChange={() => toggleOneSelection(t)}
                           className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
                         />
+                      </td>
+                      <td className="px-1 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => toggleTag(t)}
+                          className={`p-1 rounded transition cursor-pointer ${tagueado ? "text-amber-500 hover:text-amber-600" : "text-stone-200 hover:text-amber-400"}`}
+                          title={tagueado
+                            ? "Remover a tag deste lançamento"
+                            : "Taguear este lançamento (o 'pintar de amarelo' da planilha — a marcação fica salva mesmo trocando filtros ou recarregando)"}
+                          aria-label={tagueado ? "Remover tag" : "Taguear lançamento"}
+                        >
+                          <Tag size={13} fill={tagueado ? "currentColor" : "none"} />
+                        </button>
                       </td>
                       <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">{formatDate(t.data)}</td>
                       <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">
@@ -1013,7 +1432,10 @@ export function FinanceiroPage() {
               {selectedIds.size > 0 && (
                 <span className="inline-flex items-center gap-2 text-accent-600 font-medium">
                   {selectedIds.size} selecionado{selectedIds.size === 1 ? "" : "s"}
-                  <button onClick={() => setSelectedIds(new Set())} className="text-stone-400 hover:text-stone-600 underline">
+                  <span className="text-stone-500 tabular-nums" title="Autossoma (com sinal) dos selecionados">
+                    · Soma: {formatCurrency(somaSelecionados)}
+                  </span>
+                  <button onClick={limparSelecao} className="text-stone-400 hover:text-stone-600 underline">
                     limpar
                   </button>
                 </span>
@@ -1220,6 +1642,93 @@ export function FinanceiroPage() {
         transacaoIds={Array.from(selectedIds)}
         mesReferenciaDefault={competenciaSugerida}
       />
+
+      {/* Painel flutuante das TAGs do dia (RF 24-jul) */}
+      {tags.size > 0 && (
+        <div className="fixed bottom-5 right-5 z-40 flex flex-col items-end gap-2">
+          {tagPanelOpen && (
+            <div className="w-80 max-w-[calc(100vw-2.5rem)] rounded-xl border border-amber-200 bg-white shadow-xl overflow-hidden">
+              <div className="px-3 py-2 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
+                <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+                  <Tag size={12} /> Tagueados do dia ({tags.size})
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setTagPanelOpen(false)}
+                  className="text-amber-400 hover:text-amber-600 cursor-pointer"
+                  aria-label="Fechar painel de tags"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <ul className="max-h-64 overflow-y-auto divide-y divide-stone-50 text-xs">
+                {Array.from(tags.values()).map((t) => (
+                  <li key={t.id} className="px-3 py-2 flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-stone-700" title={t.descricao ?? undefined}>
+                        {t.descricao || t.fornecedor || "(sem descrição)"}
+                      </p>
+                      <p className="text-[10px] text-stone-400 truncate">
+                        {formatDate(t.data)}{t.fornecedor ? ` · ${t.fornecedor}` : ""}
+                      </p>
+                    </div>
+                    <span className={`font-semibold tabular-nums whitespace-nowrap ${t.valor < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                      {formatCurrency(t.valor)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removerTag(t.id)}
+                      className="text-stone-300 hover:text-red-500 cursor-pointer shrink-0"
+                      title="Remover tag"
+                      aria-label="Remover tag"
+                    >
+                      <X size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="px-3 py-2 border-t border-stone-100 flex items-center justify-between text-xs">
+                <span className="text-stone-500">Soma (com sinal):</span>
+                <span className="font-bold tabular-nums text-stone-800">{formatCurrency(somaTags)}</span>
+              </div>
+              <div className="px-3 pb-3 pt-1 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setMostrarSoTagueados((v) => !v); setPage(1); }}
+                  title="Filtra a tabela para mostrar apenas os lançamentos tagueados — exportações e relatórios 'pelos filtros' passam a usar só eles"
+                >
+                  {mostrarSoTagueados ? "Mostrar todos" : "Ver só tagueados"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={selecionarTagueados}
+                  title="Copia as tags para a seleção (checkboxes) — libera Exportar PDF/XLSX, Gerar relatório (capa) e ações em massa com os tagueados"
+                >
+                  Usar nos relatórios
+                </Button>
+                <button
+                  type="button"
+                  onClick={limparTags}
+                  className="text-stone-400 hover:text-red-500 underline ml-auto text-xs cursor-pointer"
+                >
+                  limpar tags
+                </button>
+              </div>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setTagPanelOpen((v) => !v)}
+            className="rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow-lg px-4 h-10 flex items-center gap-2 text-sm font-semibold cursor-pointer transition-colors"
+            title="Lançamentos tagueados do dia — clique para abrir o painel"
+          >
+            <Tag size={15} fill="currentColor" />
+            {tags.size} · {formatCurrency(somaTags)}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

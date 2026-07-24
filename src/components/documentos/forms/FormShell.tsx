@@ -1,7 +1,7 @@
 "use client";
 import { type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
-import { FileText } from "lucide-react";
+import { FileText, Save } from "lucide-react";
 
 interface FormShellProps {
   children: ReactNode;
@@ -10,12 +10,18 @@ interface FormShellProps {
   submitting: boolean;
   submitLabel?: string;
   disabled?: boolean;
+  /** Ação secundária opcional (RF 24-jul): "Salvar" sem gerar PDF na edição. */
+  onSecondary?: () => void;
+  secondaryLabel?: string;
+  secondarySubmitting?: boolean;
 }
 
 export function FormShell({
   children, onCancel, onSubmit, submitting,
   submitLabel = "Gerar PDF", disabled,
+  onSecondary, secondaryLabel = "Salvar sem gerar PDF", secondarySubmitting,
 }: FormShellProps) {
+  const busy = submitting || !!secondarySubmitting;
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); if (!disabled) onSubmit(); }}
@@ -25,10 +31,22 @@ export function FormShell({
         {children}
       </div>
       <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-end gap-2 bg-stone-50/50">
-        <Button type="button" variant="ghost" onClick={onCancel} disabled={submitting}>
+        <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
           Cancelar
         </Button>
-        <Button type="submit" disabled={disabled || submitting} loading={submitting}>
+        {onSecondary && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onSecondary}
+            disabled={disabled || busy}
+            loading={secondarySubmitting}
+            title="Salva as alterações do documento sem gerar um novo PDF"
+          >
+            <Save size={14} /> {secondaryLabel}
+          </Button>
+        )}
+        <Button type="submit" disabled={disabled || busy} loading={submitting}>
           <FileText size={14} /> {submitLabel}
         </Button>
       </div>

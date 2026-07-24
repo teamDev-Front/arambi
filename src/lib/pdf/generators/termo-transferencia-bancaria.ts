@@ -21,7 +21,10 @@ export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia
     { text: valorStr, bold: true },
     { text: ` para a ` },
     { text: d.destinatario_razao_social, bold: true },
-    { text: `, inscrito no CNPJ sob o nº ${d.destinatario_documento}, através de transferência bancária, no dia ${formatDataCurta(d.data_transferencia)}. Este valor corresponde a ${d.descricao_objeto}${nfFrag}.` },
+    { text: `, inscrito no CNPJ sob o nº ${d.destinatario_documento}, através de transferência bancária, no dia ` },
+    // Data em NEGRITO (RF 24-jul) — destaque pedido pela Adri.
+    { text: formatDataCurta(d.data_transferencia), bold: true },
+    { text: `. Este valor corresponde a ${d.descricao_objeto}${nfFrag}.` },
   ], { align: "justify", lineHeight: 1.5 });
 
   pdf.space(24);

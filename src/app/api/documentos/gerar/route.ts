@@ -41,7 +41,7 @@ function slugify(s: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { tipo?: DocumentoGeradoTipo; dados?: unknown; id?: string };
+  let body: { tipo?: DocumentoGeradoTipo; dados?: unknown; id?: string; salvar_sem_pdf?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -68,6 +68,47 @@ export async function POST(req: NextRequest) {
 
   const tipo  = body.tipo;
   const dados = body.dados as DocumentoPayloadMap[typeof tipo];
+
+  // ── SALVAR SEM GERAR PDF (RF 24-jul) — só na edição ─────────────────────
+  // Atualiza dados + campos-resumo do documento existente, mantendo o PDF e a
+  // versão atuais. Útil para corrigir o cadastro sem emitir novo arquivo.
+  if (body.salvar_sem_pdf === true) {
+    if (!editId) {
+      return NextResponse.json(
+        { error: "salvar_sem_pdf só é permitido na edição de um documento existente" },
+        { status: 400 },
+      );
+    }
+    const resumoSalvar = resumoDocumento(tipo, dados);
+    const { data: upd, error: updErr } = await supabase
+      .from("documentos_gerados")
+      .update({
+        dados:          dados as unknown as Json,
+        numero:         resumoSalvar.numero,
+        beneficiario:   resumoSalvar.beneficiario,
+        valor:          resumoSalvar.valor,
+        descricao:      resumoSalvar.descricao,
+        mes_referencia: resumoSalvar.mes_referencia,
+        updated_at:     new Date().toISOString(),
+      })
+      .eq("id", editId)
+      .select("id, versao_atual, pdf_path")
+      .maybeSingle();
+    if (updErr || !upd) {
+      return NextResponse.json(
+        { error: `Falha ao salvar alterações: ${updErr?.message ?? "documento não encontrado (permissão?)"}` },
+        { status: 500 },
+      );
+    }
+    return NextResponse.json({
+      id:           upd.id,
+      pdf_path:     upd.pdf_path,
+      versao:       upd.versao_atual ?? 1,
+      download_url: null,
+      filename:     null,
+      salvo_sem_pdf: true,
+    });
+  }
 
   // 1) Gera o PDF
   let pdfBytes: Uint8Array;

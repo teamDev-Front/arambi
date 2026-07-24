@@ -190,10 +190,9 @@ export function DashboardHome() {
         onSelect={setBancoModal}
       />
 
-      {/* Corpo em duas colunas: conteúdo financeiro à esquerda; calendários e
-          alertas à DIREITA (RF 23-jul). Em telas menores tudo empilha. */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
-      <div className="xl:col-span-2 space-y-6 min-w-0">
+      {/* Ajuste 24-jul (Adri): as informações FINANCEIRAS ocupam a largura toda
+          (em destaque); calendários e alertas descem para o FINAL da página,
+          na horizontal — ver <AgroPanoramaSection layout="row" /> lá embaixo. */}
 
       {/* Quick access */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -487,13 +486,9 @@ export function DashboardHome() {
         </CardContent>
       </Card>
 
-      </div>{/* /coluna esquerda */}
-
-      {/* Coluna direita: calendários (chuva/vacinação) + central de alertas */}
-      <div className="space-y-6 min-w-0">
-        <AgroPanoramaSection layout="column" />
-      </div>
-      </div>{/* /grid duas colunas */}
+      {/* Calendários (chuva/vacinação) + Central de Alertas — no FINAL da
+          página, em horizontal (ajuste 24-jul). */}
+      <AgroPanoramaSection layout="row" />
 
       {/* Modais de drill-down */}
       <BancoDetalheModal banco={bancoModal} onClose={() => setBancoModal(null)} />

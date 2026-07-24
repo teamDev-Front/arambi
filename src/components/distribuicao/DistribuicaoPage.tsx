@@ -12,7 +12,7 @@ import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   Plus, Search, Edit2, Trash2, Loader2, HandCoins, CheckCheck,
-  ArrowRightLeft, Undo2, CalendarCheck, PiggyBank, Landmark, AlertTriangle,
+  ArrowRightLeft, Undo2, CalendarCheck, PiggyBank, Landmark, AlertTriangle, FilterX,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { StatusSelect } from "@/components/ui/StatusSelect";
@@ -87,6 +87,30 @@ export function DistribuicaoPage() {
   const [filterRepasseAte, setFilterRepasseAte] = useState("");
   const [filterVencDe, setFilterVencDe] = useState("");
   const [filterVencAte, setFilterVencAte] = useState("");
+  // Faixa de valor R$ (RF 24-jul — espelha o padrão do Financeiro).
+  const [filterValorMin, setFilterValorMin] = useState("");
+  const [filterValorMax, setFilterValorMax] = useState("");
+
+  // Há algum filtro aplicado? (visibilidade do "Limpar todos os filtros")
+  const temFiltrosAtivos = Boolean(
+    search || filterSocio || filterClassif || filterStatus ||
+    filterRepasseDe || filterRepasseAte || filterVencDe || filterVencAte ||
+    filterValorMin || filterValorMax,
+  );
+
+  // "Limpar todos os filtros" (RF 24-jul) — não mexe na competência dos KPIs.
+  function limparTodosFiltros() {
+    setSearch("");
+    setFilterSocio("");
+    setFilterClassif("");
+    setFilterStatus("");
+    setFilterRepasseDe("");
+    setFilterRepasseAte("");
+    setFilterVencDe("");
+    setFilterVencAte("");
+    setFilterValorMin("");
+    setFilterValorMax("");
+  }
 
   // ---- dados ----
   const [rows, setRows] = useState<TransacaoSocioRich[]>([]);
@@ -153,6 +177,8 @@ export function DistribuicaoPage() {
           repasseAte: filterRepasseAte || undefined,
           vencimentoDe: filterVencDe || undefined,
           vencimentoAte: filterVencAte || undefined,
+          valorMin: filterValorMin ? Math.abs(Number(filterValorMin)) || undefined : undefined,
+          valorMax: filterValorMax ? Math.abs(Number(filterValorMax)) || undefined : undefined,
         }),
         obterResumoMensal(mes),
         obterGlobalEmpresaMes(mes),
@@ -169,7 +195,8 @@ export function DistribuicaoPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mes, filterSocio, filterClassif, filterStatus, search,
-      filterRepasseDe, filterRepasseAte, filterVencDe, filterVencAte]);
+      filterRepasseDe, filterRepasseAte, filterVencDe, filterVencAte,
+      filterValorMin, filterValorMax]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); setSelectedIds(new Set()); }, [fetchData]);
 
@@ -579,6 +606,51 @@ export function DistribuicaoPage() {
                   title="Limpar período de vencimento" aria-label="Limpar período de vencimento">×</button>
               )}
             </div>
+            {/* Faixa de VALOR em R$ (RF 24-jul — espelha o Financeiro) */}
+            <div className="flex items-center gap-1" title="Filtra pela faixa de valor (em R$).">
+              <span className="text-[10px] uppercase text-stone-400 font-medium">R$</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                placeholder="de"
+                value={filterValorMin}
+                aria-label="Valor mínimo"
+                onWheel={(e) => e.currentTarget.blur()}
+                onChange={(e) => setFilterValorMin(e.target.value)}
+                className="h-8 w-20 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              <span className="text-stone-400 text-xs">até</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                placeholder="até"
+                value={filterValorMax}
+                aria-label="Valor máximo"
+                onWheel={(e) => e.currentTarget.blur()}
+                onChange={(e) => setFilterValorMax(e.target.value)}
+                className="h-8 w-20 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              {(filterValorMin || filterValorMax) && (
+                <button type="button" onClick={() => { setFilterValorMin(""); setFilterValorMax(""); }}
+                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
+                  title="Limpar filtro de valor" aria-label="Limpar filtro de valor">×</button>
+              )}
+            </div>
+            {/* Limpar todos os filtros de uma vez (RF 24-jul) */}
+            {temFiltrosAtivos && (
+              <button
+                type="button"
+                onClick={limparTodosFiltros}
+                className="h-8 px-2 rounded-lg text-xs font-medium text-stone-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                title="Remove todos os filtros da listagem de uma vez (busca, sócio, classificação, status, períodos e valor)"
+              >
+                <FilterX size={13} /> Limpar todos os filtros
+              </button>
+            )}
           </div>
         </CardHeader>
 

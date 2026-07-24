@@ -72,16 +72,24 @@ export interface GerarDocumentoResponse {
 /**
  * Gera (ou regera, quando `id` é informado — RF-09) um documento.
  * Com `id`, cria uma nova versão do documento existente preservando o original.
+ * Com `opts.semPdf` (só na edição — RF 24-jul), apenas SALVA as alterações no
+ * cadastro do documento, sem gerar novo PDF nem nova versão.
  */
 export async function gerarDocumento<T extends DocumentoGeradoTipo>(
   tipo: T,
   dados: DocumentoPayloadMap[T],
   id?: string,
+  opts?: { semPdf?: boolean },
 ): Promise<GerarDocumentoResponse> {
   const res = await fetch("/api/documentos/gerar", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tipo, dados, ...(id ? { id } : {}) }),
+    body: JSON.stringify({
+      tipo,
+      dados,
+      ...(id ? { id } : {}),
+      ...(opts?.semPdf ? { salvar_sem_pdf: true } : {}),
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

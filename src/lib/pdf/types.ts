@@ -114,6 +114,12 @@ export interface DadosTermoTransferencia {
   data_transferencia: string;         // "YYYY-MM-DD"
   numero_nota?: string;
   descricao_objeto: string;           // resumo do motivo da transferência
+  // Saldo remanescente (RF 24-jul): campos do formulário usados para montar a
+  // frase padrão dentro de descricao_objeto. Guardados no snapshot para a
+  // edição/duplicação reabrir com os valores preenchidos. O gerador não os lê.
+  saldo_remanescente?: number;
+  saldo_parcelado?: boolean;
+  saldo_parcelas?: number;
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

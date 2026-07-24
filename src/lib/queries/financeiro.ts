@@ -33,6 +33,8 @@ export interface ListarTransacoesFiltros {
   /** Filtro por valor (magnitude em R$, ignora o sinal) — UX 23-jul. */
   valorMin?: number;
   valorMax?: number;
+  /** Recorte por ids explícitos (ex.: lançamentos TAGUEADOS — RF 24-jul). */
+  ids?: string[];
 }
 
 export interface ListarTransacoesResult {
@@ -82,6 +84,10 @@ function aplicarFiltros<T>(query: T, filtros: ListarTransacoesFiltros): T {
   if (filtros.dataAte)           r = r.lte("data", filtros.dataAte);
   if (filtros.emissaoDe)         r = r.gte("data_emissao", filtros.emissaoDe);
   if (filtros.emissaoAte)        r = r.lte("data_emissao", filtros.emissaoAte);
+  if (filtros.ids) {
+    // Lista vazia = recorte vazio (uuid sentinela evita `in ()` inválido).
+    r = r.in("id", filtros.ids.length > 0 ? filtros.ids : ["00000000-0000-0000-0000-000000000000"]);
+  }
   // Valor por MAGNITUDE (independe de entrada/saída): |valor| entre min e max.
   if (filtros.valorMin != null && filtros.valorMin > 0) {
     r = r.or(`valor.gte.${filtros.valorMin},valor.lte.${-filtros.valorMin}`);
@@ -225,6 +231,84 @@ export async function resumirEscopoTransacoes(
   };
 }
 
+// ----------------------------------------------------------------------------
+// Indicadores de vencimento (cards do topo da tela Financeiro — ajuste 24-jul)
+// Substituem os antigos KPIs "da página": mostram a foto GLOBAL do que está em
+// aberto — atrasado, vencendo hoje e o que sai/entra até o fim do mês corrente.
+// ----------------------------------------------------------------------------
+
+/** Saídas em aberto (compromissos ainda não realizados) — mesmo recorte da v_kpi_mensal. */
+export const STATUS_SAIDA_PENDENTE: StatusAramburu[] = [
+  "a_pagar", "a_repassar", "a_aplicar", "provisionado", "provisionado_dl", "provisionado_dv",
+];
+/** Entradas em aberto — mesmo recorte da v_kpi_mensal. */
+export const STATUS_ENTRADA_PENDENTE: StatusAramburu[] = ["a_receber", "a_resgatar"];
+
+export interface IndicadorVencimento {
+  qtd: number;
+  total: number; // magnitude em R$ (sempre positiva)
+}
+
+export interface IndicadoresVencimentos {
+  hoje: string;                             // YYYY-MM-DD no fuso LOCAL
+  fimDoMes: string;                         // último dia do mês corrente
+  emAtraso: IndicadorVencimento;            // saídas em aberto com vencimento < hoje
+  vencemHoje: IndicadorVencimento;          // saídas em aberto vencendo hoje
+  aPagarAteFimDoMes: IndicadorVencimento;   // saídas em aberto de hoje até o fim do mês
+  aReceberAteFimDoMes: IndicadorVencimento; // entradas em aberto até o fim do mês (inclui atrasadas)
+}
+
+/** Data em ISO no fuso LOCAL — toISOString() usa UTC e "vira o dia" mais cedo no Brasil. */
+function isoLocal(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const INDICADORES_CAP = 10000;
+
+export async function getIndicadoresVencimentos(): Promise<IndicadoresVencimentos> {
+  const agora = new Date();
+  const hoje = isoLocal(agora);
+  const fimDoMes = isoLocal(new Date(agora.getFullYear(), agora.getMonth() + 1, 0));
+
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("transacoes_empresa")
+    .select("data, valor, status")
+    .in("status", [...STATUS_SAIDA_PENDENTE, ...STATUS_ENTRADA_PENDENTE])
+    .lte("data", fimDoMes)
+    .range(0, INDICADORES_CAP - 1);
+  if (error) throw error;
+
+  const zero = (): IndicadorVencimento => ({ qtd: 0, total: 0 });
+  const r: IndicadoresVencimentos = {
+    hoje,
+    fimDoMes,
+    emAtraso: zero(),
+    vencemHoje: zero(),
+    aPagarAteFimDoMes: zero(),
+    aReceberAteFimDoMes: zero(),
+  };
+  const soma = (ind: IndicadorVencimento, valor: number) => {
+    ind.qtd += 1;
+    ind.total += Math.abs(valor);
+  };
+
+  const rows = (data ?? []) as { data: string; valor: number; status: StatusAramburu }[];
+  for (const t of rows) {
+    const valor = Number(t.valor);
+    if (STATUS_ENTRADA_PENDENTE.includes(t.status)) {
+      // Entradas atrasadas não têm card próprio — entram aqui para não sumirem.
+      soma(r.aReceberAteFimDoMes, valor);
+    } else if (t.data < hoje) {
+      soma(r.emAtraso, valor);
+    } else {
+      soma(r.aPagarAteFimDoMes, valor);
+      if (t.data === hoje) soma(r.vencemHoje, valor);
+    }
+  }
+  return r;
+}
+
 /**
  * Erro lançado quando uma operação atinge 0 linhas — geralmente RLS bloqueando
  * (usuário sem permissão) ou registro inexistente.
@@ -301,6 +385,25 @@ export async function atualizarStatusEmMassa(ids: string[], status: StatusArambu
   if (error) throw error;
   const n = data?.length ?? 0;
   if (n === 0) throw new PermissionOrNotFoundError("atualizar status em massa");
+  return n;
+}
+
+/**
+ * Exclui vários lançamentos de uma vez (ações em lote — RF 24-jul).
+ * DELETE único com retorno dos ids: se RLS bloquear tudo, erra; se bloquear
+ * parte, o chamador compara o retorno com o pedido e avisa.
+ */
+export async function deletarTransacoesEmpresaEmMassa(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("transacoes_empresa")
+    .delete()
+    .in("id", ids)
+    .select("id");
+  if (error) throw error;
+  const n = data?.length ?? 0;
+  if (n === 0) throw new PermissionOrNotFoundError("excluir lançamentos em massa");
   return n;
 }
 

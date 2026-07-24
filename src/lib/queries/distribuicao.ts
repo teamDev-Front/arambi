@@ -43,6 +43,10 @@ export interface ListarDetalhadoFiltros {
   repasseAte?: string;
   vencimentoDe?: string;         // data_vencimento_despesa >= (Vencimento da fatura)
   vencimentoAte?: string;
+  // Faixa de valor em R$ (RF 24-jul — espelha o Financeiro). Em transacoes_socio
+  // o valor é sempre positivo, então o gte/lte direto já é a magnitude.
+  valorMin?: number;
+  valorMax?: number;
 }
 
 class PermissionOrNotFoundError extends Error {
@@ -73,6 +77,8 @@ export async function listarDetalhado(
   if (filtros.repasseAte)    q = q.lte("data_vencimento", filtros.repasseAte);
   if (filtros.vencimentoDe)  q = q.gte("data_vencimento_despesa", filtros.vencimentoDe);
   if (filtros.vencimentoAte) q = q.lte("data_vencimento_despesa", filtros.vencimentoAte);
+  if (filtros.valorMin != null && filtros.valorMin > 0) q = q.gte("valor", filtros.valorMin);
+  if (filtros.valorMax != null && filtros.valorMax > 0) q = q.lte("valor", filtros.valorMax);
   if (filtros.search) {
     const s = filtros.search.replace(/[%_,]/g, " ").trim();
     if (s) q = q.or(`descricao.ilike.%${s}%,observacao.ilike.%${s}%`);

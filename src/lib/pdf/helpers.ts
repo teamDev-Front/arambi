@@ -30,7 +30,7 @@ function ateMil(n: number): string {
   return partes.join(" e ");
 }
 
-function inteiroPorExtenso(n: number): string {
+export function inteiroPorExtenso(n: number): string {
   if (n === 0) return "zero";
 
   const grupos: number[] = [];
