@@ -41,12 +41,18 @@ export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia
   pdf.space(18);
   pdf.rich([{ text: "DESTINATÁRIO", bold: true }], { lineHeight: 1.3 });
   pdf.space(4);
+  // Agência/Conta só aparecem quando preenchidas — pagamento via Pix pode não
+  // ter esses dados (ajuste 28-jul: basta a Chave Pix no destinatário).
   pdf.fields([
     { label: "Razão Social", value: d.destinatario_razao_social },
     { label: "CNPJ/CPF",     value: d.destinatario_documento },
     { label: "Banco",        value: d.destinatario_bancarios.banco },
-    { label: "Agência",      value: d.destinatario_bancarios.agencia },
-    { label: "Conta",        value: d.destinatario_bancarios.conta },
+    ...(d.destinatario_bancarios.agencia.trim()
+      ? [{ label: "Agência", value: d.destinatario_bancarios.agencia }]
+      : []),
+    ...(d.destinatario_bancarios.conta.trim()
+      ? [{ label: "Conta", value: d.destinatario_bancarios.conta }]
+      : []),
     ...(d.destinatario_bancarios.chave_pix
       ? [{ label: "Chave Pix", value: d.destinatario_bancarios.chave_pix }]
       : []),

@@ -124,6 +124,12 @@ export function TermoTransferenciaForm({
     setForm({ ...form, descricao_objeto: `${fraseSaldo}${complemento}` });
   }
 
+  // Dados bancários do destinatário: agência + conta OU Chave Pix — pagamento
+  // via Pix não tem agência/conta (ajuste 28-jul, pedido da Adri).
+  const destinoBancarioOk =
+    (!!form.destinatario_agencia.trim() && !!form.destinatario_conta.trim()) ||
+    !!form.destinatario_pix.trim();
+
   const valido =
     !!form.remetente_razao_social.trim() &&
     !!form.remetente_documento.trim() &&
@@ -133,8 +139,7 @@ export function TermoTransferenciaForm({
     !!form.destinatario_razao_social.trim() &&
     !!form.destinatario_documento.trim() &&
     !!form.destinatario_banco.trim() &&
-    !!form.destinatario_agencia.trim() &&
-    !!form.destinatario_conta.trim() &&
+    destinoBancarioOk &&
     Number(form.valor) > 0 &&
     !!form.data_transferencia &&
     !!form.descricao_objeto.trim();
@@ -210,10 +215,14 @@ export function TermoTransferenciaForm({
       <FormSection title="Destinatário" columns={2}>
         <Input label="Razão social / Nome"  value={form.destinatario_razao_social} onChange={(e) => setForm({ ...form, destinatario_razao_social: e.target.value })} />
         <Input label="CNPJ ou CPF"          value={form.destinatario_documento}    onChange={(e) => setForm({ ...form, destinatario_documento: e.target.value })} />
-        <Input label="Banco"                value={form.destinatario_banco}        onChange={(e) => setForm({ ...form, destinatario_banco: e.target.value })} placeholder="Sicredi (748)" />
-        <Input label="Agência"              value={form.destinatario_agencia}      onChange={(e) => setForm({ ...form, destinatario_agencia: e.target.value })} />
-        <Input label="Conta Corrente"       value={form.destinatario_conta}        onChange={(e) => setForm({ ...form, destinatario_conta: e.target.value })} />
-        <Input label="Chave Pix (opcional)" value={form.destinatario_pix}          onChange={(e) => setForm({ ...form, destinatario_pix: e.target.value })} />
+        <Input label="Banco"          value={form.destinatario_banco}   onChange={(e) => setForm({ ...form, destinatario_banco: e.target.value })} placeholder="Sicredi (748)" />
+        <Input label="Agência"        value={form.destinatario_agencia} onChange={(e) => setForm({ ...form, destinatario_agencia: e.target.value })} />
+        <Input label="Conta Corrente" value={form.destinatario_conta}   onChange={(e) => setForm({ ...form, destinatario_conta: e.target.value })} />
+        <Input label="Chave Pix"      value={form.destinatario_pix}     onChange={(e) => setForm({ ...form, destinatario_pix: e.target.value })} />
+        <p className={`sm:col-span-2 text-[11px] -mt-1 ${destinoBancarioOk ? "text-stone-400" : "text-amber-600 font-medium"}`}>
+          Informe <b>Agência + Conta Corrente</b> OU a <b>Chave Pix</b> do destinatário — pagamento via
+          Pix não precisa de agência/conta.
+        </p>
       </FormSection>
 
       <FormSection title="Detalhes da transferência" columns={3}>
