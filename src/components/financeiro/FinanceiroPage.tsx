@@ -1213,7 +1213,7 @@ export function FinanceiroPage() {
             />
             {/* Período por VENCIMENTO (RF 23-jul: substitui o filtro de mês) */}
             <div
-              className="flex items-center gap-1"
+              className="flex items-center gap-1 ml-4"
               title="Período pelo VENCIMENTO. Use a mesma data nos dois campos para um único dia."
             >
               <CalendarRange size={14} className="text-stone-400 shrink-0" />
