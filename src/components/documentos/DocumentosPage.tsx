@@ -293,7 +293,7 @@ export function DocumentosPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-[1200px]">
+    <div className="space-y-6 max-w-[1600px]">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-[#0f1f1c]">Documentos</h1>

@@ -35,6 +35,7 @@ import {
   listarFornecedores,
   garantirFornecedor,
   getIndicadoresVencimentos,
+  listarMesesFinanceiro,
   STATUS_SAIDA_PENDENTE,
   STATUS_ENTRADA_PENDENTE,
   isErroSaldoInvest,
@@ -279,8 +280,14 @@ export function FinanceiroPage() {
 
   // ---- filtros / UI (todos multi-seleção — RF 23-jul) ----
   const [search, setSearch] = useState("");
-  // Competência (mês de referência) — padronização com a Distribuição (27-jul).
+  // Competência (mês de referência) — seletor no HEADER, padronizado com a
+  // Distribuição (ajuste 28-jul). "" = todas as competências.
   const [filterCompetencia, setFilterCompetencia] = useState("");
+  const [mesesCompetencia, setMesesCompetencia] = useState<string[]>([]);
+  useEffect(() => {
+    listarMesesFinanceiro().then(setMesesCompetencia).catch(() => undefined);
+     
+  }, []);
   const [filterStatus, setFilterStatus] = useState<StatusAramburu[]>([]);
   const [filterContaContabil, setFilterContaContabil] = useState<string[]>([]);
   const [filterCentroCusto, setFilterCentroCusto] = useState<string[]>([]);
@@ -1028,7 +1035,7 @@ export function FinanceiroPage() {
 
   // ---- render ----
   return (
-    <div className="space-y-6 max-w-[1400px]">
+    <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-[#0f1f1c]">Financeiro</h1>
@@ -1036,7 +1043,23 @@ export function FinanceiroPage() {
             Lançamentos da Agropecuária Aramburu — espelho da planilha {`"Aramburu_Mensal"`}
           </p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
+          {/* Competência no header — idem à Distribuição (ajuste 28-jul) */}
+          <label className="flex items-center gap-1.5 text-xs text-stone-500"
+            title="Competência (mês de referência) da listagem, exportações e relatórios. 'Todas' = sem recorte de competência.">
+            Competência
+            <select
+              value={filterCompetencia}
+              onChange={(e) => { setFilterCompetencia(e.target.value); setPage(1); }}
+              className="h-8 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+            >
+              <option value="">Todas</option>
+              {(filterCompetencia && !mesesCompetencia.includes(filterCompetencia)
+                ? [filterCompetencia, ...mesesCompetencia]
+                : mesesCompetencia
+              ).map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
           <Button variant="outline" size="sm" onClick={() => handleExport("pdf")}
             loading={exportandoPdf} disabled={exportandoPdf || exportandoXlsx}
             title="Exporta um PDF espelho da tela com os lançamentos selecionados ou filtrados">
@@ -1135,28 +1158,6 @@ export function FinanceiroPage() {
                 placeholder="Buscar descrição, fornecedor, NF, recibo..."
                 className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-72 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
-            </div>
-            {/* Competência (mês de referência) — padronização com a Distribuição (27-jul) */}
-            <div className="flex items-center gap-1" title="Filtra pela COMPETÊNCIA (mês de referência do lançamento).">
-              <span className="text-[10px] uppercase text-stone-400 font-medium">Competência</span>
-              <input
-                type="month"
-                value={filterCompetencia}
-                aria-label="Competência"
-                onChange={(e) => { setFilterCompetencia(e.target.value); setPage(1); }}
-                className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
-              />
-              {filterCompetencia && (
-                <button
-                  type="button"
-                  onClick={() => { setFilterCompetencia(""); setPage(1); }}
-                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
-                  title="Limpar competência"
-                  aria-label="Limpar competência"
-                >
-                  ×
-                </button>
-              )}
             </div>
             <MultiSelect
               className="w-40"

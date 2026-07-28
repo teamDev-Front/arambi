@@ -367,8 +367,97 @@ $$;
 comment on function public.fn_primeiro_dia_util_mes(date) is
   'Primeiro dia útil (seg–sex, fora feriado nacional) do mês da data informada. Regra da Data do Repasse dos provisionados da DL (ajuste 27-jul).';
 
+-- ---------------------------------------------------------------------------
+-- 6) SOMASE da DL: o guard de "provisionado manual" passa a olhar SÓ o centro
+--    2.8.1 (Distribuição de Lucros) — antes qualquer provisionado na conta 2.8
+--    (ex.: Plano de Saúde Bradesco, centro 2.8.3) bloqueava a sincronização
+--    automática do Provisionado DL (caso real encontrado na reintegralização
+--    de 28-jul: ago–dez travados por R$ 9.772,07/mês de Plano de Saúde).
+-- ---------------------------------------------------------------------------
+create or replace function public.fn_sync_provisionado_dl(p_mes text)
+returns void
+language plpgsql
+as $$
+declare
+  v_tag   text := 'dl_auto:' || p_mes;
+  v_soma  numeric(15,2);
+  v_banco uuid;
+  v_id    uuid;
+begin
+  if p_mes is null then return; end if;
+
+  if not exists (select 1 from public.classificacao_financeira where codigo = '2.8')
+     or not exists (select 1 from public.classificacao_financeira where codigo = '2.8.1') then
+    return;
+  end if;
+
+  -- Mês com provisionado MANUAL no centro 2.8.1 → gestão manual, não interfere.
+  -- (Outros centros da 2.8 — ex.: 2.8.3 Plano de Saúde — não bloqueiam mais.)
+  if exists (
+    select 1 from public.transacoes_empresa
+    where mes_referencia = p_mes
+      and centro_custo_cod = '2.8.1'
+      and status in ('provisionado', 'provisionado_dl')
+      and (origem_planilha is null or origem_planilha not like 'dl_auto:%')
+  ) then
+    return;
+  end if;
+
+  select coalesce(sum(valor), 0) into v_soma
+  from public.transacoes_socio
+  where mes_referencia = p_mes and status = 'provisionado';
+
+  if v_soma <= 0 then
+    delete from public.transacoes_empresa where origem_planilha = v_tag;
+    return;
+  end if;
+
+  update public.transacoes_empresa
+     set valor = -v_soma
+   where origem_planilha = v_tag
+  returning id into v_id;
+
+  if v_id is null then
+    select id into v_banco
+    from public.contas_bancarias_empresa
+    where ativa = true and banco ilike '%cora%'
+    order by ordem nulls last limit 1;
+
+    insert into public.transacoes_empresa (
+      data, conta_contabil_cod, centro_custo_cod, tipo_despesa,
+      descricao, obs_obra, forma_pgto, conta_bancaria_id,
+      status, valor, observacao, origem_planilha
+    ) values (
+      to_date(p_mes || '-01', 'YYYY-MM-DD'), '2.8', '2.8.1', 'sem',
+      'Distribuição de Lucro — Provisionado (automático do detalhado)',
+      'sem', 'sem', v_banco,
+      'provisionado_dl', -v_soma,
+      'Linha mantida automaticamente pela soma do detalhado por sócio (tela Distribuição de Lucro). Não editar o valor à mão.',
+      v_tag
+    );
+  end if;
+exception when others then
+  null;
+end;
+$$;
+
+comment on function public.fn_sync_provisionado_dl(text) is
+  'SOMASE da DL: mantém o global Provisionado DL (2.8/2.8.1) igual à soma do detalhado provisionado do mês. Só é bloqueado por provisionado MANUAL no centro 2.8.1 (0047 — antes a conta 2.8 inteira bloqueava).';
+
+-- Ressincroniza TODOS os meses com detalhado provisionado (idempotente): com o
+-- guard corrigido, os meses que estavam travados (ago–dez) ganham o dl_auto.
+do $$
+declare
+  v_mes text;
+begin
+  for v_mes in select distinct mes_referencia from public.transacoes_socio where status = 'provisionado' loop
+    perform public.fn_sync_provisionado_dl(v_mes);
+  end loop;
+end $$;
+
 -- ----------------------------------------------------------------------------
 -- ROLLBACK:
+--   -- restaurar fn_sync_provisionado_dl da 0036 (guard pela conta 2.8 inteira)
 --   drop function if exists public.fn_primeiro_dia_util_mes(date);
 --   -- restaurar tg_te_resgate_invest_link da 0044 (sem o toggle)
 --   drop function if exists public.fn_resgates_auto_sicredi_ativos();

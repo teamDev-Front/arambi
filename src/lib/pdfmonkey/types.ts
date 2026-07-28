@@ -255,6 +255,12 @@ export interface ReportScopeFiltros {
   emissao_ate?: string;             // "YYYY-MM-DD"
   valor_min?: number;               // magnitude em R$ (ignora o sinal — 23-jul)
   valor_max?: number;
+  /**
+   * Recorte por ids explícitos — os lançamentos TAGUEADOS quando "Ver só
+   * tagueados" está ativo (fix 28-jul: sem isso a capa/relatório "pelos
+   * filtros" ignorava as tags e saía com tudo).
+   */
+  ids?: string[];
 }
 
 export interface ReportScope {

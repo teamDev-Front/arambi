@@ -96,7 +96,7 @@ export function AssistentesHub() {
   }, [toast]);
 
   return (
-    <div className="space-y-6 max-w-[1200px]">
+    <div className="space-y-6 max-w-[1600px]">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-[#0f1f1c]">Central de Assistentes IA</h1>

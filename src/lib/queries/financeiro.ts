@@ -310,6 +310,38 @@ export async function getIndicadoresVencimentos(): Promise<IndicadoresVencimento
 }
 
 /**
+ * Meses (YYYY-MM) com lançamento na empresa, do menor ao maior, incluindo o mês
+ * corrente — alimenta o seletor de Competência do header (ajuste 28-jul).
+ * Mesma abordagem O(1) do listarMesesDetalhado da Distribuição.
+ */
+export async function listarMesesFinanceiro(): Promise<string[]> {
+  const supabase = createClient();
+  const [minRes, maxRes] = await Promise.all([
+    supabase.from("transacoes_empresa").select("data").order("data", { ascending: true }).limit(1).maybeSingle(),
+    supabase.from("transacoes_empresa").select("data").order("data", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (minRes.error) throw minRes.error;
+  if (maxRes.error) throw maxRes.error;
+  const min = (minRes.data?.data as string | undefined)?.slice(0, 7);
+  const max = (maxRes.data?.data as string | undefined)?.slice(0, 7);
+  const hoje = new Date();
+  const mesCorrente = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+  if (!min || !max) return [mesCorrente];
+
+  const inicio = min < mesCorrente ? min : mesCorrente;
+  const fim = max > mesCorrente ? max : mesCorrente;
+  const meses: string[] = [];
+  let [y, m] = inicio.split("-").map(Number);
+  const [yf, mf] = fim.split("-").map(Number);
+  let guard = 0;
+  while ((y < yf || (y === yf && m <= mf)) && guard++ < 600) {
+    meses.push(`${y}-${String(m).padStart(2, "0")}`);
+    if (++m > 12) { m = 1; y++; }
+  }
+  return meses;
+}
+
+/**
  * Erro lançado quando uma operação atinge 0 linhas — geralmente RLS bloqueando
  * (usuário sem permissão) ou registro inexistente.
  */

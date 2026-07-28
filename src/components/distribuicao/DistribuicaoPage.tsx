@@ -122,9 +122,6 @@ export function DistribuicaoPage() {
   // Faixa de valor R$ (RF 24-jul — espelha o padrão do Financeiro).
   const [filterValorMin, setFilterValorMin] = useState("");
   const [filterValorMax, setFilterValorMax] = useState("");
-  // Competência da LISTAGEM (ajuste 27-jul): pesquisar pela competência agora
-  // filtra a tabela também — o seletor do cabeçalho sincroniza este filtro.
-  const [filterCompetencia, setFilterCompetencia] = useState("");
 
   // ---- TAGs do dia (ajuste 27-jul — idem ao Financeiro) ----
   const [tags, setTags] = useState<Map<string, TagSnapshot>>(new Map());
@@ -190,10 +187,10 @@ export function DistribuicaoPage() {
   const temFiltrosAtivos = Boolean(
     search || filterSocio || filterClassif || filterStatus ||
     filterRepasseDe || filterRepasseAte || filterVencDe || filterVencAte ||
-    filterValorMin || filterValorMax || filterCompetencia || mostrarSoTagueados,
+    filterValorMin || filterValorMax || mostrarSoTagueados,
   );
 
-  // "Limpar todos os filtros" (RF 24-jul) — não mexe na competência dos KPIs.
+  // "Limpar todos os filtros" (RF 24-jul) — não mexe na competência do header.
   function limparTodosFiltros() {
     setSearch("");
     setFilterSocio("");
@@ -205,7 +202,6 @@ export function DistribuicaoPage() {
     setFilterVencAte("");
     setFilterValorMin("");
     setFilterValorMax("");
-    setFilterCompetencia("");
     setMostrarSoTagueados(false);
   }
 
@@ -272,7 +268,9 @@ export function DistribuicaoPage() {
     try {
       const [r, res, glob, reps] = await Promise.all([
         listarDetalhado({
-          mesReferencia: filterCompetencia || undefined,
+          // A LISTAGEM segue a COMPETÊNCIA do header (ajuste 28-jul: um único
+          // seletor comanda KPIs, repasses, consolidação E a tabela).
+          mesReferencia: mes,
           socioId: filterSocio || undefined,
           classificacao: filterClassif || undefined,
           status: filterStatus || undefined,
@@ -300,7 +298,7 @@ export function DistribuicaoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mes, filterSocio, filterClassif, filterStatus, search,
       filterRepasseDe, filterRepasseAte, filterVencDe, filterVencAte,
-      filterValorMin, filterValorMax, filterCompetencia]);
+      filterValorMin, filterValorMax]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); setSelectedIds(new Set()); }, [fetchData]);
 
@@ -415,7 +413,7 @@ export function DistribuicaoPage() {
   // ---- exportação PDF/XLSX do recorte da tela (ajuste 27-jul) ----
   function montarFiltrosExport(): string[] {
     const f: string[] = [];
-    if (filterCompetencia) f.push(`Competência: ${filterCompetencia}`);
+    f.push(`Competência: ${mes}`);
     if (search) f.push(`Busca: "${search}"`);
     if (filterSocio) {
       const s = socios.find((x) => x.id === filterSocio);
@@ -622,7 +620,7 @@ export function DistribuicaoPage() {
 
   // ---- render ----
   return (
-    <div className="space-y-6 max-w-[1400px]">
+    <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-[#0f1f1c]">Distribuição de Lucro</h1>
@@ -631,15 +629,11 @@ export function DistribuicaoPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-1.5 text-xs text-stone-500" title="Competência dos KPIs, dos repasses consolidados, da consolidação E da tabela detalhada (ajuste 27-jul). Para ver todas as competências na tabela, limpe o filtro Competência nos filtros da listagem.">
+          <label className="flex items-center gap-1.5 text-xs text-stone-500" title="Competência da tela toda: KPIs, repasses consolidados, consolidação e a tabela detalhada seguem o mês selecionado aqui.">
             Competência
             <select
               value={mes}
-              onChange={(e) => {
-                // Pesquisar pela competência filtra a LISTAGEM também (27-jul).
-                setMes(e.target.value);
-                setFilterCompetencia(e.target.value);
-              }}
+              onChange={(e) => setMes(e.target.value)}
               className="h-8 rounded-lg border border-stone-200 px-2 text-xs bg-white">
               {(meses.includes(mes) ? meses : [mes, ...meses]).map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
@@ -749,8 +743,9 @@ export function DistribuicaoPage() {
           <span>
             O provisionado global lançado à mão no Financeiro ({formatCurrency(globalMes?.provisionadoGlobal ?? 0)}) difere
             da soma do detalhado ({formatCurrency(resumo?.provisionado ?? 0)}) em {formatCurrency(divergenciaProvisionado)}.
-            Enquanto existir lançamento provisionado manual na conta 2.8 deste mês, o sistema não sincroniza o global
-            automaticamente — ajuste ou exclua a linha manual no <Link href="/dashboard/financeiro" className="underline font-medium">Financeiro</Link> para
+            Enquanto existir lançamento provisionado manual no centro 2.8.1 (Distribuição de Lucros) deste mês, o sistema
+            não sincroniza o global automaticamente — ajuste ou exclua a linha manual no{" "}
+            <Link href="/dashboard/financeiro" className="underline font-medium">Financeiro</Link> para
             ativar a sincronização automática.
           </span>
         </div>
@@ -819,22 +814,6 @@ export function DistribuicaoPage() {
                 placeholder="Buscar descrição…"
                 className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-52 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
-            </div>
-            {/* Competência da listagem (ajuste 27-jul) — sincroniza com o seletor do cabeçalho */}
-            <div className="flex items-center gap-1" title="Filtra a tabela pela COMPETÊNCIA (mês de referência). É sincronizado quando você troca a competência no topo da tela.">
-              <span className="text-[10px] uppercase text-stone-400 font-medium">Competência</span>
-              <input
-                type="month"
-                value={filterCompetencia}
-                aria-label="Competência da listagem"
-                onChange={(e) => setFilterCompetencia(e.target.value)}
-                className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
-              />
-              {filterCompetencia && (
-                <button type="button" onClick={() => setFilterCompetencia("")}
-                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
-                  title="Limpar competência (mostrar todas)" aria-label="Limpar competência">×</button>
-              )}
             </div>
             <select value={filterSocio} onChange={(e) => setFilterSocio(e.target.value)}
               className="h-8 rounded-lg border border-stone-200 px-2 text-xs">

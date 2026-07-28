@@ -208,20 +208,25 @@ export async function obterGlobalEmpresaMes(mes: string): Promise<GlobalEmpresaM
   const rows = (data ?? []) as TransacaoEmpresaRow[];
   let prov = 0, aPagar = 0, realizado = 0, manual = false, centro281 = 0;
   for (const r of rows) {
+    // Desde a 0047 a DL global vive no CENTRO 2.8.1 — outros centros da conta
+    // 2.8 (ex.: 2.8.3 Plano de Saúde) não entram nos totais nem bloqueiam a
+    // sincronização automática (mesma regra do trigger SOMASE corrigido).
+    const ehDL = r.centro_custo_cod === "2.8.1";
     let considerado = false;
     if (r.status === "provisionado" || r.status === "provisionado_dl" || r.status === "provisionado_dv") {
-      prov += -r.valor;
       considerado = true;
-      if (!r.origem_planilha?.startsWith("dl_auto:")) manual = true;
+      if (ehDL) {
+        prov += -r.valor;
+        if (!r.origem_planilha?.startsWith("dl_auto:")) manual = true;
+      }
     } else if (r.status === "a_pagar" || r.status === "a_repassar") {
-      aPagar += -r.valor;
       considerado = true;
+      if (ehDL) aPagar += -r.valor;
     } else if (r.status === "pago" || r.status === "repassado") {
-      realizado += -r.valor;
       considerado = true;
+      if (ehDL) realizado += -r.valor;
     }
-    // Card 2.8.1: mesmos status, mas restrito ao centro de custo 2.8.1.
-    if (considerado && r.centro_custo_cod === "2.8.1") centro281 += -r.valor;
+    if (considerado && ehDL) centro281 += -r.valor;
   }
   return {
     rows,

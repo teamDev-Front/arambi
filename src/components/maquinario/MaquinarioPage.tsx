@@ -280,7 +280,7 @@ export function MaquinarioPage() {
   const pct = (n: number) => (contagem.total > 0 ? `${((n / contagem.total) * 100).toFixed(1).replace(".", ",")}%` : "—");
 
   return (
-    <div className="space-y-6 max-w-[1400px]">
+    <div className="space-y-6">
       {/* Cabeçalho */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-3">

@@ -131,7 +131,7 @@ export function RecibosPage() {
   function handleDelete(id: string) { setRecibos(prev => prev.filter(r => r.id !== id)); }
 
   return (
-    <div className="space-y-6 max-w-[1100px]">
+    <div className="space-y-6 max-w-[1600px]">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-[#0f1f1c]">Recibos & Termos</h1>

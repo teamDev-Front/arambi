@@ -169,7 +169,7 @@ export function RelatoriosPage() {
   const socioMap = useMemo(() => Object.fromEntries(socios.map((s) => [s.id, s])), [socios]);
 
   return (
-    <div className="space-y-6 max-w-[1400px]">
+    <div className="space-y-6">
       <div>
         <h1 className="text-xl font-bold text-[#0f1f1c]">Relatórios PDF</h1>
         <p className="text-sm text-stone-500">

@@ -51,6 +51,9 @@ function aplicarEscopo<T>(query: T, scope: ReportScope | undefined, mesFallback:
     if (Array.isArray(v)) { if (v.length > 0) r = r.in(col, v); }
     else r = r.eq(col, v);
   };
+  // Recorte por ids (lançamentos tagueados — fix 28-jul). Lista vazia = recorte
+  // vazio (uuid sentinela evita `in ()` inválido), igual à listagem da tela.
+  if (f.ids) r = r.in("id", f.ids.length > 0 ? f.ids : ["00000000-0000-0000-0000-000000000000"]);
   if (f.mes_referencia)            r = r.eq("mes_referencia", f.mes_referencia);
   eqOuIn("status", f.status);
   eqOuIn("conta_contabil_cod", f.conta_contabil_cod);

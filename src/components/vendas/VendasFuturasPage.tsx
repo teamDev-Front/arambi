@@ -626,7 +626,7 @@ export function VendasFuturasPage() {
 
   // ---- render ----
   return (
-    <div className="space-y-6 max-w-[1400px]">
+    <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-[#0f1f1c]">Vendas Futuras</h1>

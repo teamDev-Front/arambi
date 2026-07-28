@@ -153,7 +153,7 @@ export function ProvisionamentoPage() {
   );
 
   return (
-    <div className="space-y-6 max-w-[1500px]">
+    <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-[#0f1f1c]">Provisionamento Anual</h1>

@@ -128,6 +128,10 @@ export function RelatorioEscopoModal({
         emissao_ate: filtros.emissaoAte,
         valor_min: filtros.valorMin,
         valor_max: filtros.valorMax,
+        // "Ver só tagueados" (fix 28-jul): o recorte por ids das TAGs também
+        // chega ao gerador — antes só o resumo do modal respeitava as tags e
+        // a capa saía com todos os lançamentos.
+        ids: filtros.ids,
       },
       totais,
     };
