@@ -11,6 +11,7 @@ import { sanitizeWinAnsi } from "@/lib/pdf/helpers";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { getStatusLabel } from "@/lib/utils/status-config";
 import type { TransacaoEmpresaRich } from "@/lib/queries/financeiro";
+import { TIPO_DESPESA_LABEL, OBS_OBRA_LABEL, FORMA_PGTO_LABEL } from "@/types";
 import { buildXlsx, xtext, xmoney, type XlsxValue } from "./xlsx";
 
 // ---------------------------------------------------------------------------
@@ -23,9 +24,13 @@ export interface FinanceiroExportRow {
   emissao: string;
   conta: string;
   centro: string;
+  tipoDespesa: string; // label PT-BR ("" quando sem) — XLSX 27-jul
   descricao: string;
   fornecedor: string;
+  obsObra: string;     // label PT-BR ("" quando sem) — XLSX 27-jul
   ref: string;         // Referência (NF / recibo) — coluna nova 23-jul
+  parcelas: string;    // quantidade ou n/N — XLSX 27-jul
+  formaPgto: string;   // label PT-BR ("" quando sem) — XLSX 27-jul
   banco: string;       // apelido/nome exibível
   status: string;      // label PT-BR
   valorNum: number;    // valor com sinal (negativo = saída)
@@ -52,9 +57,13 @@ export function toExportRows(rows: TransacaoEmpresaRich[]): FinanceiroExportRow[
       emissao: r.data_emissao ? formatDate(r.data_emissao) : "",
       conta: contaNome ? `${r.conta_contabil_cod} ${contaNome}` : r.conta_contabil_cod,
       centro: centroNome ? `${r.centro_custo_cod} ${centroNome}` : r.centro_custo_cod,
+      tipoDespesa: r.tipo_despesa && r.tipo_despesa !== "sem" ? TIPO_DESPESA_LABEL[r.tipo_despesa] : "",
       descricao: r.descricao ?? "",
       fornecedor: r.fornecedor_nome ?? "",
+      obsObra: r.obs_obra && r.obs_obra !== "sem" ? OBS_OBRA_LABEL[r.obs_obra] : "",
       ref: r.ref ?? "",
+      parcelas: r.parcelas ?? "",
+      formaPgto: r.forma_pgto && r.forma_pgto !== "sem" ? FORMA_PGTO_LABEL[r.forma_pgto] : "",
       banco,
       status: getStatusLabel(r.status),
       valorNum: Number(r.valor) || 0,
@@ -120,31 +129,38 @@ export function exportFinanceiroXlsx(
   titleRows.push(`Gerado em ${formatDate(new Date())} · ${rows.length} lançamento${rows.length === 1 ? "" : "s"}`);
   if (meta.aviso) titleRows.push(meta.aviso);
 
+  // Ordem das colunas pedida no ajuste 27-jul (Financeiro → Exportar XLS).
   const dataRows: XlsxValue[][] = rows.map((r) => [
     xtext(r.vencimento),
     xtext(r.emissao),
     xtext(r.conta),
     xtext(r.centro),
-    xtext(r.descricao),
+    xtext(r.tipoDespesa),
     xtext(r.fornecedor),
+    xtext(r.descricao),
+    xtext(r.obsObra),
     xtext(r.ref),
+    xtext(r.parcelas),
+    xtext(r.formaPgto),
     xtext(r.banco),
     xtext(r.status),
     xmoney(r.valorNum),
   ]);
 
+  const NCOLS = 14;
+  const pad = (n: number): XlsxValue[] => Array.from({ length: n }, () => xtext(""));
+
   // Linha em branco + subtotais por banco + total geral.
-  const empty: XlsxValue[] = [xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext("")];
-  dataRows.push(empty);
+  dataRows.push(pad(NCOLS));
   for (const b of porBanco) {
     dataRows.push([
-      xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""),
+      ...pad(NCOLS - 2),
       xtext(`Subtotal ${b.banco}`, { bold: true }),
       xmoney(b.total, { bold: true }),
     ]);
   }
   dataRows.push([
-    xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""), xtext(""),
+    ...pad(NCOLS - 2),
     xtext("TOTAL GERAL", { bold: true }),
     xmoney(totalGeral, { bold: true }),
   ]);
@@ -155,11 +171,15 @@ export function exportFinanceiroXlsx(
     columns: [
       { header: "Vencimento", width: 12 },
       { header: "Emissão", width: 12 },
-      { header: "Conta", width: 30 },
+      { header: "Conta Contábil", width: 30 },
       { header: "Centro de Custo", width: 30 },
+      { header: "Tipo de Despesa", width: 18 },
+      { header: "Fornecedor / contraparte", width: 26 },
       { header: "Descrição", width: 46 },
-      { header: "Fornecedor", width: 26 },
-      { header: "Ref.", width: 16 },
+      { header: "Obs. Obra", width: 16 },
+      { header: "Referência (NF / recibo)", width: 20 },
+      { header: "Parcelas", width: 10 },
+      { header: "Forma de Pgto", width: 16 },
       { header: "Banco", width: 14 },
       { header: "Status", width: 16 },
       { header: "Valor", width: 16 },

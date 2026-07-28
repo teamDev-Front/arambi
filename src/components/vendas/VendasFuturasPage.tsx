@@ -15,11 +15,14 @@ import {
   PieChart, Pie, Legend,
 } from "recharts";
 import {
-  Plus, Search, Edit2, Trash2, Loader2, Download, Sprout,
+  Plus, Search, Edit2, Trash2, Loader2, Sprout,
   Wallet, CalendarClock, ArrowDownToLine, HandCoins, PackageCheck,
+  Link2,
 } from "lucide-react";
+import { MultiSelect } from "@/components/ui/MultiSelect";
 import {
   listarVendas, criarVenda, atualizarVenda, deletarVenda, calcularResumo,
+  atualizarStatusVendasEmMassa, deletarVendasEmMassa,
   type ListarVendasFiltros,
 } from "@/lib/queries/vendas";
 import {
@@ -27,11 +30,18 @@ import {
   listarKgBaixadoPorVenda, type SaldoEstoque,
 } from "@/lib/queries/safra";
 import { listarSocios } from "@/lib/queries/bancos";
+import {
+  criarTransacaoEmpresa, listarClassificacoes, listarContasEmpresa,
+  listarFornecedores, garantirFornecedor,
+} from "@/lib/queries/financeiro";
+import { criarDetalhado, listarClassificacoesPessoais } from "@/lib/queries/distribuicao";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
   CULTURA_LABEL, CULTURA_EMOJI, VENDA_STATUS_LABEL,
   type VendaProvisionadaRichRow, type SocioRow,
   type CulturaSafra, type VendaStatus, type Database,
+  type ClassificacaoFinanceiraRow, type ContaBancariaEmpresaRow, type FornecedorRow,
+  type TransacaoEmpresaInsert, type TransacaoSocioInsert, type ClassificacaoPessoalRow,
 } from "@/types";
 
 const PAGE_SIZE = 12;
@@ -52,6 +62,10 @@ type Form = {
   destino_empresa: boolean;
   socio_destino_id: string;
   taxa_armazenagem: string;
+  // Taxa de Armazenagem — data de pagamento / ND / banco (ajuste 27-jul)
+  taxa_data_pgto: string;
+  taxa_nd: string;
+  taxa_banco_id: string;
   observacao: string;
   status: VendaStatus;
 };
@@ -70,6 +84,9 @@ const EMPTY: Form = {
   destino_empresa: true,
   socio_destino_id: "",
   taxa_armazenagem: "0",
+  taxa_data_pgto: "",
+  taxa_nd: "",
+  taxa_banco_id: "",
   observacao: "",
   status: "firmada",
 };
@@ -97,6 +114,8 @@ export function VendasFuturasPage() {
   const [filterSafra, setFilterSafra] = useState("");
   const [filterDestino, setFilterDestino] = useState<"empresa" | "socio" | "">("");
   const [filterMes, setFilterMes] = useState("");
+  // Exercício (anual) — multi-seleção para análise/soma/comparação (ajuste 27-jul).
+  const [filterExercicios, setFilterExercicios] = useState<string[]>([]);
   const [page, setPage] = useState(1);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -109,6 +128,27 @@ export function VendasFuturasPage() {
   const [baixarEstoque, setBaixarEstoque] = useState(true);
   const [saldoEstoque, setSaldoEstoque] = useState<SaldoEstoque | null>(null);
   const [kgBaixadoPorVenda, setKgBaixadoPorVenda] = useState<Map<string, number>>(new Map());
+  // Baixa vinculada da venda em edição — para permitir marcar/desmarcar na edição (27-jul).
+  const [editTinhaBaixa, setEditTinhaBaixa] = useState(false);
+
+  // ---- seleção múltipla (ajuste 27-jul) ----
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
+
+  // ---- integração com o Financeiro (ajuste 27-jul) ----
+  // Gerar o "valor a receber" (empresa) ou a DL provisionada (sócio) e a
+  // despesa da Taxa de Armazenagem no momento do cadastro — com opção de NÃO
+  // gerar (caso o lançamento já exista no Financeiro, evitando duplicidade).
+  const [gerarFinanceiro, setGerarFinanceiro] = useState(true);
+  const [gerarTaxaDespesa, setGerarTaxaDespesa] = useState(true);
+  const [dlClassif, setDlClassif] = useState("");
+  const [recebBancoId, setRecebBancoId] = useState("");
+  const [classificacoesFin, setClassificacoesFin] = useState<ClassificacaoFinanceiraRow[]>([]);
+  const [bancosEmpresa, setBancosEmpresa] = useState<ContaBancariaEmpresaRow[]>([]);
+  const [fornecedores, setFornecedores] = useState<FornecedorRow[]>([]);
+  const [classifsPessoais, setClassifsPessoais] = useState<ClassificacaoPessoalRow[]>([]);
 
   // ---- load ----
   const fetchData = useCallback(async () => {
@@ -136,16 +176,24 @@ export function VendasFuturasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, filterStatus, filterCultura, filterSafra, filterDestino, filterMes]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { fetchData(); setSelectedIds(new Set()); }, [fetchData]);
   useEffect(() => {
     listarSocios().then(setSocios).catch((e) => toast.error("Erro carregando sócios", (e as Error).message));
+    // Lookups da integração com o Financeiro (falha silenciosa: a integração é
+    // opcional e avisa na hora de gerar se algo faltar).
+    listarClassificacoes().then(setClassificacoesFin).catch(() => undefined);
+    listarContasEmpresa().then(setBancosEmpresa).catch(() => undefined);
+    listarFornecedores().then(setFornecedores).catch(() => undefined);
+    listarClassificacoesPessoais().then(setClassifsPessoais).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Saldo em estoque da cultura×safra escolhida (só na criação; debounce leve
-  // porque o campo Safra é digitado). Falha silenciosa: o banco valida de novo.
+  // Saldo em estoque da cultura×safra escolhida (criação E edição — 27-jul;
+  // debounce leve porque o campo Safra é digitado). Falha silenciosa: o banco
+  // valida de novo.
   useEffect(() => {
-    if (!modalOpen || editId) return;
+    if (!modalOpen) return;
     const safra = form.safra.trim();
     let cancelado = false;
     const t = setTimeout(() => {
@@ -155,14 +203,83 @@ export function VendasFuturasPage() {
         .catch(() => { if (!cancelado) setSaldoEstoque(null); });
     }, 350);
     return () => { cancelado = true; clearTimeout(t); };
-  }, [modalOpen, editId, form.cultura, form.safra]);
+  }, [modalOpen, form.cultura, form.safra]);
 
   // ---- derivados ----
-  const resumo = useMemo(() => calcularResumo(rows), [rows]);
+  // Recorte por exercício (anual): filtra pelo ANO do recebimento previsto.
+  const rowsFiltradas = useMemo(
+    () => (filterExercicios.length
+      ? rows.filter((r) => filterExercicios.includes(r.mes_recebimento.slice(0, 4)))
+      : rows),
+    [rows, filterExercicios],
+  );
+  const resumo = useMemo(() => calcularResumo(rowsFiltradas), [rowsFiltradas]);
   const safrasDistintas = useMemo(() => Array.from(new Set(rows.map((r) => r.safra))).sort(), [rows]);
   const mesesDistintos = useMemo(() => Array.from(new Set(rows.map((r) => r.mes_recebimento))).sort(), [rows]);
-  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-  const paged = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const exerciciosDistintos = useMemo(
+    () => Array.from(new Set(rows.map((r) => r.mes_recebimento.slice(0, 4)))).sort(),
+    [rows],
+  );
+  const totalPages = Math.max(1, Math.ceil(rowsFiltradas.length / PAGE_SIZE));
+  const paged = rowsFiltradas.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // ---- seleção múltipla (ajuste 27-jul) ----
+  const allPageSelected = paged.length > 0 && paged.every((r) => selectedIds.has(r.id));
+  const togglePageSelection = () => {
+    if (paged.length === 0) return;
+    const allSel = paged.every((r) => selectedIds.has(r.id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      paged.forEach((r) => { if (allSel) next.delete(r.id); else next.add(r.id); });
+      return next;
+    });
+  };
+  const toggleOneSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const somaSelecionados = useMemo(() => {
+    let s = 0;
+    for (const r of rows) if (selectedIds.has(r.id)) s += r.valor_total ?? 0;
+    return s;
+  }, [rows, selectedIds]);
+
+  // ---- helpers da integração com o Financeiro (ajuste 27-jul) ----
+  const valorTotalForm = (Number(form.kg) / (Number(form.kg_por_saca) || 60)) * Number(form.preco_sc);
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+
+  /** Centro de custo da RECEITA da venda (1.2.x — Venda de Soja/Milho…). */
+  function centroReceitaVenda(cultura: CulturaSafra): { conta: string; centro: string } | null {
+    const conta = classificacoesFin.find((c) => c.nivel === 2 && c.codigo === "1.2")
+      ?? classificacoesFin.find((c) => c.nivel === 2 && /arrendamento/i.test(c.nome));
+    if (!conta) return null;
+    const filhos = classificacoesFin.filter((c) => c.nivel === 3 && c.parent_codigo === conta.codigo);
+    const porNome = filhos.find((c) => c.nome.toLowerCase().includes(CULTURA_LABEL[cultura].toLowerCase()));
+    const centro = porNome ?? filhos[0];
+    return centro ? { conta: conta.codigo, centro: centro.codigo } : null;
+  }
+
+  /** Centro de custo da DESPESA da Taxa de Armazenagem (2.4.5). */
+  function centroTaxaArmazenagem(): { conta: string; centro: string } | null {
+    const centro = classificacoesFin.find((c) => c.nivel === 3 && c.codigo === "2.4.5")
+      ?? classificacoesFin.find((c) => c.nivel === 3 && /armazenagem/i.test(c.nome));
+    if (!centro || !centro.parent_codigo) return null;
+    return { conta: centro.parent_codigo, centro: centro.codigo };
+  }
+
+  /** Classificação pessoal padrão da DL gerada por venda (Lucro, se existir). */
+  const dlClassifPadrao = useMemo(
+    () => classifsPessoais.find((c) => /lucro/i.test(c.nome))?.codigo ?? classifsPessoais[0]?.codigo ?? "",
+    [classifsPessoais],
+  );
+  /** Banco padrão do recebimento (Cora — padrão dos lançamentos de venda). */
+  const bancoRecebPadrao = useMemo(
+    () => bancosEmpresa.find((b) => (b.apelido ?? b.nome).toLowerCase().includes("cora"))?.id ?? "",
+    [bancosEmpresa],
+  );
 
   // ---- handlers ----
   function openNova() {
@@ -170,10 +287,19 @@ export function VendasFuturasPage() {
     setForm({ ...EMPTY });
     setBaixarEstoque(true);
     setSaldoEstoque(null);
+    setEditTinhaBaixa(false);
+    setGerarFinanceiro(true);
+    setGerarTaxaDespesa(true);
+    setDlClassif("");
+    setRecebBancoId("");
     setModalOpen(true);
   }
   function openEdit(v: VendaProvisionadaRichRow) {
+    const tinhaBaixa = (kgBaixadoPorVenda.get(v.id) ?? 0) > 0;
     setEditId(v.id);
+    setEditTinhaBaixa(tinhaBaixa);
+    setBaixarEstoque(tinhaBaixa);
+    setSaldoEstoque(null);
     setForm({
       data_venda: v.data_venda,
       comprador: v.comprador,
@@ -189,10 +315,135 @@ export function VendasFuturasPage() {
       destino_empresa: v.destino_empresa,
       socio_destino_id: v.socio_destino_id ?? "",
       taxa_armazenagem: String(v.taxa_armazenagem),
+      taxa_data_pgto: v.taxa_data_pgto ?? "",
+      taxa_nd: v.taxa_nd ?? "",
+      taxa_banco_id: v.taxa_banco_id ?? "",
       observacao: v.observacao ?? "",
       status: v.status,
     });
     setModalOpen(true);
+  }
+
+  /**
+   * Gera os lançamentos integrados no Financeiro após criar a venda:
+   *   • destino EMPRESA  → conta a receber (1.2.x, status A receber);
+   *   • destino SÓCIO    → DL detalhada provisionada (reflete no Financeiro
+   *     como Provisionado DL automaticamente, via trigger SOMASE);
+   *   • taxa de armazenagem → despesa a pagar (2.4.5) SEMPRE no Financeiro,
+   *     independentemente do destino do recebimento.
+   * Falhas aqui NÃO desfazem a venda — avisam para lançar manualmente.
+   */
+  async function gerarIntegracaoFinanceiro(vendaId: string): Promise<void> {
+    const valorTotal = round2(valorTotalForm);
+    const descricaoVenda = `Venda ${CULTURA_LABEL[form.cultura]} Safra ${form.safra.trim()}`;
+    const nf = form.nota_fiscal.trim();
+
+    if (gerarFinanceiro && form.destino_empresa) {
+      try {
+        const alvo = centroReceitaVenda(form.cultura);
+        if (!alvo) throw new Error('Plano de contas sem a conta 1.2 (Receita de Arrendamento) — cadastre em Configurações → Plano de Contas.');
+        let fornecedorId: string | null = null;
+        let fornecedorNome: string | null = form.comprador.trim() || null;
+        if (fornecedorNome) {
+          const f = await garantirFornecedor(fornecedorNome, fornecedores);
+          if (f) { fornecedorId = f.id; fornecedorNome = f.nome; }
+        }
+        const payload: TransacaoEmpresaInsert = {
+          data: form.data_pgto_prevista,
+          data_emissao: form.data_venda || null,
+          conta_contabil_cod: alvo.conta,
+          centro_custo_cod: alvo.centro,
+          tipo_despesa: "sem",
+          fornecedor_id: fornecedorId,
+          fornecedor_nome: fornecedorNome,
+          descricao: descricaoVenda,
+          obs_obra: "sem",
+          ref: nf ? `NF ${nf}` : (form.numero_contrato.trim() || null),
+          parcelas: null,
+          forma_pgto: "sem",
+          conta_bancaria_id: recebBancoId || bancoRecebPadrao || null,
+          status: "a_receber",
+          valor: valorTotal,
+          observacao: `Gerado automaticamente pela Venda Futura (${form.comprador.trim()}).`,
+          origem_planilha: `venda_auto:${vendaId}`,
+          created_by: null,
+        };
+        const criada = await criarTransacaoEmpresa(payload);
+        await atualizarVenda(vendaId, { transacao_empresa_id: criada.id });
+        toast.success("Conta a receber criada no Financeiro", `${descricaoVenda} — ${formatCurrency(valorTotal)} (A receber).`);
+      } catch (e: unknown) {
+        toast.warning("Venda salva, mas a conta a receber NÃO foi gerada", (e as Error).message);
+      }
+    }
+
+    if (gerarFinanceiro && !form.destino_empresa && form.socio_destino_id) {
+      try {
+        const classif = dlClassif || dlClassifPadrao;
+        if (!classif) throw new Error("Nenhuma classificação pessoal cadastrada para a DL.");
+        const socio = socios.find((s) => s.id === form.socio_destino_id);
+        const payload: TransacaoSocioInsert = {
+          data: `${form.data_pgto_prevista.slice(0, 7)}-01`,   // competência = mês do recebimento
+          socio_id: form.socio_destino_id,
+          classificacao_pessoal: classif,
+          descricao: `${descricaoVenda}${nf ? ` — NF ${nf}` : ""} (${form.comprador.trim()})`,
+          conta_bancaria_socio_id: null,
+          conta_bancaria_socio_nome: null,
+          valor: valorTotal,
+          data_vencimento: form.data_pgto_prevista,            // Data do Repasse prevista
+          data_vencimento_despesa: null,
+          status: "provisionado",
+          observacao: `Gerado automaticamente pela Venda Futura destinada ao sócio ${socio?.apelido ?? socio?.nome_completo ?? ""}.`,
+          origem_planilha: `venda_auto:${vendaId}`,
+          created_by: null,
+        };
+        await criarDetalhado(payload);
+        toast.success(
+          "Distribuição de Lucro provisionada",
+          `${formatCurrency(valorTotal)} lançados no detalhado do sócio — o Provisionado DL global do Financeiro atualiza sozinho.`,
+        );
+      } catch (e: unknown) {
+        toast.warning("Venda salva, mas a DL NÃO foi gerada", (e as Error).message);
+      }
+    }
+
+    const taxa = Number(form.taxa_armazenagem) || 0;
+    if (gerarTaxaDespesa && taxa > 0) {
+      try {
+        const alvo = centroTaxaArmazenagem();
+        if (!alvo) throw new Error('Plano de contas sem o centro "Taxa de Armazenagem" (2.4.5) — cadastre em Configurações → Plano de Contas.');
+        let fornecedorId: string | null = null;
+        let fornecedorNome: string | null = form.comprador.trim() || null;
+        if (fornecedorNome) {
+          const f = await garantirFornecedor(fornecedorNome, fornecedores);
+          if (f) { fornecedorId = f.id; fornecedorNome = f.nome; }
+        }
+        const payload: TransacaoEmpresaInsert = {
+          data: form.taxa_data_pgto || form.data_pgto_prevista,
+          data_emissao: null,
+          conta_contabil_cod: alvo.conta,
+          centro_custo_cod: alvo.centro,
+          tipo_despesa: "sem",
+          fornecedor_id: fornecedorId,
+          fornecedor_nome: fornecedorNome,
+          descricao: `Taxa de Armazenagem Safra ${form.safra.trim()} — ${CULTURA_LABEL[form.cultura]}`,
+          obs_obra: "sem",
+          ref: form.taxa_nd.trim() ? `ND ${form.taxa_nd.trim()}` : null,
+          parcelas: null,
+          forma_pgto: "sem",
+          conta_bancaria_id: form.taxa_banco_id || null,
+          status: "a_pagar",
+          valor: -Math.abs(round2(taxa)),
+          observacao: "Taxa de Armazenagem gerada automaticamente pela Venda Futura — responsabilidade da empresa (sempre no Financeiro, nunca em DL).",
+          origem_planilha: `venda_taxa_auto:${vendaId}`,
+          created_by: null,
+        };
+        const criada = await criarTransacaoEmpresa(payload);
+        await atualizarVenda(vendaId, { taxa_transacao_id: criada.id });
+        toast.success("Despesa da Taxa de Armazenagem criada", `${formatCurrency(-Math.abs(taxa))} (A pagar) no Financeiro.`);
+      } catch (e: unknown) {
+        toast.warning("Venda salva, mas a despesa da taxa NÃO foi gerada", (e as Error).message);
+      }
+    }
   }
   async function save() {
     if (!form.comprador.trim() || !form.kg || !form.preco_sc || !form.data_pgto_prevista || !form.safra) {
@@ -220,6 +471,9 @@ export function VendasFuturasPage() {
       destino_empresa: form.destino_empresa,
       socio_destino_id: form.destino_empresa ? null : form.socio_destino_id,
       taxa_armazenagem: Number(form.taxa_armazenagem) || 0,
+      taxa_data_pgto: form.taxa_data_pgto || null,
+      taxa_nd: form.taxa_nd.trim() || null,
+      taxa_banco_id: form.taxa_banco_id || null,
       observacao: form.observacao.trim() || null,
       status: form.status,
       transacao_empresa_id: null,
@@ -228,8 +482,43 @@ export function VendasFuturasPage() {
     };
     try {
       if (editId) {
-        await atualizarVenda(editId, payload);
-        toast.success("Venda atualizada");
+        // Na edição não sobrescrevemos o vínculo com o Financeiro.
+        const { transacao_empresa_id: _t, ...updatePayload } = payload;
+        void _t;
+        await atualizarVenda(editId, updatePayload);
+
+        // "Dar baixa no estoque" agora é editável a qualquer momento (27-jul):
+        //   • estava SEM baixa e marcou  → baixa FIFO vinculada à venda;
+        //   • estava COM baixa e desmarcou → desfaz as baixas (volume volta).
+        if (!editTinhaBaixa && baixarEstoque) {
+          try {
+            const res = await baixarEstoqueFifo({
+              cultura: form.cultura,
+              safra: form.safra.trim(),
+              kg: Number(form.kg),
+              data: form.data_venda,
+              vendaId: editId,
+              observacao: `Baixa automática da venda ${form.numero_contrato.trim() || form.comprador.trim()}`,
+            });
+            const partes = [`${res.notas_baixadas_total} nota(s) inteira(s)`];
+            if (res.notas_parciais > 0) partes.push(`${res.notas_parciais} parcial`);
+            toast.success(
+              "Venda atualizada com baixa no estoque",
+              `FIFO: ${partes.join(" + ")}. Saldo restante da safra: ${res.saldo_restante_kg.toLocaleString("pt-BR")} kg.`,
+            );
+          } catch (eBaixa: unknown) {
+            toast.error("Venda atualizada, mas a baixa de estoque FALHOU", (eBaixa as Error).message);
+          }
+        } else if (editTinhaBaixa && !baixarEstoque) {
+          try {
+            await desfazerBaixasVenda(editId);
+            toast.success("Baixa de estoque desfeita", "O volume voltou ao estoque; a venda segue sem baixa vinculada.");
+          } catch (eDesfaz: unknown) {
+            toast.error("Venda atualizada, mas não foi possível desfazer a baixa", (eDesfaz as Error).message);
+          }
+        } else {
+          toast.success("Venda atualizada");
+        }
       } else {
         const vendaId = await criarVenda(payload);
         if (baixarEstoque) {
@@ -258,6 +547,9 @@ export function VendasFuturasPage() {
         } else {
           toast.success("Venda registrada", "Sem baixa de estoque (opção desmarcada).");
         }
+        // Integração com o Financeiro / DL / taxa (ajuste 27-jul) — depois da
+        // baixa, para a venda já estar consolidada. Falha aqui não desfaz nada.
+        await gerarIntegracaoFinanceiro(vendaId);
       }
       setModalOpen(false);
       await fetchData();
@@ -267,6 +559,52 @@ export function VendasFuturasPage() {
       setSaving(false);
     }
   }
+  // ---- ações em massa (ajuste 27-jul) ----
+  async function aplicarStatusEmMassa() {
+    if (!bulkStatus || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const n = await atualizarStatusVendasEmMassa(Array.from(selectedIds), bulkStatus as VendaStatus);
+      toast.success("Status aplicado", `${n} venda${n === 1 ? "" : "s"} atualizada${n === 1 ? "" : "s"} para "${VENDA_STATUS_LABEL[bulkStatus as VendaStatus]}".`);
+      setSelectedIds(new Set());
+      setBulkStatus("");
+      await fetchData();
+    } catch (e: unknown) {
+      toast.error("Não foi possível aplicar o status", (e as Error).message);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function excluirSelecionados() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const comBaixa = ids.filter((id) => (kgBaixadoPorVenda.get(id) ?? 0) > 0);
+    const aviso = comBaixa.length > 0
+      ? `\n\n${comBaixa.length} dela${comBaixa.length === 1 ? "" : "s"} tem baixa de estoque vinculada — as baixas serão desfeitas e o volume VOLTA ao estoque.`
+      : "";
+    if (!confirm(`Excluir DEFINITIVAMENTE ${ids.length === 1 ? "a venda selecionada" : `as ${ids.length} vendas selecionadas`}?${aviso}`)) return;
+    setBulkDeleteBusy(true);
+    try {
+      // Desfaz as baixas vinculadas antes do DELETE (volume volta ao estoque).
+      for (const id of comBaixa) {
+        await desfazerBaixasVenda(id);
+      }
+      const n = await deletarVendasEmMassa(ids);
+      toast.success(
+        "Vendas excluídas",
+        `${n} venda${n === 1 ? "" : "s"} excluída${n === 1 ? "" : "s"}${comBaixa.length > 0 ? " — volumes de estoque restaurados" : ""}.`,
+      );
+      setSelectedIds(new Set());
+      await fetchData();
+    } catch (e: unknown) {
+      toast.error("Não foi possível excluir os selecionados", (e as Error).message);
+      await fetchData();
+    } finally {
+      setBulkDeleteBusy(false);
+    }
+  }
+
   async function remove(v: VendaProvisionadaRichRow) {
     const kgBaixado = kgBaixadoPorVenda.get(v.id) ?? 0;
     const msg = kgBaixado > 0
@@ -426,13 +764,71 @@ export function VendasFuturasPage() {
               <option value="">Todos meses</option>
               {mesesDistintos.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
+            {/* Exercício (anual) — 1+ anos para análise/soma/comparação (27-jul) */}
+            <MultiSelect
+              className="w-36"
+              value={filterExercicios}
+              onChange={(v) => { setFilterExercicios(v); setPage(1); }}
+              options={exerciciosDistintos.map((a) => ({ value: a, label: `Exercício ${a}` }))}
+              placeholder="Todos os exercícios"
+              searchPlaceholder="Buscar ano…"
+              emptyText="Nenhum exercício"
+              unitLabel="exercícios"
+            />
           </div>
         </CardHeader>
+
+        {/* Barra de ações em massa (27-jul) */}
+        {selectedIds.size > 0 && (
+          <div className="mx-4 mb-1 rounded-lg bg-accent-50 border border-accent-200 px-3 py-2 flex items-center gap-2 flex-wrap text-xs">
+            <span className="font-medium text-stone-700">
+              {selectedIds.size} selecionada{selectedIds.size === 1 ? "" : "s"}:
+            </span>
+            <select
+              value={bulkStatus}
+              onChange={(e) => setBulkStatus(e.target.value)}
+              className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+              title="Status a aplicar em todas as vendas selecionadas"
+            >
+              <option value="">Escolher status…</option>
+              {(Object.keys(VENDA_STATUS_LABEL) as VendaStatus[]).map((s) =>
+                <option key={s} value={s}>{VENDA_STATUS_LABEL[s]}</option>)}
+            </select>
+            <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy || bulkDeleteBusy}
+              loading={bulkBusy}
+              onClick={aplicarStatusEmMassa}
+              title="Aplica o status escolhido em todas as vendas selecionadas de uma vez">
+              Aplicar status
+            </Button>
+            <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
+              loading={bulkDeleteBusy}
+              onClick={excluirSelecionados}
+              className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+              title="Exclui DE UMA VEZ todas as vendas selecionadas (baixas de estoque vinculadas são desfeitas)">
+              <Trash2 size={13} /> Excluir selecionadas
+            </Button>
+            <span className="ml-auto inline-flex items-center gap-1.5 font-semibold text-stone-700 tabular-nums bg-white border border-accent-200 rounded-lg px-2.5 py-1">
+              Soma: <span className="text-emerald-700">{formatCurrency(somaSelecionados)}</span>
+            </span>
+            <button onClick={() => setSelectedIds(new Set())} className="text-stone-400 hover:text-stone-600 underline">
+              limpar seleção
+            </button>
+          </div>
+        )}
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-100">
+                  <th className="px-3 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      aria-label="Selecionar todas da página"
+                      checked={allPageSelected}
+                      onChange={togglePageSelection}
+                      className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
+                    />
+                  </th>
                   {["Cultura","Safra","Comprador","Contrato/NF","Sacas","R$/sc","Valor Total","Pgto Previsto","Destino","Status","Ações"].map((h) => (
                     <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
@@ -440,17 +836,26 @@ export function VendasFuturasPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="inline-block animate-spin mr-2" /> Carregando…
                   </td></tr>
                 )}
                 {!loading && paged.length === 0 && (
-                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
                     Nenhuma venda encontrada.
                   </td></tr>
                 )}
                 {!loading && paged.map((v) => (
-                  <tr key={v.id} className="border-b border-stone-50 hover:bg-stone-50 transition-colors table-row-alt">
+                  <tr key={v.id} className={`border-b border-stone-50 transition-colors table-row-alt ${selectedIds.has(v.id) ? "bg-accent-50/60" : "hover:bg-stone-50"}`}>
+                    <td className="px-3 py-3">
+                      <input
+                        type="checkbox"
+                        aria-label="Selecionar venda"
+                        checked={selectedIds.has(v.id)}
+                        onChange={() => toggleOneSelection(v.id)}
+                        className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
+                      />
+                    </td>
                     <td className="px-3 py-3 text-stone-700 whitespace-nowrap">
                       <span className="mr-1">{CULTURA_EMOJI[v.cultura]}</span>
                       {CULTURA_LABEL[v.cultura]}
@@ -494,10 +899,12 @@ export function VendasFuturasPage() {
                   </tr>
                 ))}
               </tbody>
-              {!loading && rows.length > 0 && (
+              {!loading && rowsFiltradas.length > 0 && (
                 <tfoot>
                   <tr className="bg-stone-50 border-t-2 border-stone-200 font-semibold text-stone-700">
-                    <td colSpan={4} className="px-3 py-3 text-xs uppercase tracking-wide">Total</td>
+                    <td colSpan={5} className="px-3 py-3 text-xs uppercase tracking-wide">
+                      Total{filterExercicios.length > 0 ? ` (${filterExercicios.join(" + ")})` : ""}
+                    </td>
                     <td className="px-3 py-3 text-right text-xs">{resumo.total_sacas.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} sc</td>
                     <td></td>
                     <td className="px-3 py-3 text-right text-emerald-700">{formatCurrency(resumo.total_valor)}</td>
@@ -509,7 +916,8 @@ export function VendasFuturasPage() {
           </div>
           <div className="flex items-center justify-between px-4 py-3 border-t border-stone-100">
             <p className="text-xs text-stone-400">
-              {loading ? "…" : `${rows.length} venda${rows.length === 1 ? "" : "s"}`}
+              {loading ? "…" : `${rowsFiltradas.length} venda${rowsFiltradas.length === 1 ? "" : "s"}`}
+              {!loading && filterExercicios.length > 0 && ` no${filterExercicios.length === 1 ? "" : "s"} exercício${filterExercicios.length === 1 ? "" : "s"} ${filterExercicios.join(", ")}`}
             </p>
             <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
           </div>
@@ -566,54 +974,66 @@ export function VendasFuturasPage() {
             </div>
           )}
 
-          {/* Baixa de estoque por volume — FIFO (migration 0043) */}
-          {!editId && (
-            <div className="rounded-lg border border-stone-200 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <label className="flex items-center gap-2 cursor-pointer text-sm text-stone-700">
-                  <input
-                    type="checkbox"
-                    checked={baixarEstoque}
-                    onChange={(e) => setBaixarEstoque(e.target.checked)}
-                    className="h-4 w-4 rounded border-stone-300 accent-accent-500"
-                  />
-                  <span className="font-medium">Dar baixa no estoque</span>
-                  <span className="text-xs text-stone-400">(FIFO — notas mais antigas primeiro)</span>
-                </label>
-                {saldoEstoque && (
-                  <span className="text-xs text-stone-500">
-                    Disponível: <strong className="text-stone-700">
-                      {saldoEstoque.sacas.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} sc
-                    </strong>{" "}
-                    ({saldoEstoque.kg.toLocaleString("pt-BR")} kg em {saldoEstoque.notas} nota{saldoEstoque.notas === 1 ? "" : "s"})
-                  </span>
-                )}
-              </div>
-              {baixarEstoque && saldoEstoque && form.kg && Number(form.kg) > saldoEstoque.kg && (
-                <p className="text-xs text-red-600">
-                  Volume maior que o saldo em estoque ({saldoEstoque.kg.toLocaleString("pt-BR")} kg) — a baixa vai falhar.
-                  Ajuste a quantidade ou desmarque a baixa.
-                </p>
+          {/* Baixa de estoque por volume — FIFO (migration 0043).
+              Desde o ajuste 27-jul a opção também aparece na EDIÇÃO: marcar dá
+              a baixa ao salvar; desmarcar desfaz as baixas vinculadas. */}
+          <div className="rounded-lg border border-stone-200 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <label className="flex items-center gap-2 cursor-pointer text-sm text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={baixarEstoque}
+                  onChange={(e) => setBaixarEstoque(e.target.checked)}
+                  className="h-4 w-4 rounded border-stone-300 accent-accent-500"
+                />
+                <span className="font-medium">Dar baixa no estoque</span>
+                <span className="text-xs text-stone-400">(FIFO — notas mais antigas primeiro)</span>
+              </label>
+              {saldoEstoque && (
+                <span className="text-xs text-stone-500">
+                  Disponível: <strong className="text-stone-700">
+                    {saldoEstoque.sacas.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} sc
+                  </strong>{" "}
+                  ({saldoEstoque.kg.toLocaleString("pt-BR")} kg em {saldoEstoque.notas} nota{saldoEstoque.notas === 1 ? "" : "s"})
+                </span>
               )}
-              {baixarEstoque && saldoEstoque && saldoEstoque.kg === 0 && (
-                <p className="text-xs text-amber-600">
-                  Sem estoque lançado para esta cultura/safra — a baixa vai falhar. Confira a safra (ex.: 25/25) ou desmarque.
-                </p>
-              )}
-              <p className="text-[11px] text-stone-400">
-                O sistema consome as notas mais antigas até completar o volume; se pegar parte de uma nota,
-                o restante continua em estoque com a data de depósito original. As baixas ficam registradas
-                por nota para conferência com o armazém.
+            </div>
+            {(!editId || (!editTinhaBaixa && baixarEstoque)) && baixarEstoque && saldoEstoque && form.kg && Number(form.kg) > saldoEstoque.kg && (
+              <p className="text-xs text-red-600">
+                Volume maior que o saldo em estoque ({saldoEstoque.kg.toLocaleString("pt-BR")} kg) — a baixa vai falhar.
+                Ajuste a quantidade ou desmarque a baixa.
               </p>
-            </div>
-          )}
-          {editId && (kgBaixadoPorVenda.get(editId) ?? 0) > 0 && (
-            <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-              Esta venda tem baixa de estoque vinculada ({(kgBaixadoPorVenda.get(editId) ?? 0).toLocaleString("pt-BR")} kg).
-              Alterar volume, cultura ou safra <b>não realoca</b> a baixa — se precisar, exclua a venda
-              (as baixas são desfeitas e o volume volta ao estoque) e lance de novo.
-            </div>
-          )}
+            )}
+            {(!editId || (!editTinhaBaixa && baixarEstoque)) && baixarEstoque && saldoEstoque && saldoEstoque.kg === 0 && (
+              <p className="text-xs text-amber-600">
+                Sem estoque lançado para esta cultura/safra — a baixa vai falhar. Confira a safra (ex.: 25/25) ou desmarque.
+              </p>
+            )}
+            {editId && editTinhaBaixa && baixarEstoque && (
+              <p className="text-[11px] text-amber-700">
+                Esta venda já tem baixa vinculada ({(kgBaixadoPorVenda.get(editId) ?? 0).toLocaleString("pt-BR")} kg).
+                Alterar volume, cultura ou safra <b>não realoca</b> a baixa — para refazer, desmarque a opção,
+                salve (o volume volta ao estoque) e edite de novo marcando a baixa.
+              </p>
+            )}
+            {editId && editTinhaBaixa && !baixarEstoque && (
+              <p className="text-[11px] text-red-600 font-medium">
+                Ao salvar, as baixas vinculadas ({(kgBaixadoPorVenda.get(editId) ?? 0).toLocaleString("pt-BR")} kg)
+                serão desfeitas e o volume VOLTA ao estoque.
+              </p>
+            )}
+            {editId && !editTinhaBaixa && baixarEstoque && (
+              <p className="text-[11px] text-emerald-700 font-medium">
+                Ao salvar, o sistema dará baixa de {Number(form.kg || 0).toLocaleString("pt-BR")} kg no estoque
+                da safra (FIFO) vinculada a esta venda.
+              </p>
+            )}
+            <p className="text-[11px] text-stone-400">
+              O sistema consome as notas mais antigas até completar o volume; se pegar parte de uma nota,
+              o restante continua em estoque com a data de depósito original. As baixas ficam registradas
+              por nota para conferência com o armazém.
+            </p>
+          </div>
 
           <div className="grid grid-cols-3 gap-3">
             <Input label="Autorização de Fixação" placeholder="153076" value={form.aut_fixacao}
@@ -647,10 +1067,105 @@ export function VendasFuturasPage() {
             )}
           </div>
 
-          <Input label="Taxa de Armazenagem (R$)" type="number" step="0.01"
-            value={form.taxa_armazenagem}
-            onChange={(e) => setForm({ ...form, taxa_armazenagem: e.target.value })}
-          />
+          {/* Taxa de Armazenagem — valor + data de pagamento + ND + banco (27-jul) */}
+          <div className="rounded-lg border border-stone-200 p-3 space-y-3">
+            <p className="text-xs font-semibold text-stone-600 uppercase tracking-wide">Taxa de Armazenagem</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Valor (R$)" type="number" step="0.01" min="0"
+                value={form.taxa_armazenagem}
+                onChange={(e) => setForm({ ...form, taxa_armazenagem: e.target.value })}
+              />
+              <Input label="Data de Pagamento" type="date"
+                value={form.taxa_data_pgto}
+                onChange={(e) => setForm({ ...form, taxa_data_pgto: e.target.value })}
+              />
+              <Input label="ND (Nota de Débito)" placeholder="29635"
+                value={form.taxa_nd}
+                onChange={(e) => setForm({ ...form, taxa_nd: e.target.value })}
+              />
+              <Select label="Banco" value={form.taxa_banco_id}
+                onChange={(e) => setForm({ ...form, taxa_banco_id: e.target.value })}>
+                <option value="">—</option>
+                {bancosEmpresa.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
+              </Select>
+            </div>
+            {Number(form.taxa_armazenagem) > 0 && (
+              <p className="text-[11px] text-stone-400">
+                A taxa é responsabilidade da <b>empresa</b>: a despesa vai SEMPRE para o Financeiro
+                (Serviços Terceirizados → Taxa de Armazenagem), mesmo quando o recebimento da venda
+                é direcionado a um sócio — nunca para a Distribuição de Lucros.
+              </p>
+            )}
+          </div>
+
+          {/* Integração com o Financeiro (27-jul) — só no cadastro, para evitar duplicidade */}
+          {!editId && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 space-y-3">
+              <p className="text-xs font-semibold text-emerald-800 uppercase tracking-wide flex items-center gap-1.5">
+                <Link2 size={13} /> Integração com o Financeiro
+              </p>
+              <label className="flex items-start gap-2 cursor-pointer text-sm text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={gerarFinanceiro}
+                  onChange={(e) => setGerarFinanceiro(e.target.checked)}
+                  className="h-4 w-4 mt-0.5 rounded border-stone-300 accent-accent-500"
+                />
+                <span>
+                  {form.destino_empresa ? (
+                    <>
+                      <span className="font-medium">Gerar a conta a receber no Financeiro</span>
+                      <span className="block text-xs text-stone-500">
+                        Cria {form.kg && form.preco_sc ? <b>{formatCurrency(valorTotalForm)}</b> : "o valor da venda"} como{" "}
+                        <b>A receber</b> (Receita de Arrendamento → Venda de {CULTURA_LABEL[form.cultura]}) com vencimento
+                        na data prevista do pagamento. Desmarque se o lançamento JÁ existe no Financeiro (evita duplicidade).
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-medium">Lançar como Distribuição de Lucro (DL) para o sócio</span>
+                      <span className="block text-xs text-stone-500">
+                        Cria {form.kg && form.preco_sc ? <b>{formatCurrency(valorTotalForm)}</b> : "o valor da venda"} no
+                        detalhado do sócio como <b>Provisionado</b> — o valor global <b>Provisionado DL</b> no Financeiro
+                        da Aramburu atualiza automaticamente. Desmarque se já foi lançado (evita duplicidade).
+                      </span>
+                    </>
+                  )}
+                </span>
+              </label>
+              {gerarFinanceiro && form.destino_empresa && (
+                <Select label="Banco do recebimento" value={recebBancoId || bancoRecebPadrao}
+                  onChange={(e) => setRecebBancoId(e.target.value)}>
+                  <option value="">—</option>
+                  {bancosEmpresa.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
+                </Select>
+              )}
+              {gerarFinanceiro && !form.destino_empresa && (
+                <Select label="Classificação da DL" value={dlClassif || dlClassifPadrao}
+                  onChange={(e) => setDlClassif(e.target.value)}>
+                  {classifsPessoais.map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>)}
+                </Select>
+              )}
+              {Number(form.taxa_armazenagem) > 0 && (
+                <label className="flex items-start gap-2 cursor-pointer text-sm text-stone-700">
+                  <input
+                    type="checkbox"
+                    checked={gerarTaxaDespesa}
+                    onChange={(e) => setGerarTaxaDespesa(e.target.checked)}
+                    className="h-4 w-4 mt-0.5 rounded border-stone-300 accent-accent-500"
+                  />
+                  <span>
+                    <span className="font-medium">Gerar a despesa da Taxa de Armazenagem</span>
+                    <span className="block text-xs text-stone-500">
+                      Cria <b>{formatCurrency(-Math.abs(Number(form.taxa_armazenagem) || 0))}</b> como <b>A pagar</b>{" "}
+                      (Taxa de Armazenagem — identifica a safra {form.safra || "…"} na descrição
+                      {form.taxa_nd.trim() ? `, ND ${form.taxa_nd.trim()}` : ""}). Sempre no Financeiro da empresa.
+                    </span>
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
 
           <Textarea label="Observações" rows={2}
             value={form.observacao} onChange={(e) => setForm({ ...form, observacao: e.target.value })}

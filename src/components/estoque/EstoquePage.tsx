@@ -14,6 +14,7 @@ import {
   Plus, Search, Edit2, Trash2, Loader2, Save,
   Warehouse, Sprout, Calculator, Calendar, PackageCheck,
   Coins, TrendingDown, ArrowDownToLine, HelpCircle,
+  Copy, FileSpreadsheet, ClipboardList, Gauge, Handshake, Info,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer,
@@ -21,8 +22,9 @@ import {
 import {
   listarArmazens, listarParametros, obterParametro, upsertParametro,
   listarDepositosCalculados, criarDeposito, atualizarDeposito, deletarDeposito,
-  calcularResumoSafra,
+  calcularResumoSafra, listarSafrasComDeposito,
 } from "@/lib/queries/safra";
+import { exportEstoqueXlsx } from "@/lib/export/estoque-export";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
   CULTURA_LABEL, CULTURA_EMOJI, SAFRA_DEP_STATUS_LABEL,
@@ -63,6 +65,7 @@ type ParamForm = {
   kg_por_saca: string;
   data_atual: string;
   cotacao_simulada_sc: string;
+  deposito_total_programado_kg: string; // Depósito Total Programado (ajuste 27-jul)
 };
 
 function statusBadge(s: SafraDepositoStatus): BadgeVariant {
@@ -153,6 +156,7 @@ export function EstoquePage() {
           kg_por_saca: String(p.kg_por_saca),
           data_atual: p.data_atual,
           cotacao_simulada_sc: p.cotacao_simulada_sc !== null ? String(p.cotacao_simulada_sc) : "",
+          deposito_total_programado_kg: String(p.deposito_total_programado_kg ?? 0),
         } : {
           quebra_quinzena_pct: "0.0015",
           armazenagem_por_kg_quinzena: "0.20",
@@ -163,6 +167,7 @@ export function EstoquePage() {
           kg_por_saca: "60",
           data_atual: new Date().toISOString().slice(0, 10),
           cotacao_simulada_sc: "50",
+          deposito_total_programado_kg: "0",
         });
       })
       .catch((e) => toast.error("Erro carregando parâmetro", (e as Error).message));
@@ -196,17 +201,41 @@ export function EstoquePage() {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchDepositos(); }, [fetchDepositos]);
 
+  // ---- safras EFETIVAMENTE cadastradas (com depósito) — ajuste 27-jul ----
+  // Antes a lista vinha também dos parâmetros salvos, o que fazia combinações
+  // criadas por engano (ex.: soja 25/25) aparecerem no histórico de busca.
+  const [safrasDisponiveis, setSafrasDisponiveis] = useState<string[]>([]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset síncrono intencional ao trocar seleção
+    if (!armazemId || !cultura) { setSafrasDisponiveis([]); return; }
+    let cancelado = false;
+    listarSafrasComDeposito(armazemId, cultura)
+      .then((s) => { if (!cancelado) setSafrasDisponiveis(s); })
+      .catch(() => { if (!cancelado) setSafrasDisponiveis([]); });
+    return () => { cancelado = true; };
+  }, [armazemId, cultura]);
+
   // ---- derivados ----
   const resumo = useMemo(() => calcularResumoSafra(rows), [rows]);
   const safrasDistintas = useMemo(() => {
-    const fromParams = parametros.filter((p) => p.cultura === cultura).map((p) => p.safra);
-    const fromRows = rows.map((r) => r.safra);
-    return Array.from(new Set([...fromParams, ...fromRows])).sort();
-  }, [parametros, rows, cultura]);
+    // A safra selecionada continua visível mesmo sem depósito (ex.: recém-digitada).
+    return Array.from(new Set(safra ? [...safrasDisponiveis, safra] : safrasDisponiveis)).sort();
+  }, [safrasDisponiveis, safra]);
   const culturasDistintas = useMemo(
     () => Array.from(new Set(parametros.map((p) => p.cultura))) as CulturaSafra[],
     [parametros],
   );
+
+  // ---- Andamento do Depósito da Safra (ajuste 27-jul) ----
+  // "Já armazenado" = total BRUTO depositado (independe de baixas por venda).
+  const depProgramadoKg = Number(paramForm?.deposito_total_programado_kg) || 0;
+  const kgPorSaca = Number(paramForm?.kg_por_saca) || 60;
+  const depJaKg = resumo.total_kg_bruto;
+  const depRestanteKg = Math.max(depProgramadoKg - depJaKg, 0);
+  const depPct = depProgramadoKg > 0 ? (depJaKg / depProgramadoKg) * 100 : 0;
+  const depPctClamp = Math.min(depPct, 100);
+  const fmtPct = (v: number) =>
+    `${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const paged = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
@@ -230,6 +259,7 @@ export function EstoquePage() {
         kg_por_saca: Number(paramForm.kg_por_saca),
         data_atual: paramForm.data_atual,
         cotacao_simulada_sc: paramForm.cotacao_simulada_sc === "" ? null : Number(paramForm.cotacao_simulada_sc),
+        deposito_total_programado_kg: Number(paramForm.deposito_total_programado_kg) || 0,
         observacao: null,
       };
       const saved = await upsertParametro(payload);
@@ -267,6 +297,41 @@ export function EstoquePage() {
       observacao: r.observacao ?? "",
     });
     setDepModal(true);
+  }
+  // Copiar depósito (ajuste 27-jul): abre o modal de NOVO já preenchido com os
+  // dados do existente — ajusta o que precisar (DFe/NFP/data) e salva.
+  function openCopyDep(r: SafraDepositoCalculadoRow) {
+    setDepEditId(null);
+    setDepForm({
+      cultura: r.cultura,
+      safra: r.safra,
+      data_deposito: r.data_deposito,
+      dfe_entrada: r.dfe_entrada ?? "",
+      nfp: r.nfp ?? "",
+      kg_bruto: String(r.kg_bruto),
+      status: r.status,
+      observacao: r.observacao ?? "",
+    });
+    setDepModal(true);
+    toast.info("Copiando depósito", "Revise os campos (ex.: DFe/NFP e data) e clique em Adicionar.");
+  }
+
+  // Exportar a tabela filtrada para Excel (ajuste 27-jul).
+  function handleExportXlsx() {
+    if (rows.length === 0) {
+      toast.info("Nada para exportar", "Nenhum depósito no recorte atual.");
+      return;
+    }
+    const filtros: string[] = [];
+    if (search) filtros.push(`Busca: "${search}"`);
+    if (filterStatus) filtros.push(`Status: ${SAFRA_DEP_STATUS_LABEL[filterStatus]}`);
+    exportEstoqueXlsx(rows, {
+      armazem: armazem?.apelido ?? armazem?.nome,
+      cultura: `${CULTURA_LABEL[cultura]}`,
+      safra: safra ? `Safra ${safra}` : undefined,
+      filtros,
+    });
+    toast.success("Exportação concluída", `Arquivo XLSX gerado (${rows.length} depósito${rows.length === 1 ? "" : "s"}).`);
   }
   async function saveDep() {
     if (!armazemId || !depForm.kg_bruto || !depForm.safra || !depForm.data_deposito) {
@@ -370,8 +435,8 @@ export function EstoquePage() {
         </CardContent>
       </Card>
 
-      {/* Cards principais — Safra / Armazém / Quantidade */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Cards principais — Safra / Armazém / Quantidade / Depósito programado */}
+      <div className={`grid grid-cols-1 md:grid-cols-3 ${depProgramadoKg > 0 ? "xl:grid-cols-5" : ""} gap-4`}>
         <Card className="border-l-4 border-l-[#a67c20]">
           <CardContent className="p-5 flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-700">
@@ -405,16 +470,108 @@ export function EstoquePage() {
               <PackageCheck size={20} />
             </div>
             <div>
-              <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Em Estoque (saldo)</p>
-              <p className="text-lg font-bold text-stone-800">{fmtKg(resumo.total_kg_saldo)}</p>
+              <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Já Armazenado</p>
+              <p className="text-lg font-bold text-stone-800">{fmtKg(depJaKg)}</p>
               <p className="text-xs text-stone-500">
-                {fmtSc(resumo.total_sc_saldo)}
-                {resumo.total_kg_baixado > 0 && ` · ${fmtKg(resumo.total_kg_baixado)} baixados de ${fmtKg(resumo.total_kg_bruto)}`}
+                {fmtSc(depJaKg / kgPorSaca)} · saldo atual: {fmtKg(resumo.total_kg_saldo)}
               </p>
             </div>
           </CardContent>
         </Card>
+        {depProgramadoKg > 0 && (
+          <>
+            <Card className="border-l-4 border-l-[#7c5fb8]">
+              <CardContent className="p-5 flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-violet-50 flex items-center justify-center text-violet-700">
+                  <ClipboardList size={20} />
+                </div>
+                <div>
+                  <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Depósito Total Programado</p>
+                  <p className="text-lg font-bold text-stone-800">{fmtKg(depProgramadoKg)}</p>
+                  <p className="text-[10px] text-stone-500 leading-tight">
+                    {fmtSc(depProgramadoKg / kgPorSaca)} · total que o parceiro irá depositar<br/>como pagamento do arrendamento
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="border-l-4 border-l-[#2f7d4f]">
+              <CardContent className="p-5 flex items-center gap-4">
+                <div>
+                  <p className="text-xs uppercase text-stone-400 font-medium tracking-wide">Andamento</p>
+                  <p className="text-lg font-bold text-emerald-700">{fmtPct(depPct)}</p>
+                  <p className="text-xs text-stone-500">do depósito programado</p>
+                </div>
+                {/* Anel de progresso */}
+                <svg viewBox="0 0 44 44" className="w-14 h-14 ml-auto -rotate-90" aria-hidden="true">
+                  <circle cx="22" cy="22" r="18" fill="none" stroke="#e7e5e4" strokeWidth="6" />
+                  <circle
+                    cx="22" cy="22" r="18" fill="none"
+                    stroke="#2f7d4f" strokeWidth="6" strokeLinecap="round"
+                    strokeDasharray={`${(depPctClamp / 100) * 2 * Math.PI * 18} ${2 * Math.PI * 18}`}
+                  />
+                </svg>
+              </CardContent>
+            </Card>
+          </>
+        )}
       </div>
+
+      {/* Andamento do Depósito da Safra — barra de progresso (ajuste 27-jul) */}
+      {depProgramadoKg > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              Andamento do Depósito da Safra
+              <Tooltip text="Acompanha a quantidade de grãos efetivamente depositada no armazém (registros das NFPs) contra o Depósito Total Programado — configurável no painel de Parâmetros." position="bottom">
+                <HelpCircle size={12} className="inline-block ml-1 text-stone-300" />
+              </Tooltip>
+            </CardTitle>
+            <Gauge size={16} className="text-stone-400" />
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="w-full h-3 rounded-full bg-stone-200 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-[#2f7d4f] transition-all"
+                style={{ width: `${depPctClamp}%` }}
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-center">
+              <div>
+                <p className="text-2xl font-bold text-emerald-700">{fmtPct(depPct)}</p>
+                <p className="text-[10px] uppercase font-semibold text-emerald-800 tracking-wide">Depósito da Safra</p>
+                <p className="text-[11px] text-stone-400">
+                  {depPct >= 100 ? "Depósito programado concluído" : depPct >= 99 ? "Muito próximo do depósito total programado" : "Em andamento"}
+                </p>
+              </div>
+              <div className="sm:border-l sm:border-stone-100 sm:pl-4">
+                <p className="text-sm font-bold text-stone-800">{fmtKg(depJaKg)}</p>
+                <p className="text-[11px] text-stone-500">já armazenados ({fmtSc(depJaKg / kgPorSaca)})</p>
+              </div>
+              <div className="sm:border-l sm:border-stone-100 sm:pl-4">
+                <p className="text-sm font-bold text-amber-600">{fmtKg(depRestanteKg)}</p>
+                <p className="text-[11px] text-stone-500">
+                  restantes para atingir o programado ({fmtSc(depRestanteKg / kgPorSaca)})
+                </p>
+              </div>
+              <div className="sm:border-l sm:border-stone-100 sm:pl-4">
+                <p className="text-sm font-bold text-violet-700">{fmtKg(depProgramadoKg)}</p>
+                <p className="text-[11px] text-stone-500">
+                  depósito total programado ({fmtSc(depProgramadoKg / kgPorSaca)})
+                </p>
+              </div>
+            </div>
+            <div className="rounded-lg bg-emerald-50/60 border border-emerald-100 px-4 py-2.5 flex items-start gap-2.5 text-xs text-stone-600">
+              <Info size={14} className="text-emerald-700 shrink-0 mt-0.5" />
+              <span>
+                <b className="text-stone-700">Sobre o depósito total programado:</b>{" "}
+                refere-se à quantidade total de grãos que o parceiro do arrendamento se compromete a depositar
+                neste armazém como forma de pagamento do arrendamento da safra {safra || "selecionada"}.
+              </span>
+              <Handshake size={16} className="text-emerald-700 shrink-0 ml-auto" />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Painel de cálculos + Parâmetros */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -529,6 +686,19 @@ export function EstoquePage() {
                       onChange={(e) => setParamForm({ ...paramForm, kg_por_saca: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
+                  </div>
+                  <div className="col-span-2">
+                    <div className="flex items-center gap-1">
+                      <label className="text-[10px] font-medium text-stone-500 uppercase">Depósito Total Programado (kg)</label>
+                      <Tooltip text="Quantidade total que o parceiro do arrendamento se compromete a depositar neste armazém (pagamento do arrendamento). Preencher habilita o painel 'Andamento do Depósito da Safra'." position="bottom">
+                        <HelpCircle size={10} className="text-stone-300" />
+                      </Tooltip>
+                    </div>
+                    <input type="number" step="0.001" min="0" value={paramForm.deposito_total_programado_kg}
+                      onChange={(e) => setParamForm({ ...paramForm, deposito_total_programado_kg: e.target.value })}
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                    />
+                    <span className="text-[10px] text-stone-400">0 = sem acompanhamento</span>
                   </div>
                 </div>
                 <Button size="sm" className="w-full mt-2" onClick={saveParam} loading={paramSaving} disabled={paramSaving}>
@@ -728,6 +898,10 @@ export function EstoquePage() {
               {(Object.keys(SAFRA_DEP_STATUS_LABEL) as SafraDepositoStatus[]).map((s) =>
                 <option key={s} value={s}>{SAFRA_DEP_STATUS_LABEL[s]}</option>)}
             </select>
+            <Button variant="outline" size="sm" onClick={handleExportXlsx} disabled={loading}
+              title="Exporta a tabela filtrada para Excel (.xlsx), com totais">
+              <FileSpreadsheet size={14} /> Exportar Excel
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -777,6 +951,7 @@ export function EstoquePage() {
                     <td className="px-2 py-2">
                       <div className="flex items-center gap-0.5">
                         <button onClick={() => openEditDep(r)} className="p-1 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar"><Edit2 size={12}/></button>
+                        <button onClick={() => openCopyDep(r)} className="p-1 rounded hover:bg-accent-50 text-stone-400 hover:text-accent-600 transition" title="Copiar (abre um novo depósito já preenchido)"><Copy size={12}/></button>
                         <button onClick={() => removeDep(r)} className="p-1 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir"><Trash2 size={12}/></button>
                       </div>
                     </td>

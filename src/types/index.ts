@@ -49,6 +49,7 @@ export type {
   DocumentDescriptionHistoryRow,
   IAProvider,
   ConfigIARow,
+  AppConfigRow,
   AgentePromptRow,
   ChatSessionRow,
   ChatMensagemRow,

@@ -90,6 +90,25 @@ export async function upsertParametro(payload: SpInsert): Promise<SafraParametro
   return data as SafraParametrosRow;
 }
 
+/**
+ * Safras EFETIVAMENTE cadastradas (com depósito lançado) para um armazém ×
+ * cultura — alimenta o seletor de safra sem os "combos fantasma" criados por
+ * parâmetros salvos por engano (ajuste 27-jul).
+ */
+export async function listarSafrasComDeposito(
+  armazemId: string,
+  cultura: CulturaSafra,
+): Promise<string[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("safra_depositos")
+    .select("safra")
+    .eq("armazem_id", armazemId)
+    .eq("cultura", cultura);
+  if (error) throw error;
+  return Array.from(new Set(((data ?? []) as { safra: string }[]).map((r) => r.safra))).sort();
+}
+
 // ----------------------------------------------------------------------------
 // Depósitos calculados (view)
 // ----------------------------------------------------------------------------

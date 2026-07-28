@@ -288,6 +288,8 @@ export type SafraParametrosRow = WithTimestamps & {
   kg_por_saca: number;
   data_atual: string;                       // "YYYY-MM-DD"
   cotacao_simulada_sc: number | null;
+  /** Depósito Total Programado da safra em kg — painel de andamento (migration 0047). 0 = não configurado. */
+  deposito_total_programado_kg: number;
   observacao: string | null;
 };
 
@@ -402,6 +404,12 @@ export type VendaProvisionadaRow = WithTimestamps & {
   destino_empresa: boolean;
   socio_destino_id: string | null;
   taxa_armazenagem: number;
+  /** Taxa de Armazenagem — data de pagamento / ND / banco (migration 0047). */
+  taxa_data_pgto: string | null;
+  taxa_nd: string | null;
+  taxa_banco_id: string | null;
+  /** Despesa a pagar gerada no Financeiro para a taxa (migration 0047). */
+  taxa_transacao_id: string | null;
   observacao: string | null;
   status: VendaStatus;
   transacao_empresa_id: string | null;
@@ -596,6 +604,14 @@ export type ConfigIARow = {
   openai_api_key: string | null;
   updated_at: string;
   updated_by: string | null;
+};
+
+/** Configurações gerais do sistema (chave/valor) — migration 0047. */
+export type AppConfigRow = {
+  chave: string;
+  valor: string;
+  descricao: string | null;
+  updated_at: string;
 };
 
 export type AgentePromptRow = {
@@ -995,9 +1011,9 @@ export interface Database {
       };
       safra_parametros: {
         Row: SafraParametrosRow;
-        // carencia_armazem_dias / taxa_recepcao_por_saca têm default no banco → opcionais.
-        Insert: Omit<SafraParametrosRow, "id" | "created_at" | "updated_at" | "carencia_armazem_dias" | "taxa_recepcao_por_saca">
-          & { carencia_armazem_dias?: number; taxa_recepcao_por_saca?: number };
+        // carencia_armazem_dias / taxa_recepcao_por_saca / deposito_total_programado_kg têm default no banco → opcionais.
+        Insert: Omit<SafraParametrosRow, "id" | "created_at" | "updated_at" | "carencia_armazem_dias" | "taxa_recepcao_por_saca" | "deposito_total_programado_kg">
+          & { carencia_armazem_dias?: number; taxa_recepcao_por_saca?: number; deposito_total_programado_kg?: number };
         Update: Partial<Omit<SafraParametrosRow, "id" | "created_at" | "updated_at">>;
         Relationships: EmptyRels;
       };
@@ -1017,7 +1033,9 @@ export interface Database {
       };
       vendas_provisionadas: {
         Row: VendaProvisionadaRow;
-        Insert: Omit<VendaProvisionadaRow, "id" | "created_at" | "updated_at">;
+        // Campos da Taxa de Armazenagem (migration 0047) têm default null → opcionais.
+        Insert: Omit<VendaProvisionadaRow, "id" | "created_at" | "updated_at" | "taxa_data_pgto" | "taxa_nd" | "taxa_banco_id" | "taxa_transacao_id">
+          & { taxa_data_pgto?: string | null; taxa_nd?: string | null; taxa_banco_id?: string | null; taxa_transacao_id?: string | null };
         Update: Partial<Omit<VendaProvisionadaRow, "id" | "created_at" | "updated_at">>;
         Relationships: EmptyRels;
       };
@@ -1056,6 +1074,12 @@ export interface Database {
         Row: ConfigIARow;
         Insert: Partial<ConfigIARow>;
         Update: Partial<ConfigIARow>;
+        Relationships: EmptyRels;
+      };
+      app_config: {
+        Row: AppConfigRow;
+        Insert: Pick<AppConfigRow, "chave" | "valor"> & Partial<Omit<AppConfigRow, "chave" | "valor">>;
+        Update: Partial<Omit<AppConfigRow, "chave">>;
         Relationships: EmptyRels;
       };
       agente_prompts: {

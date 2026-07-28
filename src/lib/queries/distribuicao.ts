@@ -128,6 +128,26 @@ export async function deletarDetalhado(id: string): Promise<void> {
   if (!data || data.length === 0) throw new PermissionOrNotFoundError("excluir lançamento detalhado");
 }
 
+/**
+ * Exclui vários lançamentos detalhados de uma vez (ações em lote — 27-jul,
+ * "idem ao Financeiro"). Linhas vinculadas a repasse não são selecionáveis na
+ * tela; ainda assim o DELETE só remove o que a RLS permitir.
+ */
+export async function deletarDetalhadoEmMassa(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("transacoes_socio")
+    .delete()
+    .in("id", ids)
+    .is("repasse_id", null)
+    .select("id");
+  if (error) throw error;
+  const n = data?.length ?? 0;
+  if (n === 0) throw new PermissionOrNotFoundError("excluir lançamentos em massa");
+  return n;
+}
+
 // Ações em massa da checagem mensal (ela marca vários itens de uma vez e
 // aplica o mesmo vencimento — "1 do 7, 1 do 7, 1 do 7").
 export async function atualizarDetalhadoEmMassa(
@@ -168,6 +188,11 @@ export interface GlobalEmpresaMes {
   aPagarGlobal: number;
   realizadoGlobal: number;
   temProvisionadoManual: boolean; // provisionado 2.8 digitado à mão (fora do dl_auto)
+  /**
+   * Total do CENTRO DE CUSTO 2.8.1 (Distribuição de Lucros) no mês — alimenta
+   * o card "Global na empresa (2.8.1)" (ajuste 27-jul: centro em vez da conta).
+   */
+  totalCentro281: number;
 }
 
 export async function obterGlobalEmpresaMes(mes: string): Promise<GlobalEmpresaMes> {
@@ -181,18 +206,31 @@ export async function obterGlobalEmpresaMes(mes: string): Promise<GlobalEmpresaM
   if (error) throw error;
 
   const rows = (data ?? []) as TransacaoEmpresaRow[];
-  let prov = 0, aPagar = 0, realizado = 0, manual = false;
+  let prov = 0, aPagar = 0, realizado = 0, manual = false, centro281 = 0;
   for (const r of rows) {
+    let considerado = false;
     if (r.status === "provisionado" || r.status === "provisionado_dl" || r.status === "provisionado_dv") {
       prov += -r.valor;
+      considerado = true;
       if (!r.origem_planilha?.startsWith("dl_auto:")) manual = true;
     } else if (r.status === "a_pagar" || r.status === "a_repassar") {
       aPagar += -r.valor;
+      considerado = true;
     } else if (r.status === "pago" || r.status === "repassado") {
       realizado += -r.valor;
+      considerado = true;
     }
+    // Card 2.8.1: mesmos status, mas restrito ao centro de custo 2.8.1.
+    if (considerado && r.centro_custo_cod === "2.8.1") centro281 += -r.valor;
   }
-  return { rows, provisionadoGlobal: prov, aPagarGlobal: aPagar, realizadoGlobal: realizado, temProvisionadoManual: manual };
+  return {
+    rows,
+    provisionadoGlobal: prov,
+    aPagarGlobal: aPagar,
+    realizadoGlobal: realizado,
+    temProvisionadoManual: manual,
+    totalCentro281: centro281,
+  };
 }
 
 // Repasses consolidados do mês (globais criados por fn_consolidar_repasse_dl).

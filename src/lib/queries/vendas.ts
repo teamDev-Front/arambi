@@ -86,6 +86,43 @@ export async function deletarVenda(id: string): Promise<void> {
   if (!data || data.length === 0) throw new Error("Venda não encontrada ou sem permissão");
 }
 
+/**
+ * Muda o status de várias vendas de uma vez (seleção múltipla — ajuste 27-jul).
+ * UPDATE único; retorna quantas foram de fato alteradas (RLS pode bloquear).
+ */
+export async function atualizarStatusVendasEmMassa(ids: string[], status: VendaStatus): Promise<number> {
+  if (ids.length === 0) return 0;
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("vendas_provisionadas")
+    .update({ status })
+    .in("id", ids)
+    .select("id");
+  if (error) throw error;
+  const n = data?.length ?? 0;
+  if (n === 0) throw new Error("Nenhuma venda atualizada — verifique sua permissão (admin/editor).");
+  return n;
+}
+
+/**
+ * Exclui várias vendas de uma vez (seleção múltipla — ajuste 27-jul).
+ * As baixas de estoque vinculadas devem ser desfeitas ANTES pelo chamador
+ * (desfazerBaixasVenda), venda a venda.
+ */
+export async function deletarVendasEmMassa(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("vendas_provisionadas")
+    .delete()
+    .in("id", ids)
+    .select("id");
+  if (error) throw error;
+  const n = data?.length ?? 0;
+  if (n === 0) throw new Error("Nenhuma venda excluída — verifique sua permissão (admin/editor).");
+  return n;
+}
+
 // ----------------------------------------------------------------------------
 // Agregados
 // ----------------------------------------------------------------------------

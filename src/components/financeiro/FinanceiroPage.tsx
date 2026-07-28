@@ -61,7 +61,6 @@ import {
   FORMA_PGTO_LABEL,
   TIPO_DESPESA_LABEL,
   OBS_OBRA_LABEL,
-  STATUS_KIND,
   STATUS_DL_LABEL,
   type StatusAramburu,
   type StatusDL,
@@ -280,6 +279,8 @@ export function FinanceiroPage() {
 
   // ---- filtros / UI (todos multi-seleção — RF 23-jul) ----
   const [search, setSearch] = useState("");
+  // Competência (mês de referência) — padronização com a Distribuição (27-jul).
+  const [filterCompetencia, setFilterCompetencia] = useState("");
   const [filterStatus, setFilterStatus] = useState<StatusAramburu[]>([]);
   const [filterContaContabil, setFilterContaContabil] = useState<string[]>([]);
   const [filterCentroCusto, setFilterCentroCusto] = useState<string[]>([]);
@@ -459,7 +460,7 @@ export function FinanceiroPage() {
 
   // Há algum filtro aplicado? (controla a visibilidade do "Limpar todos os filtros")
   const temFiltrosAtivos = Boolean(
-    search || filterStatus.length || filterContaContabil.length || filterCentroCusto.length ||
+    search || filterCompetencia || filterStatus.length || filterContaContabil.length || filterCentroCusto.length ||
     filterBanco.length || filterDataDe || filterDataAte || filterEmissaoDe || filterEmissaoAte ||
     filterValorMin || filterValorMax || mostrarSoTagueados,
   );
@@ -468,6 +469,7 @@ export function FinanceiroPage() {
   // Desliga também o recorte "só tagueados", mas NÃO apaga as tags em si.
   function limparTodosFiltros() {
     setSearch("");
+    setFilterCompetencia("");
     setFilterStatus([]);
     setFilterContaContabil([]);
     setFilterCentroCusto([]);
@@ -552,6 +554,7 @@ export function FinanceiroPage() {
   // Filtros atuais (para gerar relatório pelo recorte) e competência sugerida.
   const filtrosAtuais: ListarTransacoesFiltros = useMemo(() => ({
     search: search || undefined,
+    mesReferencia: filterCompetencia || undefined,
     status: filterStatus.length ? filterStatus : undefined,
     contaContabilCod: filterContaContabil.length ? filterContaContabil : undefined,
     centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
@@ -565,10 +568,10 @@ export function FinanceiroPage() {
     // "Ver só tagueados" (RF 24-jul): restringe a listagem — e, por tabela,
     // exportações/relatórios "pelos filtros" — aos lançamentos com TAG.
     ids: mostrarSoTagueados && tags.size > 0 ? Array.from(tags.keys()) : undefined,
-  }), [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
+  }), [search, filterCompetencia, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
        filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte, filterValorMin, filterValorMax,
        mostrarSoTagueados, tags]);
-  const competenciaSugerida = filterDataDe?.slice(0, 7) || new Date().toISOString().slice(0, 7);
+  const competenciaSugerida = filterCompetencia || filterDataDe?.slice(0, 7) || new Date().toISOString().slice(0, 7);
 
   function abrirEscopo() {
     setEscopoTipo(selectedIds.size > 0 ? "por_selecao" : "por_filtros");
@@ -579,6 +582,7 @@ export function FinanceiroPage() {
   const montarMetaExport = useCallback((): FinanceiroExportMeta => {
     const f: string[] = [];
     if (search) f.push(`Busca: "${search}"`);
+    if (filterCompetencia) f.push(`Competência: ${filterCompetencia}`);
     if (filterStatus.length) f.push(`Status: ${filterStatus.map((s) => getStatusLabel(s)).join(", ")}`);
     if (filterContaContabil.length) {
       f.push(`Conta: ${filterContaContabil.map((cod) => {
@@ -614,7 +618,7 @@ export function FinanceiroPage() {
       ? `Seleção manual — ${selectedIds.size} lançamento${selectedIds.size === 1 ? "" : "s"}`
       : "Recorte pelos filtros aplicados na tela";
     return { titulo: "Relatório de Lançamentos Financeiros", escopo, filtros: f };
-  }, [search, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
+  }, [search, filterCompetencia, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
       filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte,
       filterValorMin, filterValorMax, selectedIds, classificacoesN2, classificacoesN3, bancos,
       mostrarSoTagueados, tags]);
@@ -1132,6 +1136,28 @@ export function FinanceiroPage() {
                 className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-72 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
             </div>
+            {/* Competência (mês de referência) — padronização com a Distribuição (27-jul) */}
+            <div className="flex items-center gap-1" title="Filtra pela COMPETÊNCIA (mês de referência do lançamento).">
+              <span className="text-[10px] uppercase text-stone-400 font-medium">Competência</span>
+              <input
+                type="month"
+                value={filterCompetencia}
+                aria-label="Competência"
+                onChange={(e) => { setFilterCompetencia(e.target.value); setPage(1); }}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              {filterCompetencia && (
+                <button
+                  type="button"
+                  onClick={() => { setFilterCompetencia(""); setPage(1); }}
+                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
+                  title="Limpar competência"
+                  aria-label="Limpar competência"
+                >
+                  ×
+                </button>
+              )}
+            </div>
             <MultiSelect
               className="w-40"
               value={filterStatus}
@@ -1418,7 +1444,6 @@ export function FinanceiroPage() {
                   </td></tr>
                 )}
                 {!loading && rows.map((t) => {
-                  const kind = STATUS_KIND[t.status];
                   const selected = selectedIds.has(t.id);
                   const tagueado = tags.has(t.id);
                   return (
@@ -1481,7 +1506,9 @@ export function FinanceiroPage() {
                           aria-label={`Status de ${t.descricao ?? "lançamento"}`}
                         />
                       </td>
-                      <td className={`px-4 py-3 font-semibold text-sm whitespace-nowrap ${kind === "entrada" ? "text-green-700" : kind === "saida" ? "text-red-600" : "text-stone-700"}`}>
+                      {/* Cor pelo SINAL do valor (ajuste 27-jul): positivo verde,
+                          negativo vermelho — mesmo em resgates saindo do SICREDINVEST. */}
+                      <td className={`px-4 py-3 font-semibold text-sm whitespace-nowrap ${Number(t.valor) > 0 ? "text-green-700" : Number(t.valor) < 0 ? "text-red-600" : "text-stone-700"}`}>
                         {formatCurrency(t.valor)}
                       </td>
                       <td className="px-4 py-3">

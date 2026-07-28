@@ -1,17 +1,19 @@
 "use client";
 import { useEffect, useState } from "react";
-import { ListTree, Palette, ShieldAlert, Users } from "lucide-react";
+import { ListTree, Palette, ShieldAlert, Users, Zap } from "lucide-react";
 import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import { PlanoContasTab } from "./PlanoContasTab";
 import { StatusCoresTab } from "./StatusCoresTab";
 import { ColaboradoresTab } from "./ColaboradoresTab";
+import { AutomacoesTab } from "./AutomacoesTab";
 
-type Aba = "plano" | "status" | "colaboradores";
+type Aba = "plano" | "status" | "colaboradores" | "automacoes";
 
 const ABAS: { id: Aba; label: string; icon: typeof ListTree }[] = [
   { id: "plano", label: "Plano de Contas", icon: ListTree },
   { id: "status", label: "Status & Cores", icon: Palette },
   { id: "colaboradores", label: "Colaboradores", icon: Users },
+  { id: "automacoes", label: "Automações", icon: Zap },
 ];
 
 export function ConfiguracoesPage() {
@@ -67,6 +69,7 @@ export function ConfiguracoesPage() {
       {aba === "plano" && <PlanoContasTab canEdit={canEdit} />}
       {aba === "status" && <StatusCoresTab canEdit={canEdit} />}
       {aba === "colaboradores" && <ColaboradoresTab canEdit={canEdit} />}
+      {aba === "automacoes" && <AutomacoesTab canEdit={canEdit} />}
     </div>
   );
 }

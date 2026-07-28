@@ -4,7 +4,6 @@ import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
-import { KpiCard } from "@/components/ui/KpiCard";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
@@ -13,16 +12,18 @@ import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   Plus, Search, Edit2, Trash2, Loader2, HandCoins, CheckCheck,
   ArrowRightLeft, Undo2, CalendarCheck, PiggyBank, Landmark, AlertTriangle, FilterX,
+  Copy, Tag, X, FileDown, FileSpreadsheet,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { StatusSelect } from "@/components/ui/StatusSelect";
 import {
   listarDetalhado, criarDetalhado, atualizarDetalhado, deletarDetalhado,
-  atualizarDetalhadoEmMassa, obterResumoMensal, obterGlobalEmpresaMes,
+  atualizarDetalhadoEmMassa, deletarDetalhadoEmMassa, obterResumoMensal, obterGlobalEmpresaMes,
   listarRepassesDoMes, consolidarRepasse, desfazerRepasse, concluirRepasse,
   listarSocios, listarClassificacoesPessoais, listarContasDoSocio, listarMesesDetalhado,
   type TransacaoSocioRich, type GlobalEmpresaMes, type RepasseConsolidado,
 } from "@/lib/queries/distribuicao";
+import { exportDistribuicaoPdf, exportDistribuicaoXlsx } from "@/lib/export/distribuicao-export";
 import {
   STATUS_DL_LABEL, STATUS_DL_COLOR,
   type StatusDL, type SocioRow, type ClassificacaoPessoalRow,
@@ -71,6 +72,37 @@ const mesCorrente = () => {
   return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, "0")}`;
 };
 
+/**
+ * TAG do dia (ajuste 27-jul — idem ao Financeiro): o "pintar de amarelo" da
+ * planilha, para marcar os lançamentos sendo trabalhados hoje. Persistida no
+ * NAVEGADOR (localStorage) com snapshot leve para o painel flutuante.
+ */
+type TagSnapshot = {
+  id: string;
+  socio: string | null;
+  descricao: string | null;
+  valor: number;
+};
+
+const DL_TAGS_STORAGE_KEY = "arambi.distribuicao.tags.v1";
+
+function carregarTagsDL(): Map<string, TagSnapshot> {
+  if (typeof window === "undefined") return new Map();
+  try {
+    const raw = window.localStorage.getItem(DL_TAGS_STORAGE_KEY);
+    if (!raw) return new Map();
+    const arr = JSON.parse(raw) as TagSnapshot[];
+    if (!Array.isArray(arr)) return new Map();
+    return new Map(
+      arr
+        .filter((t) => t && typeof t.id === "string")
+        .map((t) => [t.id, { ...t, valor: Number(t.valor) || 0 }]),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
 export function DistribuicaoPage() {
   const toast = useToast();
 
@@ -90,12 +122,75 @@ export function DistribuicaoPage() {
   // Faixa de valor R$ (RF 24-jul — espelha o padrão do Financeiro).
   const [filterValorMin, setFilterValorMin] = useState("");
   const [filterValorMax, setFilterValorMax] = useState("");
+  // Competência da LISTAGEM (ajuste 27-jul): pesquisar pela competência agora
+  // filtra a tabela também — o seletor do cabeçalho sincroniza este filtro.
+  const [filterCompetencia, setFilterCompetencia] = useState("");
+
+  // ---- TAGs do dia (ajuste 27-jul — idem ao Financeiro) ----
+  const [tags, setTags] = useState<Map<string, TagSnapshot>>(new Map());
+  const [tagsCarregadas, setTagsCarregadas] = useState(false);
+  const [tagPanelOpen, setTagPanelOpen] = useState(false);
+  const [mostrarSoTagueados, setMostrarSoTagueados] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hidratação do localStorage pós-mount
+    setTags(carregarTagsDL());
+    setTagsCarregadas(true);
+  }, []);
+  useEffect(() => {
+    if (!tagsCarregadas) return;
+    try {
+      window.localStorage.setItem(DL_TAGS_STORAGE_KEY, JSON.stringify(Array.from(tags.values())));
+    } catch {
+      // localStorage indisponível — tags seguem em memória.
+    }
+  }, [tags, tagsCarregadas]);
+  useEffect(() => {
+    if (tags.size === 0 && mostrarSoTagueados) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMostrarSoTagueados(false);
+    }
+  }, [tags, mostrarSoTagueados]);
+
+  const toggleTag = useCallback((row: TransacaoSocioRich) => {
+    setTags((prev) => {
+      const next = new Map(prev);
+      if (next.has(row.id)) next.delete(row.id);
+      else next.set(row.id, {
+        id: row.id,
+        socio: row.socio?.apelido ?? row.socio?.nome_completo ?? null,
+        descricao: row.descricao ?? null,
+        valor: Number(row.valor),
+      });
+      return next;
+    });
+  }, []);
+
+  const removerTag = useCallback((id: string) => {
+    setTags((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const somaTags = useMemo(() => {
+    let s = 0;
+    tags.forEach((t) => { s += t.valor; });
+    return s;
+  }, [tags]);
+
+  function limparTags() {
+    if (!confirm(`Limpar ${tags.size === 1 ? "a tag" : `as ${tags.size} tags`} do dia? Os lançamentos em si não são alterados.`)) return;
+    setTags(new Map());
+    setTagPanelOpen(false);
+  }
 
   // Há algum filtro aplicado? (visibilidade do "Limpar todos os filtros")
   const temFiltrosAtivos = Boolean(
     search || filterSocio || filterClassif || filterStatus ||
     filterRepasseDe || filterRepasseAte || filterVencDe || filterVencAte ||
-    filterValorMin || filterValorMax,
+    filterValorMin || filterValorMax || filterCompetencia || mostrarSoTagueados,
   );
 
   // "Limpar todos os filtros" (RF 24-jul) — não mexe na competência dos KPIs.
@@ -110,6 +205,8 @@ export function DistribuicaoPage() {
     setFilterVencAte("");
     setFilterValorMin("");
     setFilterValorMax("");
+    setFilterCompetencia("");
+    setMostrarSoTagueados(false);
   }
 
   // ---- dados ----
@@ -128,6 +225,12 @@ export function DistribuicaoPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkVencimento, setBulkVencimento] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Status genérico + exclusão em lote (ajuste 27-jul — idem ao Financeiro).
+  const [bulkStatusSel, setBulkStatusSel] = useState("");
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
+  // ---- exportação (ajuste 27-jul) ----
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+  const [exportandoXlsx, setExportandoXlsx] = useState(false);
 
   // ---- modal CRUD ----
   const [modalOpen, setModalOpen] = useState(false);
@@ -169,6 +272,7 @@ export function DistribuicaoPage() {
     try {
       const [r, res, glob, reps] = await Promise.all([
         listarDetalhado({
+          mesReferencia: filterCompetencia || undefined,
           socioId: filterSocio || undefined,
           classificacao: filterClassif || undefined,
           status: filterStatus || undefined,
@@ -196,7 +300,7 @@ export function DistribuicaoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mes, filterSocio, filterClassif, filterStatus, search,
       filterRepasseDe, filterRepasseAte, filterVencDe, filterVencAte,
-      filterValorMin, filterValorMax]);
+      filterValorMin, filterValorMax, filterCompetencia]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); setSelectedIds(new Set()); }, [fetchData]);
 
@@ -223,8 +327,21 @@ export function DistribuicaoPage() {
     return Array.from(m.values()).sort((a, b) => a.nome.localeCompare(b.nome));
   }, [consolidaveis]);
 
-  const selecionaveis = useMemo(() => rows.filter((r) => !r.repasse_id), [rows]);
+  // Recorte "só tagueados" (ajuste 27-jul) — filtra a tabela no client.
+  const rowsVisiveis = useMemo(
+    () => (mostrarSoTagueados && tags.size > 0 ? rows.filter((r) => tags.has(r.id)) : rows),
+    [rows, mostrarSoTagueados, tags],
+  );
+
+  const selecionaveis = useMemo(() => rowsVisiveis.filter((r) => !r.repasse_id), [rowsVisiveis]);
   const allSelected = selecionaveis.length > 0 && selecionaveis.every((r) => selectedIds.has(r.id));
+
+  // Autossoma dos selecionados (ajuste 27-jul — idem ao Financeiro).
+  const somaSelecionados = useMemo(() => {
+    let s = 0;
+    for (const r of rows) if (selectedIds.has(r.id)) s += Number(r.valor);
+    return s;
+  }, [rows, selectedIds]);
 
   const divergenciaProvisionado = useMemo(() => {
     if (!resumo || !globalMes) return null;
@@ -263,6 +380,83 @@ export function DistribuicaoPage() {
       toast.error("Não foi possível atualizar", (e as Error).message ?? String(e));
     } finally {
       setBulkBusy(false);
+    }
+  }
+
+  // ---- exclusão em lote (ajuste 27-jul) ----
+  async function excluirSelecionados() {
+    const n = selectedIds.size;
+    if (n === 0) return;
+    if (!confirm(`Excluir DEFINITIVAMENTE ${n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`}? Essa ação não pode ser desfeita.`)) return;
+    setBulkDeleteBusy(true);
+    try {
+      const excluidos = await deletarDetalhadoEmMassa(Array.from(selectedIds));
+      if (excluidos < n) {
+        toast.warning("Exclusão parcial", `${excluidos} de ${n} lançamentos excluídos — os demais podem estar vinculados a repasse ou protegidos.`);
+      } else {
+        toast.success("Lançamentos excluídos", `${excluidos} lançamento${excluidos === 1 ? "" : "s"} excluído${excluidos === 1 ? "" : "s"} de uma vez.`);
+      }
+      // Remove os excluídos das tags (se estavam tagueados).
+      setTags((prev) => {
+        let mudou = false;
+        const next = new Map(prev);
+        selectedIds.forEach((id) => { if (next.delete(id)) mudou = true; });
+        return mudou ? next : prev;
+      });
+      setSelectedIds(new Set());
+      await fetchData();
+    } catch (e: unknown) {
+      toast.error("Não foi possível excluir os selecionados", (e as Error).message ?? String(e));
+    } finally {
+      setBulkDeleteBusy(false);
+    }
+  }
+
+  // ---- exportação PDF/XLSX do recorte da tela (ajuste 27-jul) ----
+  function montarFiltrosExport(): string[] {
+    const f: string[] = [];
+    if (filterCompetencia) f.push(`Competência: ${filterCompetencia}`);
+    if (search) f.push(`Busca: "${search}"`);
+    if (filterSocio) {
+      const s = socios.find((x) => x.id === filterSocio);
+      f.push(`Sócio: ${s?.apelido ?? s?.nome_completo ?? filterSocio}`);
+    }
+    if (filterClassif) f.push(`Classificação: ${filterClassif}`);
+    if (filterStatus) f.push(`Status: ${STATUS_DL_LABEL[filterStatus]}`);
+    if (filterRepasseDe || filterRepasseAte) {
+      f.push(`Repasse: ${filterRepasseDe ? formatDate(filterRepasseDe) : "…"} a ${filterRepasseAte ? formatDate(filterRepasseAte) : "…"}`);
+    }
+    if (filterVencDe || filterVencAte) {
+      f.push(`Vencimento: ${filterVencDe ? formatDate(filterVencDe) : "…"} a ${filterVencAte ? formatDate(filterVencAte) : "…"}`);
+    }
+    if (filterValorMin || filterValorMax) {
+      f.push(`Valor: ${filterValorMin ? formatCurrency(Number(filterValorMin)) : "…"} a ${filterValorMax ? formatCurrency(Number(filterValorMax)) : "…"}`);
+    }
+    if (mostrarSoTagueados && tags.size > 0) f.push(`Apenas lançamentos tagueados (${tags.size})`);
+    return f;
+  }
+
+  async function handleExport(formato: "pdf" | "xlsx") {
+    // Seleção manual tem precedência sobre os filtros (idem ao Financeiro).
+    const selecionadas = rows.filter((r) => selectedIds.has(r.id));
+    const alvo = selecionadas.length > 0 ? selecionadas : rowsVisiveis;
+    if (alvo.length === 0) {
+      toast.info("Nada para exportar", "Nenhum lançamento no recorte atual.");
+      return;
+    }
+    const filtros = selecionadas.length > 0
+      ? [`Seleção manual — ${selecionadas.length} lançamento${selecionadas.length === 1 ? "" : "s"}`]
+      : montarFiltrosExport();
+    const setBusy = formato === "pdf" ? setExportandoPdf : setExportandoXlsx;
+    setBusy(true);
+    try {
+      if (formato === "pdf") await exportDistribuicaoPdf(alvo, { filtros });
+      else exportDistribuicaoXlsx(alvo, { filtros });
+      toast.success("Exportação concluída", `Arquivo ${formato.toUpperCase()} gerado (${alvo.length} linha${alvo.length === 1 ? "" : "s"}).`);
+    } catch (e: unknown) {
+      toast.error("Falha na exportação", (e as Error).message ?? String(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -309,6 +503,25 @@ export function DistribuicaoPage() {
       observacao: row.observacao ?? "",
     });
     setModalOpen(true);
+  }
+  // Copiar lançamento (ajuste 27-jul — idem ao Financeiro): abre o modal de
+  // NOVO já preenchido; ajusta o que precisar e salva.
+  function openDuplicate(row: TransacaoSocioRich) {
+    setEditRow(null);
+    setForm({
+      socio_id: row.socio_id,
+      classificacao_pessoal: row.classificacao_pessoal,
+      descricao: row.descricao,
+      conta_bancaria_socio_id: row.conta_bancaria_socio_id ?? "",
+      competencia: row.mes_referencia,
+      data_vencimento: row.data_vencimento ?? "",
+      data_vencimento_despesa: row.data_vencimento_despesa ?? "",
+      valor: String(row.valor),
+      status: row.status,
+      observacao: row.observacao ?? "",
+    });
+    setModalOpen(true);
+    toast.info("Copiando lançamento", "Revise os campos (ex.: descrição e competência) e clique em Adicionar.");
   }
 
   async function handleSave() {
@@ -359,6 +572,7 @@ export function DistribuicaoPage() {
     if (!confirm(`Excluir "${row.descricao}" (${formatCurrency(Number(row.valor))})?`)) return;
     try {
       await deletarDetalhado(row.id);
+      removerTag(row.id);
       toast.success("Lançamento excluído");
       await fetchData();
     } catch (e: unknown) {
@@ -417,13 +631,29 @@ export function DistribuicaoPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-1.5 text-xs text-stone-500" title="Competência dos KPIs, dos repasses consolidados e da consolidação. A tabela abaixo é filtrada pelos períodos de data.">
+          <label className="flex items-center gap-1.5 text-xs text-stone-500" title="Competência dos KPIs, dos repasses consolidados, da consolidação E da tabela detalhada (ajuste 27-jul). Para ver todas as competências na tabela, limpe o filtro Competência nos filtros da listagem.">
             Competência
-            <select value={mes} onChange={(e) => setMes(e.target.value)}
+            <select
+              value={mes}
+              onChange={(e) => {
+                // Pesquisar pela competência filtra a LISTAGEM também (27-jul).
+                setMes(e.target.value);
+                setFilterCompetencia(e.target.value);
+              }}
               className="h-8 rounded-lg border border-stone-200 px-2 text-xs bg-white">
               {(meses.includes(mes) ? meses : [mes, ...meses]).map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </label>
+          <Button variant="outline" size="sm" onClick={() => handleExport("pdf")}
+            loading={exportandoPdf} disabled={exportandoPdf || exportandoXlsx}
+            title="Exporta um PDF espelho da tela com os lançamentos selecionados ou filtrados">
+            <FileDown size={14} /> Exportar PDF
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => handleExport("xlsx")}
+            loading={exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
+            title="Exporta uma planilha XLSX (Data do Repasse, Sócio, Classificação, Descrição, Conta Destino, Valor, Vencimento, Status)">
+            <FileSpreadsheet size={14} /> Exportar XLSX
+          </Button>
           <Button
             size="sm"
             onClick={() => setConsolidarOpen(true)}
@@ -448,32 +678,68 @@ export function DistribuicaoPage() {
         <span><b className="text-stone-800">3.</b> Feito o repasse aos sócios, clique em <b>Dar baixa</b> — tudo vira Repassado de uma vez.</span>
       </div>
 
-      {/* KPIs do mês */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard
-          label="Provisionado (mês)"
-          value={formatCurrency(resumo?.provisionado ?? 0)}
-          icon={<PiggyBank size={16} />}
-          helpText="Soma do detalhado com status Provisionado neste mês. É o que ainda falta conferir/marcar."
-        />
-        <KpiCard
-          label="A repassar (pronto p/ repasse)"
-          value={formatCurrency(resumo?.a_pagar ?? 0)}
-          icon={<CalendarCheck size={16} />}
-          helpText="Soma do detalhado marcado como A repassar. A parte ainda não consolidada aparece no botão Consolidar."
-        />
-        <KpiCard
-          label="Repassado (mês)"
-          value={formatCurrency(resumo?.realizado ?? 0)}
-          icon={<CheckCheck size={16} />}
-          helpText="Detalhado já baixado (repassado às contas pessoais dos sócios)."
-        />
-        <KpiCard
-          label="Global na empresa (2.8)"
-          value={formatCurrency((globalMes?.provisionadoGlobal ?? 0) + (globalMes?.aPagarGlobal ?? 0) + (globalMes?.realizadoGlobal ?? 0))}
-          icon={<Landmark size={16} />}
-          helpText="Soma dos lançamentos de Distribuição de Lucro (conta 2.8) no Financeiro da empresa neste mês (provisionado + a pagar + repassado). Deve bater com o detalhado."
-        />
+      {/* KPIs do mês — mesmo padrão visual dos cards do Financeiro (ajuste 27-jul) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        {([
+          {
+            key: "prov",
+            label: "Provisionado (mês)",
+            valor: resumo?.provisionado ?? 0,
+            icon: <PiggyBank size={15} />,
+            iconClass: "bg-emerald-50 text-emerald-600",
+            labelClass: "text-emerald-700",
+            valorClass: "text-emerald-700",
+            help: "Soma do detalhado com status Provisionado neste mês. É o que ainda falta conferir/marcar.",
+          },
+          {
+            key: "arep",
+            label: "A repassar (pronto p/ repasse)",
+            valor: resumo?.a_pagar ?? 0,
+            icon: <CalendarCheck size={15} />,
+            iconClass: "bg-orange-50 text-orange-600",
+            labelClass: "text-orange-700",
+            valorClass: "text-orange-600",
+            help: "Soma do detalhado marcado como A repassar. A parte ainda não consolidada aparece no botão Consolidar.",
+          },
+          {
+            key: "rep",
+            label: "Repassado (mês)",
+            valor: resumo?.realizado ?? 0,
+            icon: <CheckCheck size={15} />,
+            iconClass: "bg-amber-50 text-amber-700",
+            labelClass: "text-amber-700",
+            valorClass: "text-amber-700",
+            help: "Detalhado já baixado (repassado às contas pessoais dos sócios).",
+          },
+          {
+            key: "glob",
+            label: "Global na empresa (2.8.1)",
+            valor: globalMes?.totalCentro281 ?? 0,
+            icon: <Landmark size={15} />,
+            iconClass: "bg-emerald-50 text-emerald-700",
+            labelClass: "text-emerald-800",
+            valorClass: "text-emerald-700",
+            help: "Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa neste mês — provisionado + a repassar + repassado. Deve bater com o detalhado.",
+          },
+        ]).map((c) => (
+          <div
+            key={c.key}
+            title={c.help}
+            className="rounded-xl border border-stone-200 bg-white shadow-sm px-3.5 py-2.5 flex items-center gap-3"
+          >
+            <span className={`h-8 w-8 shrink-0 rounded-full flex items-center justify-center ${c.iconClass}`}>
+              {c.icon}
+            </span>
+            <span className="leading-tight min-w-0">
+              <p className={`text-[10px] font-semibold uppercase tracking-wide truncate ${c.labelClass}`}>
+                {c.label}
+              </p>
+              <p className={`text-sm font-bold tabular-nums whitespace-nowrap ${c.valorClass}`}>
+                {formatCurrency(c.valor)}
+              </p>
+            </span>
+          </div>
+        ))}
       </div>
 
       {/* Divergência entre global manual e detalhado */}
@@ -553,6 +819,22 @@ export function DistribuicaoPage() {
                 placeholder="Buscar descrição…"
                 className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-52 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
+            </div>
+            {/* Competência da listagem (ajuste 27-jul) — sincroniza com o seletor do cabeçalho */}
+            <div className="flex items-center gap-1" title="Filtra a tabela pela COMPETÊNCIA (mês de referência). É sincronizado quando você troca a competência no topo da tela.">
+              <span className="text-[10px] uppercase text-stone-400 font-medium">Competência</span>
+              <input
+                type="month"
+                value={filterCompetencia}
+                aria-label="Competência da listagem"
+                onChange={(e) => setFilterCompetencia(e.target.value)}
+                className="h-8 rounded-lg border border-stone-200 px-2 text-xs"
+              />
+              {filterCompetencia && (
+                <button type="button" onClick={() => setFilterCompetencia("")}
+                  className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
+                  title="Limpar competência (mostrar todas)" aria-label="Limpar competência">×</button>
+              )}
             </div>
             <select value={filterSocio} onChange={(e) => setFilterSocio(e.target.value)}
               className="h-8 rounded-lg border border-stone-200 px-2 text-xs">
@@ -640,13 +922,31 @@ export function DistribuicaoPage() {
                   title="Limpar filtro de valor" aria-label="Limpar filtro de valor">×</button>
               )}
             </div>
+            {/* Recorte "só tagueados" ativo — chip visível junto dos filtros (27-jul) */}
+            {mostrarSoTagueados && (
+              <span
+                className="h-8 inline-flex items-center gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 text-xs font-medium text-amber-800"
+                title="A tabela está mostrando apenas os lançamentos tagueados"
+              >
+                <Tag size={12} fill="currentColor" /> Só tagueados
+                <button
+                  type="button"
+                  onClick={() => setMostrarSoTagueados(false)}
+                  className="text-amber-400 hover:text-amber-700 cursor-pointer"
+                  aria-label="Mostrar todos os lançamentos"
+                  title="Voltar a mostrar todos"
+                >
+                  ×
+                </button>
+              </span>
+            )}
             {/* Limpar todos os filtros de uma vez (RF 24-jul) */}
             {temFiltrosAtivos && (
               <button
                 type="button"
                 onClick={limparTodosFiltros}
                 className="h-8 px-2 rounded-lg text-xs font-medium text-stone-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                title="Remove todos os filtros da listagem de uma vez (busca, sócio, classificação, status, períodos e valor)"
+                title="Remove todos os filtros da listagem de uma vez (competência, busca, sócio, classificação, status, períodos e valor)"
               >
                 <FilterX size={13} /> Limpar todos os filtros
               </button>
@@ -665,23 +965,49 @@ export function DistribuicaoPage() {
               className="h-7 rounded-lg border border-stone-200 px-2 text-xs"
               title="Data do Repasse a aplicar nos selecionados"
             />
-            <Button size="sm" variant="outline" disabled={!bulkVencimento || bulkBusy}
+            <Button size="sm" variant="outline" disabled={!bulkVencimento || bulkBusy || bulkDeleteBusy}
               onClick={() => aplicarEmMassa({ data_vencimento: bulkVencimento }, "Data do repasse aplicada")}>
               Aplicar data do repasse
             </Button>
-            <Button size="sm" variant="outline" disabled={bulkBusy}
-              onClick={() => aplicarEmMassa(
-                bulkVencimento ? { status: "a_pagar", data_vencimento: bulkVencimento } : { status: "a_pagar" },
-                'Marcado como "A repassar"',
-              )}
-              title="Marca os selecionados como A repassar (aplica também a data do repasse, se preenchida)">
-              Marcar A repassar
+            {/* Status genérico em massa (27-jul — idem ao Financeiro) */}
+            <select
+              value={bulkStatusSel}
+              onChange={(e) => setBulkStatusSel(e.target.value)}
+              className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+              title="Status a aplicar em todos os selecionados"
+            >
+              <option value="">Escolher status…</option>
+              {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
+                <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
+            </select>
+            <Button size="sm" variant="outline" disabled={!bulkStatusSel || bulkBusy || bulkDeleteBusy}
+              onClick={() => {
+                const status = bulkStatusSel as StatusDL;
+                setBulkStatusSel("");
+                aplicarEmMassa(
+                  bulkVencimento ? { status, data_vencimento: bulkVencimento } : { status },
+                  `Status "${STATUS_DL_LABEL[status]}" aplicado`,
+                );
+              }}
+              title="Aplica o status escolhido em todos os selecionados de uma vez (aplica também a data do repasse, se preenchida)">
+              Aplicar status
             </Button>
-            <Button size="sm" variant="ghost" disabled={bulkBusy}
-              onClick={() => aplicarEmMassa({ status: "provisionado" }, "Voltou a Provisionado")}>
-              Voltar a Provisionado
+            {/* Exclusão em lote (27-jul) */}
+            <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
+              loading={bulkDeleteBusy}
+              onClick={excluirSelecionados}
+              className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+              title="Exclui DE UMA VEZ todos os lançamentos selecionados (pede confirmação)">
+              <Trash2 size={13} /> Excluir selecionados
             </Button>
-            <button onClick={() => setSelectedIds(new Set())} className="text-stone-400 hover:text-stone-600 underline ml-auto">
+            {/* Soma dos selecionados (27-jul) */}
+            <span
+              className="ml-auto inline-flex items-center gap-1.5 font-semibold text-stone-700 tabular-nums bg-white border border-accent-200 rounded-lg px-2.5 py-1"
+              title="Soma dos valores dos lançamentos selecionados"
+            >
+              Soma: <span className="text-stone-800">{formatCurrency(somaSelecionados)}</span>
+            </span>
+            <button onClick={() => setSelectedIds(new Set())} className="text-stone-400 hover:text-stone-600 underline">
               limpar seleção
             </button>
           </div>
@@ -696,6 +1022,9 @@ export function DistribuicaoPage() {
                     <input type="checkbox" aria-label="Selecionar todos" checked={allSelected} onChange={toggleAll}
                       className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer" />
                   </th>
+                  <th className="px-1 py-3 w-8" title="Tag do dia — o 'pintar de amarelo' da planilha: marque o que está sendo trabalhado hoje">
+                    <Tag size={12} className="text-amber-400 mx-auto" />
+                  </th>
                   {["Data do Repasse","Sócio","Classificação","Descrição","Conta destino","Vencimento","Valor","Status","Repasse","Ações"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
@@ -703,21 +1032,22 @@ export function DistribuicaoPage() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="inline-block animate-spin mr-2" /> Carregando…
                   </td></tr>
                 )}
-                {!loading && rows.length === 0 && (
-                  <tr><td colSpan={11} className="px-4 py-12 text-center text-stone-400">
+                {!loading && rowsVisiveis.length === 0 && (
+                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
                     Nenhum lançamento detalhado no recorte. Clique em {"“Novo lançamento detalhado”"} para começar
                     — ou lance pelo Financeiro escolhendo {"“Saída detalhada”"} na conta 2.8.
                   </td></tr>
                 )}
-                {!loading && rows.map((r) => {
+                {!loading && rowsVisiveis.map((r) => {
                   const vinculado = !!r.repasse_id;
                   const selected = selectedIds.has(r.id);
+                  const tagueado = tags.has(r.id);
                   return (
-                    <tr key={r.id} className={`border-b border-stone-50 transition-colors table-row-alt ${selected ? "bg-accent-50/60" : "hover:bg-stone-50"}`}>
+                    <tr key={r.id} className={`border-b border-stone-50 transition-colors table-row-alt ${tagueado ? "bg-amber-50/80" : selected ? "bg-accent-50/60" : "hover:bg-stone-50"}`}>
                       <td className="px-3 py-3">
                         <input
                           type="checkbox"
@@ -727,6 +1057,19 @@ export function DistribuicaoPage() {
                           onChange={() => toggleOne(r.id)}
                           className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer disabled:opacity-30"
                         />
+                      </td>
+                      <td className="px-1 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => toggleTag(r)}
+                          className={`p-1 rounded transition cursor-pointer ${tagueado ? "text-amber-500 hover:text-amber-600" : "text-stone-200 hover:text-amber-400"}`}
+                          title={tagueado
+                            ? "Remover a tag deste lançamento"
+                            : "Taguear este lançamento (o 'pintar de amarelo' da planilha — a marcação fica salva mesmo trocando filtros ou recarregando)"}
+                          aria-label={tagueado ? "Remover tag" : "Taguear lançamento"}
+                        >
+                          <Tag size={13} fill={tagueado ? "currentColor" : "none"} />
+                        </button>
                       </td>
                       <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">
                         {r.data_vencimento ? formatDate(r.data_vencimento) : <span className="text-stone-300">—</span>}
@@ -772,6 +1115,9 @@ export function DistribuicaoPage() {
                           <button onClick={() => openEdit(r)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar">
                             <Edit2 size={13} />
                           </button>
+                          <button onClick={() => openDuplicate(r)} className="p-1.5 rounded hover:bg-accent-50 text-stone-400 hover:text-accent-600 transition" title="Copiar (abre um novo lançamento já preenchido)">
+                            <Copy size={13} />
+                          </button>
                           <button onClick={() => handleDelete(r)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
                             <Trash2 size={13} />
                           </button>
@@ -781,19 +1127,27 @@ export function DistribuicaoPage() {
                   );
                 })}
               </tbody>
-              {!loading && rows.length > 0 && (
+              {!loading && rowsVisiveis.length > 0 && (
                 <tfoot>
                   <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700 text-xs">
-                    <td colSpan={7} className="px-4 py-2.5 uppercase tracking-wide">Total do recorte</td>
-                    <td className="px-4 py-2.5">{formatCurrency(rows.reduce((s, r) => s + Number(r.valor), 0))}</td>
+                    <td colSpan={8} className="px-4 py-2.5 uppercase tracking-wide">Total do recorte</td>
+                    <td className="px-4 py-2.5">{formatCurrency(rowsVisiveis.reduce((s, r) => s + Number(r.valor), 0))}</td>
                     <td colSpan={3}></td>
                   </tr>
                 </tfoot>
               )}
             </table>
           </div>
-          <div className="px-4 py-3 border-t border-stone-100 text-xs text-stone-400">
-            {loading ? "…" : `${rows.length} lançamento${rows.length === 1 ? "" : "s"} no recorte`}
+          <div className="px-4 py-3 border-t border-stone-100 text-xs text-stone-400 flex items-center gap-3 flex-wrap">
+            <span>{loading ? "…" : `${rowsVisiveis.length} lançamento${rowsVisiveis.length === 1 ? "" : "s"} no recorte`}</span>
+            {selectedIds.size > 0 && (
+              <span className="inline-flex items-center gap-2 text-accent-600 font-medium">
+                {selectedIds.size} selecionado{selectedIds.size === 1 ? "" : "s"}
+                <span className="text-stone-500 tabular-nums" title="Soma dos selecionados">
+                  · Soma: {formatCurrency(somaSelecionados)}
+                </span>
+              </span>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -923,6 +1277,83 @@ export function DistribuicaoPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Painel flutuante das TAGs do dia (ajuste 27-jul — idem ao Financeiro) */}
+      {tags.size > 0 && (
+        <div className="fixed bottom-5 right-5 z-40 flex flex-col items-end gap-2">
+          {tagPanelOpen && (
+            <div className="w-80 max-w-[calc(100vw-2.5rem)] rounded-xl border border-amber-200 bg-white shadow-xl overflow-hidden">
+              <div className="px-3 py-2 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
+                <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+                  <Tag size={12} /> Tagueados do dia ({tags.size})
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setTagPanelOpen(false)}
+                  className="text-amber-400 hover:text-amber-600 cursor-pointer"
+                  aria-label="Fechar painel de tags"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <ul className="max-h-64 overflow-y-auto divide-y divide-stone-50 text-xs">
+                {Array.from(tags.values()).map((t) => (
+                  <li key={t.id} className="px-3 py-2 flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-stone-700" title={t.descricao ?? undefined}>
+                        {t.descricao || "(sem descrição)"}
+                      </p>
+                      <p className="text-[10px] text-stone-400 truncate">{t.socio ?? ""}</p>
+                    </div>
+                    <span className="font-semibold tabular-nums whitespace-nowrap text-stone-800">
+                      {formatCurrency(t.valor)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removerTag(t.id)}
+                      className="text-stone-300 hover:text-red-500 cursor-pointer shrink-0"
+                      title="Remover tag"
+                      aria-label="Remover tag"
+                    >
+                      <X size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="px-3 py-2 border-t border-stone-100 flex items-center justify-between text-xs">
+                <span className="text-stone-500">Soma:</span>
+                <span className="font-bold tabular-nums text-stone-800">{formatCurrency(somaTags)}</span>
+              </div>
+              <div className="px-3 pb-3 pt-1 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setMostrarSoTagueados((v) => !v)}
+                  title="Filtra a tabela para mostrar apenas os lançamentos tagueados"
+                >
+                  {mostrarSoTagueados ? "Mostrar todos" : "Ver só tagueados"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={limparTags}
+                  className="text-stone-400 hover:text-red-500 underline ml-auto text-xs cursor-pointer"
+                >
+                  limpar tags
+                </button>
+              </div>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setTagPanelOpen((v) => !v)}
+            className="rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow-lg px-4 h-10 flex items-center gap-2 text-sm font-semibold cursor-pointer transition-colors"
+            title="Lançamentos tagueados do dia — clique para abrir o painel"
+          >
+            <Tag size={15} fill="currentColor" />
+            {tags.size} · {formatCurrency(somaTags)}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

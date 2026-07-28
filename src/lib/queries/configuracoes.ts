@@ -230,6 +230,39 @@ export async function adicionarStatus(p: NovoStatusPayload): Promise<void> {
 }
 
 // ----------------------------------------------------------------------------
+// Configurações gerais (app_config — migration 0047, Configurações → Automações)
+// ----------------------------------------------------------------------------
+export const CONFIG_RESGATES_SICREDI = "resgates_automaticos_sicredi";
+
+/** Lê uma configuração; retorna o fallback se não existir (ou tabela ausente). */
+export async function obterConfigApp(chave: string, fallback: string): Promise<string> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("app_config")
+    .select("valor")
+    .eq("chave", chave)
+    .maybeSingle();
+  if (error) {
+    // Migration 0047 ainda não aplicada → comporta-se como o padrão.
+    if (/does not exist|schema cache|find the table/i.test(error.message)) return fallback;
+    throw error;
+  }
+  return (data as { valor: string } | null)?.valor ?? fallback;
+}
+
+export async function salvarConfigApp(chave: string, valor: string): Promise<void> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("app_config")
+    .upsert({ chave, valor })
+    .select("chave");
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error("Não foi possível salvar — sua conta precisa ser administradora (e a migration 0047 aplicada).");
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Papel do usuário atual (para gating de UI). Escrita real é barrada por RLS.
 // ----------------------------------------------------------------------------
 export async function obterRoleAtual(): Promise<string | null> {
