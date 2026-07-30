@@ -120,6 +120,15 @@ export interface DadosTermoTransferencia {
   saldo_remanescente?: number;
   saldo_parcelado?: boolean;
   saldo_parcelas?: number;
+  // Templates de fornecedor (ajuste 29-jul):
+  /** Título do documento; default "TERMO DE TRANSFERÊNCIA BANCÁRIA". */
+  titulo_documento?: string;
+  /** Nome por extenso do favorecido no 1º parágrafo, quando difere da razão social. */
+  destinatario_nome_paragrafo?: string;
+  /** Bloco de observações (markdown-lite: **negrito**, "- " bullet, "1. " numerada). */
+  observacoes?: string;
+  /** Id do template de fornecedor usado (reabre a edição com o modelo marcado). */
+  template_fornecedor_id?: string;
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

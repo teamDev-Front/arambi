@@ -27,9 +27,11 @@ export interface DrawTextOptions {
   width?: number;
   /** indent da primeira linha */
   indent?: number;
+  /** desloca o bloco inteiro para a direita (listas nas observações) — só rich() */
+  indentLeft?: number;
 }
 
-interface Segment {
+export interface Segment {
   text: string;
   bold?: boolean;
 }
@@ -202,8 +204,10 @@ export class PdfBuilder {
     const size = opts.size ?? this.defaultSize;
     const color = opts.color ?? rgb(0, 0, 0);
     const lineHeightPt = size * (opts.lineHeight ?? this.defaultLineHeight);
-    const width = opts.width ?? this.contentWidth;
+    const indentLeft = opts.indentLeft ?? 0;
+    const width = opts.width ?? this.contentWidth - indentLeft;
     const align = opts.align ?? "left";
+    const x0 = PAGE.margin.left + indentLeft;
 
     // Tokeniza em pedaços {token, bold} preservando espaços como tokens separados.
     type Token = { text: string; bold: boolean; isSpace: boolean; isBreak: boolean };
@@ -257,14 +261,14 @@ export class PdfBuilder {
       // remove espaço final na renderização
       while (ltok.length && ltok[ltok.length - 1].isSpace) ltok.pop();
 
-      let x = PAGE.margin.left;
+      let x = x0;
       let extraPorEspaco = 0;
       const isLastVisualLine = i === lines.length - 1 || hasBreak;
 
       if (align === "center") {
-        x = PAGE.margin.left + (width - rawWidth) / 2;
+        x = x0 + (width - rawWidth) / 2;
       } else if (align === "right") {
-        x = PAGE.margin.left + width - rawWidth;
+        x = x0 + width - rawWidth;
       } else if (align === "justify" && !isLastVisualLine) {
         const espacos = ltok.filter(t => t.isSpace).length;
         if (espacos > 0) {

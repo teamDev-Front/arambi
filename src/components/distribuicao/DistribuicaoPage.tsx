@@ -12,8 +12,10 @@ import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   Plus, Search, Edit2, Trash2, Loader2, HandCoins, CheckCheck,
   ArrowRightLeft, Undo2, CalendarCheck, PiggyBank, Landmark, AlertTriangle, FilterX,
-  Copy, Tag, X, FileDown, FileSpreadsheet,
+  Copy, Tag, X, FileDown, FileSpreadsheet, FileText,
 } from "lucide-react";
+import { gerarPdfBloqueante } from "@/lib/pdfmonkey/frontend";
+import type { ReportScope } from "@/lib/pdfmonkey/types";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { StatusSelect } from "@/components/ui/StatusSelect";
 import {
@@ -241,6 +243,12 @@ export function DistribuicaoPage() {
   const [incluirTransferencia, setIncluirTransferencia] = useState(true);
   const [consolidando, setConsolidando] = useState(false);
 
+  // ---- modal Capa do repasse do sócio (PDFMonkey — ajuste 29-jul) ----
+  const [capaOpen, setCapaOpen] = useState(false);
+  const [capaSocioId, setCapaSocioId] = useState("");
+  const [capaSoTagueados, setCapaSoTagueados] = useState(false);
+  const [capaGerando, setCapaGerando] = useState(false);
+
   // ---- lookups (uma vez) ----
   useEffect(() => {
     Promise.all([listarSocios(), listarClassificacoesPessoais(), listarMesesDetalhado()])
@@ -458,6 +466,49 @@ export function DistribuicaoPage() {
     }
   }
 
+  // ---- capa do repasse do sócio (PDFMonkey — ajuste 29-jul) ----
+  // Responde "onde vou para gerar a capa do repasse do sócio?": direto daqui,
+  // com opção de recortar pelos lançamentos TAGUEADOS do dia.
+  function abrirCapa() {
+    if (socios.length === 0) {
+      toast.warning("Nenhum sócio cadastrado", "Cadastre os sócios para gerar a capa do repasse.");
+      return;
+    }
+    setCapaSocioId(filterSocio || socios[0]?.id || "");
+    setCapaSoTagueados(tags.size > 0);
+    setCapaOpen(true);
+  }
+
+  async function handleGerarCapa() {
+    if (!capaSocioId) return;
+    setCapaGerando(true);
+    try {
+      const scope: ReportScope | undefined = capaSoTagueados && tags.size > 0
+        ? { scope_type: "por_selecao", transacao_ids: Array.from(tags.keys()) }
+        : undefined;
+      const res = await gerarPdfBloqueante({
+        slug: "capa_socio",
+        mes_referencia: mes,
+        socio_id: capaSocioId,
+        scope,
+      });
+      if (res.status === "success" && res.download_url) {
+        toast.success("Capa do repasse gerada", "O PDF abriu em outra aba e fica no histórico da tela Relatórios.");
+        window.open(res.download_url, "_blank");
+        setCapaOpen(false);
+      } else if (res.status === "failure") {
+        toast.error("Geração falhou", res.failure_cause ?? "Verifique o template capa_socio no PDFMonkey.");
+      } else {
+        toast.info("Geração em andamento", "Acompanhe pelo histórico da tela Relatórios — o link aparece lá.");
+        setCapaOpen(false);
+      }
+    } catch (e: unknown) {
+      toast.error("Não foi possível gerar a capa", (e as Error).message ?? String(e));
+    } finally {
+      setCapaGerando(false);
+    }
+  }
+
   // ---- status inline (1 linha) ----
   async function mudarStatus(row: TransacaoSocioRich, status: StatusDL) {
     try {
@@ -647,6 +698,10 @@ export function DistribuicaoPage() {
             loading={exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
             title="Exporta uma planilha XLSX (Data do Repasse, Sócio, Classificação, Descrição, Conta Destino, Valor, Vencimento, Status)">
             <FileSpreadsheet size={14} /> Exportar XLSX
+          </Button>
+          <Button variant="outline" size="sm" onClick={abrirCapa}
+            title="Gera a capa do repasse do sócio (PDFMonkey) — com opção de usar só os lançamentos tagueados">
+            <FileText size={14} /> Capa do sócio
           </Button>
           <Button
             size="sm"
@@ -1252,6 +1307,47 @@ export function DistribuicaoPage() {
             <Button variant="ghost" onClick={() => setConsolidarOpen(false)}>Cancelar</Button>
             <Button onClick={handleConsolidar} loading={consolidando} disabled={consolidando || qtdConsolidavel === 0}>
               <ArrowRightLeft size={14} /> Consolidar {formatCurrency(totalConsolidavel)}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal Capa do repasse do sócio (PDFMonkey — ajuste 29-jul) */}
+      <Modal open={capaOpen} onClose={() => { if (!capaGerando) setCapaOpen(false); }}
+        title="Capa do repasse do sócio" size="md" closeOnBackdrop={false}>
+        <div className="p-6 space-y-4">
+          <p className="text-sm text-stone-600">
+            Gera a capa em PDF (template do PDFMonkey) do repasse de <b>{mes}</b> para o sócio escolhido —
+            a mesma capa da tela Relatórios, agora direto daqui.
+          </p>
+
+          <Select label="Sócio" value={capaSocioId} onChange={(e) => setCapaSocioId(e.target.value)}>
+            {socios.map((s) => (
+              <option key={s.id} value={s.id}>{s.apelido || s.nome_completo}</option>
+            ))}
+          </Select>
+
+          <label className={`flex items-start gap-2 text-sm ${tags.size > 0 ? "text-stone-700 cursor-pointer" : "text-stone-400"}`}>
+            <input
+              type="checkbox"
+              checked={capaSoTagueados && tags.size > 0}
+              disabled={tags.size === 0}
+              onChange={(e) => setCapaSoTagueados(e.target.checked)}
+              className="h-4 w-4 mt-0.5 rounded border-stone-300 accent-accent-500"
+            />
+            <span>
+              Usar somente os lançamentos <b>tagueados do dia</b> ({tags.size})
+              <span className="block text-xs text-stone-400">
+                Entram na capa apenas os tagueados deste sócio e desta competência.
+                {tags.size === 0 ? " Não há tags no momento — a capa sai com o mês completo." : ""}
+              </span>
+            </span>
+          </label>
+
+          <div className="flex gap-3 justify-end pt-2">
+            <Button variant="ghost" onClick={() => setCapaOpen(false)} disabled={capaGerando}>Cancelar</Button>
+            <Button onClick={handleGerarCapa} loading={capaGerando} disabled={capaGerando || !capaSocioId}>
+              <FileText size={14} /> Gerar capa
             </Button>
           </div>
         </div>

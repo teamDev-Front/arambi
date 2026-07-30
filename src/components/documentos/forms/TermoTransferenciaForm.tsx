@@ -1,12 +1,18 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Input, Select } from "@/components/ui/Input";
+import { useEffect, useRef, useState } from "react";
+import { Bold, List, ListOrdered } from "lucide-react";
+import { Input, Select, Textarea } from "@/components/ui/Input";
 import { FormShell, FormSection } from "./FormShell";
 import { DraftBanner } from "./DraftBanner";
 import { DescricaoAutocomplete } from "./DescricaoAutocomplete";
+import { TermoTemplatePicker } from "./TermoTemplatePicker";
 import { useFormDraft } from "@/lib/hooks/useFormDraft";
 import { listarContasEmpresa } from "@/lib/queries/bancos";
 import { formatMoeda, valorPorExtenso, inteiroPorExtenso } from "@/lib/pdf/helpers";
+import {
+  TERMO_REMETENTES, TERMO_TEMPLATES,
+  type TermoFornecedorTemplate,
+} from "@/lib/documentos/termo-templates";
 import type { ContaBancariaEmpresaRow } from "@/types";
 import type { DadosTermoTransferencia } from "@/lib/pdf/types";
 
@@ -41,7 +47,37 @@ function fromDados(d: DadosTermoTransferencia) {
     saldo_remanescente:        d.saldo_remanescente != null ? String(d.saldo_remanescente) : "",
     saldo_parcelado:           d.saldo_parcelado ? "sim" : "nao",
     saldo_parcelas:            d.saldo_parcelas != null ? String(d.saldo_parcelas) : "",
+    titulo_documento:          d.titulo_documento ?? "",
+    destinatario_nome_paragrafo: d.destinatario_nome_paragrafo ?? "",
+    observacoes:               d.observacoes ?? "",
+    template_fornecedor_id:    d.template_fornecedor_id ?? "",
   };
+}
+
+/** Preview simples do markdown-lite das Observações (**negrito**, "- ", "1. "). */
+function ObsPreview({ md }: { md: string }) {
+  const linhas = md.replace(/\r\n/g, "\n").split("\n");
+  const renderLinha = (l: string, key: number) => {
+    const bullet = /^[-•*]\s+/.exec(l.trim());
+    const numero = /^(\d{1,3})[.)]\s+/.exec(l.trim());
+    const corpo = l.trim().replace(/^([-•*]|\d{1,3}[.)])\s+/, "");
+    const partes = corpo.split(/\*\*(.+?)\*\*/g).map((p, i) =>
+      i % 2 === 1 ? <strong key={i}>{p}</strong> : <span key={i}>{p}</span>,
+    );
+    if (l.trim() === "") return <div key={key} className="h-2" />;
+    return (
+      <p key={key} className={bullet || numero ? "pl-4" : ""}>
+        {bullet ? "•  " : numero ? `${numero[1]}.  ` : ""}
+        {partes}
+      </p>
+    );
+  };
+  return (
+    <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[11px] text-stone-700 leading-relaxed space-y-0.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-400 pb-1">Como sai no PDF</p>
+      {linhas.map(renderLinha)}
+    </div>
+  );
 }
 
 export function TermoTransferenciaForm({
@@ -68,6 +104,10 @@ export function TermoTransferenciaForm({
     saldo_remanescente:        "",
     saldo_parcelado:           "nao",
     saldo_parcelas:            "",
+    titulo_documento:          "",
+    destinatario_nome_paragrafo: "",
+    observacoes:               "",
+    template_fornecedor_id:    "",
   }, onDirtyChange, !!seed);
 
   // RF-06 — contas bancárias ativas da empresa (preenchimento automático do remetente).
@@ -95,6 +135,74 @@ export function TermoTransferenciaForm({
       remetente_agencia: c.agencia ?? "",
       remetente_conta:   contaStr,
     }));
+  }
+
+  // ─── Modelo de fornecedor (ajuste 29-jul) ────────────────────────────────
+  const templateSel = TERMO_TEMPLATES.find((t) => t.id === form.template_fornecedor_id) ?? null;
+
+  function aplicarTemplate(t: TermoFornecedorTemplate) {
+    setContaSelId("");
+    const rem = TERMO_REMETENTES[t.remetente];
+    setForm((f) => ({
+      ...f,
+      template_fornecedor_id:    t.id,
+      titulo_documento:          t.titulo ?? "",
+      remetente_razao_social:    "Agropecuária Aramburu Ltda",
+      remetente_documento:       "30.921.299/0001-88",
+      remetente_banco:           rem.banco,
+      remetente_agencia:         rem.agencia,
+      remetente_conta:           rem.conta,
+      destinatario_razao_social: t.destinatario.razao_social,
+      destinatario_documento:    t.destinatario.documento,
+      destinatario_banco:        t.destinatario.banco,
+      destinatario_agencia:      t.destinatario.agencia,
+      destinatario_conta:        t.destinatario.conta,
+      destinatario_pix:          t.destinatario.pix,
+      destinatario_nome_paragrafo:
+        t.favorecido.trim().toLowerCase() !== t.destinatario.razao_social.trim().toLowerCase()
+          ? t.favorecido
+          : "",
+      // Termos com bloco extra (parcelas, retenções) chegam com as observações
+      // do modelo — a operadora só atualiza os valores.
+      observacoes: t.observacoes_exemplo ?? f.observacoes,
+    }));
+  }
+
+  function limparTemplate() {
+    setForm((f) => ({ ...f, template_fornecedor_id: "", titulo_documento: "" }));
+  }
+
+  // ─── Observações (markdown-lite) ─────────────────────────────────────────
+  const obsRef = useRef<HTMLTextAreaElement>(null);
+
+  function obsNegrito() {
+    const el = obsRef.current;
+    if (!el) return;
+    const { selectionStart: s, selectionEnd: e, value } = el;
+    const sel = value.slice(s, e) || "negrito";
+    setForm((f) => ({ ...f, observacoes: value.slice(0, s) + `**${sel}**` + value.slice(e) }));
+    requestAnimationFrame(() => { el.focus(); el.setSelectionRange(s + 2, s + 2 + sel.length); });
+  }
+
+  function obsLista(prefixo: (i: number) => string) {
+    const el = obsRef.current;
+    if (!el) return;
+    const { selectionStart: s, selectionEnd: e, value } = el;
+    // expande a seleção para linhas inteiras
+    const ini = value.lastIndexOf("\n", s - 1) + 1;
+    const fimQuebra = value.indexOf("\n", e);
+    const fim = fimQuebra === -1 ? value.length : fimQuebra;
+    const linhas = value.slice(ini, fim).split("\n");
+    let n = 0;
+    const bloco = linhas
+      .map((l) => {
+        if (l.trim() === "") return l;
+        const semMarcador = l.replace(/^\s*([-•*]|\d{1,3}[.)])\s+/, "");
+        return prefixo(n++) + semMarcador;
+      })
+      .join("\n");
+    setForm((f) => ({ ...f, observacoes: value.slice(0, ini) + bloco + value.slice(fim) }));
+    requestAnimationFrame(() => el.focus());
   }
 
   // ─── Saldo remanescente (RF 24-jul) ──────────────────────────────────────
@@ -168,6 +276,10 @@ export function TermoTransferenciaForm({
       saldo_remanescente:  saldoNum > 0 ? saldoNum : undefined,
       saldo_parcelado:     saldoNum > 0 ? saldoParcelado : undefined,
       saldo_parcelas:      saldoNum > 0 && saldoParcelado && nParcelas >= 1 ? nParcelas : undefined,
+      titulo_documento:            form.titulo_documento.trim() || undefined,
+      destinatario_nome_paragrafo: form.destinatario_nome_paragrafo.trim() || undefined,
+      observacoes:                 form.observacoes.trim() || undefined,
+      template_fornecedor_id:      form.template_fornecedor_id || undefined,
     };
   }
 
@@ -185,6 +297,39 @@ export function TermoTransferenciaForm({
       secondarySubmitting={salvandoSemPdf}
     >
       <DraftBanner show={draft.recovered} onDiscard={draft.discard} />
+
+      {/* Modelo de fornecedor (ajuste 29-jul) — 94 termos analisados um a um */}
+      <FormSection title="Modelo de fornecedor" columns={1}>
+        <TermoTemplatePicker onSelect={aplicarTemplate} />
+        {templateSel && (
+          <div className="rounded-lg border border-accent-200 bg-accent-50 px-3 py-2 space-y-1.5 -mt-1">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-stone-700">
+                Modelo aplicado: {templateSel.nome}
+                {templateSel.titulo ? ` — título "${templateSel.titulo}"` : ""}
+              </p>
+              <button
+                type="button"
+                onClick={limparTemplate}
+                className="text-[11px] font-medium text-accent-700 hover:text-accent-800 underline cursor-pointer shrink-0"
+                title="Desvincula o modelo (os campos preenchidos não são apagados)"
+              >
+                Limpar modelo
+              </button>
+            </div>
+            <p className="text-[11px] text-stone-600">
+              Remetente e destinatário foram preenchidos com os dados do termo deste fornecedor — tudo continua editável.
+            </p>
+            <details className="text-[11px] text-stone-600">
+              <summary className="cursor-pointer font-medium hover:text-stone-800">
+                Ver o 1º parágrafo do último termo deste fornecedor (referência de redação)
+              </summary>
+              <p className="italic mt-1 leading-relaxed">{templateSel.paragrafo_exemplo}</p>
+            </details>
+          </div>
+        )}
+      </FormSection>
+
       <FormSection title="Remetente" columns={2}>
         <div className="sm:col-span-2">
           {contas.length > 0 ? (
@@ -215,6 +360,14 @@ export function TermoTransferenciaForm({
       <FormSection title="Destinatário" columns={2}>
         <Input label="Razão social / Nome"  value={form.destinatario_razao_social} onChange={(e) => setForm({ ...form, destinatario_razao_social: e.target.value })} />
         <Input label="CNPJ ou CPF"          value={form.destinatario_documento}    onChange={(e) => setForm({ ...form, destinatario_documento: e.target.value })} />
+        <div className="sm:col-span-2">
+          <Input
+            label="Nome no 1º parágrafo (opcional — quando difere da razão social)"
+            value={form.destinatario_nome_paragrafo}
+            onChange={(e) => setForm({ ...form, destinatario_nome_paragrafo: e.target.value })}
+            placeholder='Ex.: "Douravet Veterinária Ltda Epp – Central Veterinária"'
+          />
+        </div>
         <Input label="Banco"          value={form.destinatario_banco}   onChange={(e) => setForm({ ...form, destinatario_banco: e.target.value })} placeholder="Sicredi (748)" />
         <Input label="Agência"        value={form.destinatario_agencia} onChange={(e) => setForm({ ...form, destinatario_agencia: e.target.value })} />
         <Input label="Conta Corrente" value={form.destinatario_conta}   onChange={(e) => setForm({ ...form, destinatario_conta: e.target.value })} />
@@ -293,6 +446,51 @@ export function TermoTransferenciaForm({
           placeholder="saldo do material utilizado, relativos ao forro da área gourmet..."
           rows={3}
         />
+      </FormSection>
+
+      {/* Observações (ajuste 29-jul) — bloco extra entre o parágrafo e o
+          REMETENTE no PDF: parcelamentos, retenções de impostos etc. */}
+      <FormSection title="Observações (opcional — parcelas, retenções, detalhes extras)" columns={1}>
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={obsNegrito}
+              className="h-7 px-2 rounded-md border border-stone-300 bg-white text-stone-600 hover:bg-stone-50 flex items-center gap-1 text-[11px] font-medium cursor-pointer"
+              title="Deixa o texto selecionado em negrito (**texto**)"
+            >
+              <Bold size={12} /> Negrito
+            </button>
+            <button
+              type="button"
+              onClick={() => obsLista(() => "- ")}
+              className="h-7 px-2 rounded-md border border-stone-300 bg-white text-stone-600 hover:bg-stone-50 flex items-center gap-1 text-[11px] font-medium cursor-pointer"
+              title="Transforma as linhas selecionadas em lista com marcadores"
+            >
+              <List size={12} /> Bullets
+            </button>
+            <button
+              type="button"
+              onClick={() => obsLista((i) => `${i + 1}. `)}
+              className="h-7 px-2 rounded-md border border-stone-300 bg-white text-stone-600 hover:bg-stone-50 flex items-center gap-1 text-[11px] font-medium cursor-pointer"
+              title="Transforma as linhas selecionadas em lista numerada (1. 2. 3.)"
+            >
+              <ListOrdered size={12} /> Numerada
+            </button>
+          </div>
+          <Textarea
+            ref={obsRef}
+            value={form.observacoes}
+            onChange={(e) => setForm({ ...form, observacoes: e.target.value })}
+            rows={6}
+            placeholder={"**Parcelamento em 5x — valor total: R$ 61.000,00**\n- Parcela 1/5: R$ 12.200,00 — venc. 29/10/2025 - Entrada\n- Parcela 2/5: R$ 12.200,00 — venc. novembro/25 - 30D"}
+          />
+          <p className="text-[11px] text-stone-400">
+            <b>**texto**</b> vira negrito · linha começando com <b>{"“- ”"}</b> vira bullet · com{" "}
+            <b>{"“1. ”"}</b> vira lista numerada. O bloco sai no PDF entre o parágrafo inicial e o REMETENTE.
+          </p>
+          {form.observacoes.trim() && <ObsPreview md={form.observacoes} />}
+        </div>
       </FormSection>
     </FormShell>
   );

@@ -1,7 +1,10 @@
 import { PdfBuilder } from "../builder";
 import { loadTimbreLogo } from "../assets";
 import { formatDataCurta, formatMoeda, valorPorExtenso } from "../helpers";
+import { parseObservacoes } from "../obs-rich";
 import type { DadosTermoTransferencia } from "../types";
+
+const RE_CPF = /^\d{3}\.\d{3}\.\d{3}[-.]?\d{2}$/;
 
 export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia): Promise<Uint8Array> {
   // RF-07 — timbre (marca d'água) da Aramburu em todas as páginas.
@@ -9,10 +12,21 @@ export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia
   const pdf = await PdfBuilder.create({ watermarkJpg });
 
   pdf.space(30);
-  pdf.title("TERMO DE TRANSFERÊNCIA BANCÁRIA", { size: 14, spaceAfter: 28 });
+  // Título editável pelo template do fornecedor (ex.: "HISTÓRICO DE PAGAMENTO").
+  pdf.title(d.titulo_documento?.trim() || "TERMO DE TRANSFERÊNCIA BANCÁRIA", { size: 14, spaceAfter: 28 });
 
   const valorStr = `R$ ${formatMoeda(d.valor)} (${valorPorExtenso(d.valor)})`;
   const nfFrag = d.numero_nota ? `, ref. a NF nº ${d.numero_nota}` : "";
+  // "Este valor corresponde a {descricao}" — se a descrição já começa com
+  // a/à/ao/aos/às, o "a" do quadro sai para não duplicar ("corresponde a à…").
+  const descricao = d.descricao_objeto.trim();
+  const corresponde = /^(a|à|ao|aos|às)\s/i.test(descricao)
+    ? `. Este valor corresponde ${descricao}${nfFrag}.`
+    : `. Este valor corresponde a ${descricao}${nfFrag}.`;
+  // Nome por extenso do favorecido no parágrafo (pode diferir da razão social
+  // do bloco DESTINATÁRIO — padrão dos termos dos fornecedores).
+  const favorecido = d.destinatario_nome_paragrafo?.trim() || d.destinatario_razao_social;
+  const tipoDocDest = RE_CPF.test(d.destinatario_documento.trim()) ? "CPF" : "CNPJ";
 
   pdf.rich([
     { text: "A " },
@@ -20,12 +34,25 @@ export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia
     { text: `, inscrita no CNPJ sob o nº ${d.remetente_documento}, realiza o pagamento no valor de ` },
     { text: valorStr, bold: true },
     { text: ` para a ` },
-    { text: d.destinatario_razao_social, bold: true },
-    { text: `, inscrito no CNPJ sob o nº ${d.destinatario_documento}, através de transferência bancária, no dia ` },
+    { text: favorecido, bold: true },
+    { text: `, inscrito no ${tipoDocDest} sob o nº ${d.destinatario_documento}, através de transferência bancária, no dia ` },
     // Data em NEGRITO (RF 24-jul) — destaque pedido pela Adri.
     { text: formatDataCurta(d.data_transferencia), bold: true },
-    { text: `. Este valor corresponde a ${d.descricao_objeto}${nfFrag}.` },
+    { text: corresponde },
   ], { align: "justify", lineHeight: 1.5 });
+
+  // Bloco de observações (ajuste 29-jul) — parcelamentos, retenções etc.,
+  // com **negrito**, bullets e listas numeradas, como nos termos originais.
+  if (d.observacoes?.trim()) {
+    pdf.space(16);
+    for (const linha of parseObservacoes(d.observacoes)) {
+      if (linha.segments.length === 0) { pdf.space(7); continue; }
+      const segs = linha.prefixo
+        ? [{ text: linha.prefixo }, ...linha.segments]
+        : linha.segments;
+      pdf.rich(segs, { lineHeight: 1.35, indentLeft: linha.prefixo ? 16 : 0 });
+    }
+  }
 
   pdf.space(24);
   pdf.rich([{ text: "REMETENTE", bold: true }], { lineHeight: 1.3 });

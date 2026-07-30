@@ -97,7 +97,16 @@ export async function POST(req: NextRequest) {
         mesReferenciaLabel: body.mes_referencia_label,
       });
     } else if (slug === "capa_socio") {
-      payload = await buildCapaSocio(supabase, { mesReferencia: body.mes_referencia, socioId: body.socio_id! });
+      // Recorte por tags da DL (ajuste 29-jul): aceita seleção manual ou ids
+      // dos filtros — mesmo contrato do restante dos escopos.
+      const idsScope = body.scope?.scope_type === "por_selecao"
+        ? body.scope.transacao_ids
+        : body.scope?.filtros?.ids;
+      payload = await buildCapaSocio(supabase, {
+        mesReferencia: body.mes_referencia,
+        socioId: body.socio_id!,
+        ids: idsScope,
+      });
     } else if (slug === "relatorio_contabil") {
       payload = await buildRelatorioContabil(supabase, { mesReferencia: body.mes_referencia, scope: body.scope });
       // Sobrescreve observações se vieram do front

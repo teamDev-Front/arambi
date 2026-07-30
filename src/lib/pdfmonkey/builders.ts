@@ -344,6 +344,8 @@ export interface BuildCapaSocioArgs {
   mesReferencia: string;
   socioId: string;
   preparadoPor?: string;
+  /** Recorte por ids (lançamentos TAGUEADOS na tela DL — ajuste 29-jul). */
+  ids?: string[];
 }
 
 export async function buildCapaSocio(
@@ -363,7 +365,7 @@ export async function buildCapaSocio(
     .eq("ativa", true)
     .order("ordem");
 
-  const { data: lancamentos } = await supabase
+  let lancamentosQuery = supabase
     .from("transacoes_socio")
     .select(`
       data, classificacao_pessoal, descricao, valor, conta_bancaria_socio_id,
@@ -371,8 +373,11 @@ export async function buildCapaSocio(
       conta_bancaria:contas_bancarias_socio(id, banco, nome)
     `)
     .eq("socio_id", args.socioId)
-    .eq("mes_referencia", args.mesReferencia)
-    .order("data");
+    .eq("mes_referencia", args.mesReferencia);
+  // Recorte por tags (ajuste 29-jul): a capa sai só com os lançamentos
+  // marcados na DL — a interseção com sócio+mês continua valendo.
+  if (args.ids && args.ids.length > 0) lancamentosQuery = lancamentosQuery.in("id", args.ids);
+  const { data: lancamentos } = await lancamentosQuery.order("data");
 
   type LancamentoSocio = {
     data: string;

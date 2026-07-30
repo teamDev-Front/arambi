@@ -2,6 +2,7 @@
 // Roda no client (browser) usando @supabase/ssr createBrowserClient.
 
 import { createClient } from "@/lib/supabase/client";
+import { compararCodigo } from "./configuracoes";
 import type {
   TransacaoEmpresaRow,
   TransacaoEmpresaInsert,
@@ -509,10 +510,13 @@ export async function listarClassificacoes(): Promise<ClassificacaoFinanceiraRow
   const { data, error } = await supabase
     .from("classificacao_financeira")
     .select("*")
-    .eq("ativo", true)
-    .order("ordem");
+    .eq("ativo", true);
   if (error) throw error;
-  return data as ClassificacaoFinanceiraRow[];
+  // Ordena por CÓDIGO (1.1 < 1.1.3 < 1.2 < 2.10) em vez da coluna `ordem`:
+  // classificações criadas no Admin ficam com `ordem` NULL e caíam no FIM dos
+  // filtros/selects (ajuste 29-jul — "1.1.3 Inter" aparecia depois do 2.9.x).
+  return ([...((data ?? []) as ClassificacaoFinanceiraRow[])])
+    .sort((a, b) => compararCodigo(a.codigo, b.codigo));
 }
 
 export async function listarContasEmpresa(): Promise<ContaBancariaEmpresaRow[]> {
