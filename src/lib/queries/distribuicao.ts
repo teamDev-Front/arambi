@@ -6,6 +6,7 @@
 // (Cora → Inter → contas pessoais) via fn_consolidar_repasse_dl.
 
 import { createClient } from "@/lib/supabase/client";
+import { semCamposDeOrigem } from "./preservar-origem";
 import type {
   TransacaoSocioRow,
   TransacaoSocioInsert,
@@ -108,7 +109,8 @@ export async function atualizarDetalhado(
   const supabase = createClient();
   const { data, error } = await supabase
     .from("transacoes_socio")
-    .update(payload)
+    // Preserva origem_planilha (procedência da importação) — ver preservar-origem.ts.
+    .update(semCamposDeOrigem(payload))
     .eq("id", id)
     .select()
     .maybeSingle();

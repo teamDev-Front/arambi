@@ -21,15 +21,16 @@ import {
 } from "recharts";
 import {
   listarArmazens, listarParametros, obterParametro, upsertParametro,
-  listarDepositosCalculados, criarDeposito, atualizarDeposito, deletarDeposito,
+  listarDepositosCalculados, criarDeposito, atualizarDeposito, deletarDeposito, obterDeposito,
   calcularResumoSafra, listarSafrasComDeposito,
 } from "@/lib/queries/safra";
+import { desfazerCriacao, desfazerEdicao, desfazerExclusao } from "@/lib/queries/desfazer";
 import { exportEstoqueXlsx } from "@/lib/export/estoque-export";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
   CULTURA_LABEL, CULTURA_EMOJI, SAFRA_DEP_STATUS_LABEL,
   type ArmazemRow, type SafraParametrosRow, type SafraDepositoCalculadoRow,
-  type CulturaSafra, type SafraDepositoStatus, type Database,
+  type CulturaSafra, type SafraDepositoStatus, type Database, type SafraDepositoRow,
 } from "@/types";
 
 const PAGE_SIZE = 16;
@@ -103,6 +104,9 @@ export function EstoquePage() {
 
   const [depModal, setDepModal] = useState(false);
   const [depEditId, setDepEditId] = useState<string | null>(null);
+  // Linha da TABELA BASE ao abrir a edição — base do "Desfazer" (RF 31-jul).
+  // A listagem vem da view calculada, que não serve para regravar.
+  const [depSnapshot, setDepSnapshot] = useState<SafraDepositoRow | null>(null);
   const [depForm, setDepForm] = useState<DepForm>(EMPTY_DEP);
   const depGuard = useUnsavedGuard(depModal, depForm, () => setDepModal(false));
   const [depSaving, setDepSaving] = useState(false);
@@ -281,11 +285,14 @@ export function EstoquePage() {
   // ---- CRUD depósito ----
   function openNovoDep() {
     setDepEditId(null);
+    setDepSnapshot(null);
     setDepForm({ ...EMPTY_DEP, cultura, safra });
     setDepModal(true);
   }
   function openEditDep(r: SafraDepositoCalculadoRow) {
     setDepEditId(r.id);
+    setDepSnapshot(null);
+    obterDeposito(r.id).then(setDepSnapshot).catch(() => setDepSnapshot(null));
     setDepForm({
       cultura: r.cultura,
       safra: r.safra,
@@ -356,10 +363,23 @@ export function EstoquePage() {
       };
       if (depEditId) {
         await atualizarDeposito(depEditId, payload);
-        toast.success("Depósito atualizado");
+        const anterior = depSnapshot;
+        if (anterior) {
+          toast.desfazer("Depósito atualizado", "Você tem 8 segundos para voltar aos valores anteriores.", async () => {
+            await desfazerEdicao("safra_depositos", anterior);
+            await fetchDepositos();
+            toast.info("Edição desfeita", "O depósito voltou como estava.");
+          });
+        } else {
+          toast.success("Depósito atualizado");
+        }
       } else {
-        await criarDeposito(payload);
-        toast.success("Depósito registrado");
+        const criado = await criarDeposito(payload);
+        toast.desfazer("Depósito registrado", "Você tem 8 segundos para desfazer.", async () => {
+          await desfazerCriacao("safra_depositos", [criado.id]);
+          await fetchDepositos();
+          toast.info("Criação desfeita", "O depósito foi removido.");
+        });
       }
       setDepModal(false);
       await fetchDepositos();
@@ -370,10 +390,14 @@ export function EstoquePage() {
     }
   }
   async function removeDep(r: SafraDepositoCalculadoRow) {
-    if (!confirm(`Excluir depósito DFe ${r.dfe_entrada ?? "(s/ DFe)"} de ${fmtKg(Number(r.kg_bruto))}?`)) return;
+    if (!confirm(`Excluir depósito DFe ${r.dfe_entrada ?? "(s/ DFe)"} de ${fmtKg(Number(r.kg_bruto))}? Você ainda terá 8 segundos para desfazer.`)) return;
     try {
-      await deletarDeposito(r.id);
-      toast.success("Depósito excluído");
+      const apagado = await deletarDeposito(r.id);
+      toast.desfazer("Depósito excluído", "Você tem 8 segundos para recuperá-lo.", async () => {
+        await desfazerExclusao("safra_depositos", [apagado]);
+        await fetchDepositos();
+        toast.info("Exclusão desfeita", "O depósito foi restaurado.");
+      });
       await fetchDepositos();
     } catch (e: unknown) {
       toast.error("Não foi possível excluir", (e as Error).message);

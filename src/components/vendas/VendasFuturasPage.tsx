@@ -25,6 +25,7 @@ import {
   atualizarStatusVendasEmMassa, deletarVendasEmMassa,
   type ListarVendasFiltros,
 } from "@/lib/queries/vendas";
+import { desfazerCriacao, desfazerEdicao, desfazerExclusao } from "@/lib/queries/desfazer";
 import {
   baixarEstoqueFifo, desfazerBaixasVenda, obterSaldoEstoque,
   listarKgBaixadoPorVenda, type SaldoEstoque,
@@ -120,6 +121,8 @@ export function VendasFuturasPage() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  // Venda como estava ao abrir a edição — base do "Desfazer" (RF 31-jul).
+  const [editSnapshot, setEditSnapshot] = useState<VendaProvisionadaRichRow | null>(null);
   const [form, setForm] = useState<Form>(EMPTY);
   const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
   const [saving, setSaving] = useState(false);
@@ -295,6 +298,7 @@ export function VendasFuturasPage() {
     setModalOpen(true);
   }
   function openEdit(v: VendaProvisionadaRichRow) {
+    setEditSnapshot(v);
     const tinhaBaixa = (kgBaixadoPorVenda.get(v.id) ?? 0) > 0;
     setEditId(v.id);
     setEditTinhaBaixa(tinhaBaixa);
@@ -516,6 +520,13 @@ export function VendasFuturasPage() {
           } catch (eDesfaz: unknown) {
             toast.error("Venda atualizada, mas não foi possível desfazer a baixa", (eDesfaz as Error).message);
           }
+        } else if (editSnapshot) {
+          const anterior = editSnapshot;
+          toast.desfazer("Venda atualizada", "Você tem 8 segundos para voltar aos valores anteriores.", async () => {
+            await desfazerEdicao("vendas_provisionadas", anterior);
+            await fetchData();
+            toast.info("Edição desfeita", "A venda voltou como estava.");
+          });
         } else {
           toast.success("Venda atualizada");
         }
@@ -545,7 +556,11 @@ export function VendasFuturasPage() {
             return; // modal aberto p/ ela corrigir o volume/safra
           }
         } else {
-          toast.success("Venda registrada", "Sem baixa de estoque (opção desmarcada).");
+          toast.desfazer("Venda registrada", "Sem baixa de estoque (opção desmarcada). Você tem 8 segundos para desfazer.", async () => {
+            await desfazerCriacao("vendas_provisionadas", [vendaId]);
+            await fetchData();
+            toast.info("Criação desfeita", "A venda foi removida.");
+          });
         }
         // Integração com o Financeiro / DL / taxa (ajuste 27-jul) — depois da
         // baixa, para a venda já estar consolidada. Falha aqui não desfaz nada.
@@ -614,10 +629,17 @@ export function VendasFuturasPage() {
     try {
       if (kgBaixado > 0) await desfazerBaixasVenda(v.id);
       await deletarVenda(v.id);
-      toast.success(
-        "Venda excluída",
-        kgBaixado > 0 ? `${kgBaixado.toLocaleString("pt-BR")} kg voltaram ao estoque.` : undefined,
-      );
+      if (kgBaixado > 0) {
+        // Com baixa de estoque revertida não há desfazer de um clique: as baixas
+        // FIFO já voltaram ao estoque e o vínculo com a venda se perdeu.
+        toast.success("Venda excluída", `${kgBaixado.toLocaleString("pt-BR")} kg voltaram ao estoque.`);
+      } else {
+        toast.desfazer("Venda excluída", "Você tem 8 segundos para recuperá-la.", async () => {
+          await desfazerExclusao("vendas_provisionadas", [v]);
+          await fetchData();
+          toast.info("Exclusão desfeita", "A venda foi restaurada.");
+        });
+      }
       await fetchData();
     } catch (e: unknown) {
       toast.error("Não foi possível excluir", (e as Error).message);

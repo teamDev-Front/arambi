@@ -1,11 +1,20 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, AlertTriangle, AlertCircle, Info, X } from "lucide-react";
+import { CheckCircle2, AlertTriangle, AlertCircle, Info, X, Undo2, Loader2 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Tipos
 // ---------------------------------------------------------------------------
 type ToastKind = "success" | "error" | "warning" | "info";
+
+/** Janela do "Desfazer ação" (RF 31-jul-2026) — o mesmo conceito do envio de e-mail. */
+export const DESFAZER_MS = 8000;
+
+interface ToastAction {
+  label: string;
+  /** Executada ao clicar. Se lançar, o toast mostra o erro e permanece. */
+  onClick: () => void | Promise<void>;
+}
 
 interface ToastItem {
   id: string;
@@ -13,6 +22,8 @@ interface ToastItem {
   title: string;
   description?: string;
   duration?: number;          // ms — default 4500; 0 = não fecha sozinho
+  /** Botão de ação no próprio toast (ex.: "Desfazer"). */
+  action?: ToastAction;
 }
 
 interface ToastContextValue {
@@ -23,6 +34,16 @@ interface ToastContextValue {
   error:   (title: string, description?: string) => string;
   warning: (title: string, description?: string) => string;
   info:    (title: string, description?: string) => string;
+  /**
+   * Confirmação com janela de arrependimento (RF 31-jul): mostra o resultado da
+   * operação por 8 segundos com o botão "Desfazer".
+   *
+   * A gravação NÃO é adiada — ela já aconteceu. O `onUndo` é a ação
+   * compensatória (apagar o que foi criado, restaurar o valor anterior,
+   * recriar o que foi excluído). Adiar a escrita seria pior num sistema
+   * financeiro: fechar a aba antes dos 8s perderia o lançamento.
+   */
+  desfazer: (title: string, description: string | undefined, onUndo: () => void | Promise<void>) => string;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -73,9 +94,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const warning = useCallback((title: string, description?: string) => show({ kind: "warning", title, description }), [show]);
   const info    = useCallback((title: string, description?: string) => show({ kind: "info",    title, description }), [show]);
 
+  const desfazer = useCallback(
+    (title: string, description: string | undefined, onUndo: () => void | Promise<void>) =>
+      show({
+        kind: "success",
+        title,
+        description,
+        duration: DESFAZER_MS,
+        action: { label: "Desfazer", onClick: onUndo },
+      }),
+    [show],
+  );
+
   const value = useMemo<ToastContextValue>(
-    () => ({ show, dismiss, success, error, warning, info }),
-    [show, dismiss, success, error, warning, info],
+    () => ({ show, dismiss, success, error, warning, info, desfazer }),
+    [show, dismiss, success, error, warning, info, desfazer],
   );
 
   return (
@@ -125,11 +158,42 @@ function ToastViewport({ items, onDismiss }: { items: ToastItem[]; onDismiss: (i
 function ToastCard({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
   const styles = KIND_STYLES[item.kind];
   const [visible, setVisible] = useState(false);
+  const [executando, setExecutando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
   useEffect(() => {
     // anima entrada
     const t = setTimeout(() => setVisible(true), 10);
     return () => clearTimeout(t);
   }, []);
+
+  // Barra de progresso da janela de arrependimento: o usuário VÊ o tempo
+  // restante em vez de adivinhar quanto ainda dá para desfazer.
+  const [restante, setRestante] = useState(100);
+  const temContagem = !!item.action && (item.duration ?? 0) > 0;
+  useEffect(() => {
+    if (!temContagem) return;
+    const total = item.duration ?? DESFAZER_MS;
+    const inicio = Date.now();
+    const iv = setInterval(() => {
+      const pct = Math.max(0, 100 - ((Date.now() - inicio) / total) * 100);
+      setRestante(pct);
+      if (pct <= 0) clearInterval(iv);
+    }, 80);
+    return () => clearInterval(iv);
+  }, [temContagem, item.duration]);
+
+  async function executarAcao() {
+    if (!item.action || executando) return;
+    setExecutando(true);
+    setErro(null);
+    try {
+      await item.action.onClick();
+      onDismiss();
+    } catch (e: unknown) {
+      setErro((e as Error)?.message ?? String(e));
+      setExecutando(false);
+    }
+  }
 
   return (
     <div
@@ -152,6 +216,24 @@ function ToastCard({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
               {item.description}
             </p>
           )}
+          {erro && (
+            <p className="text-xs text-red-600 mt-1 leading-relaxed break-words">
+              Não foi possível desfazer: {erro}
+            </p>
+          )}
+          {item.action && (
+            <button
+              type="button"
+              onClick={executarAcao}
+              disabled={executando}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-stone-300 bg-white px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-50 hover:border-stone-400 transition cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+            >
+              {executando
+                ? <Loader2 size={12} className="animate-spin" />
+                : <Undo2 size={12} />}
+              {item.action.label}
+            </button>
+          )}
         </div>
         <button
           onClick={onDismiss}
@@ -161,6 +243,12 @@ function ToastCard({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
           <X size={14} />
         </button>
       </div>
+
+      {/* Contagem regressiva da janela de "Desfazer" */}
+      {temContagem && (
+        <span className="absolute bottom-0 left-0 h-0.5 bg-stone-300 transition-[width] duration-100 ease-linear"
+          style={{ width: `${restante}%` }} />
+      )}
     </div>
   );
 }

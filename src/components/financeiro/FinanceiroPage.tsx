@@ -11,6 +11,7 @@ import { StatusSelect } from "@/components/ui/StatusSelect";
 import { BankLogo } from "@/components/ui/BankLogo";
 import { Pagination } from "@/components/ui/Pagination";
 import { RelatorioEscopoModal } from "@/components/financeiro/RelatorioEscopoModal";
+import { CamposExportModal, type CamposExportEscolha } from "@/components/financeiro/CamposExportModal";
 import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
   Plus, FileText, Search, Edit2, Trash2, Copy,
@@ -18,7 +19,7 @@ import {
   FileDown, FileSpreadsheet, CalendarRange,
   ChevronUp, ChevronDown, Wallet, FilterX,
   AlertTriangle, CalendarClock, CalendarDays,
-  Tag, X,
+  Tag, X, ListChecks, BarChart3,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
@@ -44,7 +45,12 @@ import {
   atualizarStatusEmMassaSemSaldoInvest,
   type TransacaoEmpresaRich,
   type IndicadoresVencimentos,
+  obterResumoDespesaVariavel,
+  type ResumoDespesaVariavel,
 } from "@/lib/queries/financeiro";
+import {
+  desfazerCriacao, desfazerEdicao, desfazerExclusao, desfazerStatusEmMassa,
+} from "@/lib/queries/desfazer";
 import { getSaldoAtualPorBanco, type SaldoAtualBanco } from "@/lib/queries/dashboard";
 import {
   exportFinanceiroPdf,
@@ -82,6 +88,28 @@ import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 
 const PAGE_SIZE = 25;
+
+/**
+ * Opções dos filtros Tipo de Despesa e Forma de Pagamento (RF 31-jul).
+ *
+ * O "sem" (—) entra na lista de propósito: é como a Lola acha o que ficou sem
+ * classificar. Fica por último para não competir com as opções de uso diário.
+ */
+const semPorUltimo = <T extends string>(labels: Record<T, string>) =>
+  (Object.keys(labels) as T[])
+    .sort((a, b) => (a === "sem" ? 1 : b === "sem" ? -1 : 0))
+    .map((k) => ({ value: k as string, label: k === "sem" ? "— (sem definição)" : labels[k] }));
+
+const TIPO_DESPESA_OPTIONS = semPorUltimo(TIPO_DESPESA_LABEL);
+
+const NOME_MES = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+
+/** "2026-08" → "08/2026" (rótulo curto do card de Despesa Variável). */
+const mesHumano = (m: string) => (m?.length === 7 ? `${m.slice(5)}/${m.slice(0, 4)}` : m || "—");
+const FORMA_PGTO_OPTIONS = semPorUltimo(FORMA_PGTO_LABEL);
 
 type FormState = {
   data: string;            // Vencimento
@@ -292,6 +320,9 @@ export function FinanceiroPage() {
   const [filterContaContabil, setFilterContaContabil] = useState<string[]>([]);
   const [filterCentroCusto, setFilterCentroCusto] = useState<string[]>([]);
   const [filterBanco, setFilterBanco] = useState<string[]>([]);
+  // Tipo de Despesa + Forma de Pagamento (RF 31-jul) — controle da fatura do cartão.
+  const [filterTipoDespesa, setFilterTipoDespesa] = useState<string[]>([]);
+  const [filterFormaPgto, setFilterFormaPgto] = useState<string[]>([]);
   // Períodos: vencimento E emissão (o filtro de mês saiu — RF 23-jul).
   const [filterDataDe, setFilterDataDe] = useState("");
   const [filterDataAte, setFilterDataAte] = useState("");
@@ -313,6 +344,17 @@ export function FinanceiroPage() {
   // Valores dos selecionados (id → valor) — alimenta a autossoma estilo Excel
   // (RF 24-jul) mesmo quando a seleção atravessa páginas.
   const [selectedValores, setSelectedValores] = useState<Map<string, number>>(new Map());
+  // Despesas Variáveis (RF 31-jul) — card + histórico mensal.
+  const [dvResumo, setDvResumo] = useState<ResumoDespesaVariavel | null>(null);
+  const [dvOpen, setDvOpen] = useState(false);
+  // Tela de seleção de campos da exportação (RF 31-jul).
+  const [camposExportOpen, setCamposExportOpen] = useState(false);
+  const [dvAno, setDvAno] = useState(() => String(new Date().getFullYear()));
+
+  // "Ver selecionados" (RF 31-jul) — lista completa da seleção, fora do filtro.
+  const [selecionadosOpen, setSelecionadosOpen] = useState(false);
+  const [selecionadosRows, setSelecionadosRows] = useState<TransacaoEmpresaRich[]>([]);
+  const [selecionadosLoading, setSelecionadosLoading] = useState(false);
   const [escopoOpen, setEscopoOpen] = useState(false);
   const [escopoTipo, setEscopoTipo] = useState<"por_filtros" | "por_selecao">("por_filtros");
 
@@ -343,6 +385,8 @@ export function FinanceiroPage() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  // Linha como estava ao abrir a edição — base do "Desfazer" (RF 31-jul).
+  const [editSnapshot, setEditSnapshot] = useState<TransacaoEmpresaRich | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
   const [saving, setSaving] = useState(false);
@@ -468,7 +512,8 @@ export function FinanceiroPage() {
   // Há algum filtro aplicado? (controla a visibilidade do "Limpar todos os filtros")
   const temFiltrosAtivos = Boolean(
     search || filterCompetencia || filterStatus.length || filterContaContabil.length || filterCentroCusto.length ||
-    filterBanco.length || filterDataDe || filterDataAte || filterEmissaoDe || filterEmissaoAte ||
+    filterBanco.length || filterTipoDespesa.length || filterFormaPgto.length ||
+    filterDataDe || filterDataAte || filterEmissaoDe || filterEmissaoAte ||
     filterValorMin || filterValorMax || mostrarSoTagueados,
   );
 
@@ -478,6 +523,8 @@ export function FinanceiroPage() {
     setSearch("");
     setFilterCompetencia("");
     setFilterStatus([]);
+    setFilterTipoDespesa([]);
+    setFilterFormaPgto([]);
     setFilterContaContabil([]);
     setFilterCentroCusto([]);
     setFilterBanco([]);
@@ -545,6 +592,37 @@ export function FinanceiroPage() {
       return next;
     });
   }, [selectedIds]);
+  /**
+   * "Ver selecionados" (RF 31-jul) — busca no banco TODOS os lançamentos da
+   * seleção, não só os que estão no recorte atual da tabela. Sem isso, a Lola
+   * via "16 selecionados" com 8 linhas na tela e não tinha como conferir os
+   * outros 8 antes de aplicar status ou emitir o relatório.
+   */
+  const abrirSelecionados = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setSelecionadosOpen(true);
+    setSelecionadosLoading(true);
+    try {
+      const { rows: encontrados } = await listarTransacoesParaExport({
+        transacaoIds: Array.from(selectedIds),
+        cap: 5000,
+      });
+      setSelecionadosRows(encontrados);
+    } catch (e: unknown) {
+      toast.error("Não foi possível carregar os selecionados", (e as Error).message ?? String(e));
+      setSelecionadosRows([]);
+    } finally {
+      setSelecionadosLoading(false);
+    }
+  }, [selectedIds, toast]);
+
+  /** Tira um lançamento da seleção de dentro do próprio modal. */
+  const removerDaSelecao = useCallback((id: string) => {
+    setSelectedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    setSelectedValores((prev) => { const n = new Map(prev); n.delete(id); return n; });
+    setSelecionadosRows((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
   const limparSelecao = useCallback(() => {
     setSelectedIds(new Set());
     setSelectedValores(new Map());
@@ -552,6 +630,35 @@ export function FinanceiroPage() {
 
   // Autossoma estilo Excel (RF 24-jul): soma COM SINAL dos selecionados — serve
   // pra conferir, p.ex., se "A pagar" × "A resgatar" do mesmo título zeram.
+  // ---- Despesas Variáveis (RF 31-jul) ----
+  // A competência do card segue o seletor do header; com "Todas" selecionada,
+  // cai no mês corrente (é o mês que ela está tocando na planilha).
+  const dvMes = filterCompetencia || new Date().toISOString().slice(0, 7);
+  const dvAnos = useMemo(() => {
+    const anos = new Set(mesesCompetencia.map((m) => m.slice(0, 4)));
+    anos.add(dvMes.slice(0, 4));
+    return Array.from(anos).sort().reverse();
+  }, [mesesCompetencia, dvMes]);
+
+  // O resumo carregado cobre o ano do modal; o card precisa do ano do dvMes.
+  // Manter os dois em sincronia evita duas queries no caso comum (mesmo ano).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- segue a competência do header
+    setDvAno((atual) => (atual === dvMes.slice(0, 4) ? atual : dvMes.slice(0, 4)));
+  }, [dvMes]);
+
+  useEffect(() => {
+    let cancelado = false;
+    obterResumoDespesaVariavel(dvAno)
+      .then((r) => { if (!cancelado) setDvResumo(r); })
+      .catch(() => { if (!cancelado) setDvResumo(null); });
+    return () => { cancelado = true; };
+  }, [dvAno]);
+
+  const dvDoMes = dvResumo?.meses.find((m) => m.mes === dvMes);
+  const dvUtilizadoMes = dvDoMes?.utilizado ?? 0;
+  const dvSaldoMes = dvDoMes?.saldo ?? (dvResumo?.limiteMensal ?? 0);
+
   const somaSelecionados = useMemo(() => {
     let s = 0;
     selectedValores.forEach((v) => { s += v; });
@@ -566,6 +673,8 @@ export function FinanceiroPage() {
     contaContabilCod: filterContaContabil.length ? filterContaContabil : undefined,
     centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
     contaBancariaId: filterBanco.length ? filterBanco : undefined,
+    tipoDespesa: filterTipoDespesa.length ? filterTipoDespesa : undefined,
+    formaPgto: filterFormaPgto.length ? filterFormaPgto : undefined,
     dataDe: filterDataDe || undefined,
     dataAte: filterDataAte || undefined,
     emissaoDe: filterEmissaoDe || undefined,
@@ -576,7 +685,7 @@ export function FinanceiroPage() {
     // exportações/relatórios "pelos filtros" — aos lançamentos com TAG.
     ids: mostrarSoTagueados && tags.size > 0 ? Array.from(tags.keys()) : undefined,
   }), [search, filterCompetencia, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
-       filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte, filterValorMin, filterValorMax,
+       filterTipoDespesa, filterFormaPgto, filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte, filterValorMin, filterValorMax,
        mostrarSoTagueados, tags]);
   const competenciaSugerida = filterCompetencia || filterDataDe?.slice(0, 7) || new Date().toISOString().slice(0, 7);
 
@@ -609,6 +718,12 @@ export function FinanceiroPage() {
         return b?.apelido ?? b?.nome ?? id;
       }).join(", ")}`);
     }
+    if (filterTipoDespesa.length) {
+      f.push(`Tipo de despesa: ${filterTipoDespesa.map((t) => TIPO_DESPESA_LABEL[t as TipoDespesa] ?? t).join(", ")}`);
+    }
+    if (filterFormaPgto.length) {
+      f.push(`Forma de pgto: ${filterFormaPgto.map((t) => FORMA_PGTO_LABEL[t as FormaPgto] ?? t).join(", ")}`);
+    }
     if (filterDataDe || filterDataAte) {
       f.push(`Vencimento: ${filterDataDe ? formatDate(filterDataDe) : "…"} a ${filterDataAte ? formatDate(filterDataAte) : "…"}`);
     }
@@ -626,11 +741,16 @@ export function FinanceiroPage() {
       : "Recorte pelos filtros aplicados na tela";
     return { titulo: "Relatório de Lançamentos Financeiros", escopo, filtros: f };
   }, [search, filterCompetencia, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
-      filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte,
+      filterTipoDespesa, filterFormaPgto, filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte,
       filterValorMin, filterValorMax, selectedIds, classificacoesN2, classificacoesN3, bancos,
       mostrarSoTagueados, tags]);
 
-  async function handleExport(formato: "pdf" | "xlsx") {
+  /**
+   * Exporta o recorte (RF 31-jul: passa pela tela de seleção de campos).
+   * `escolha` vem do CamposExportModal — quais colunas, se leva a linha de
+   * filtros e se leva os totais por banco.
+   */
+  async function handleExport(formato: "pdf" | "xlsx", escolha: CamposExportEscolha) {
     const setBusy = formato === "pdf" ? setExportandoPdf : setExportandoXlsx;
     setBusy(true);
     try {
@@ -643,10 +763,16 @@ export function FinanceiroPage() {
         toast.info("Nada para exportar", "Nenhum lançamento no recorte atual.");
         return;
       }
-      const meta = montarMetaExport();
+      const meta = {
+        ...montarMetaExport(),
+        campos: escolha.campos,
+        incluirFiltros: escolha.incluirFiltros,
+        incluirTotais: escolha.incluirTotais,
+      };
       if (capped) meta.aviso = `Exportação limitada às primeiras ${exportRows.length} de ${totalExport} linhas.`;
       if (formato === "pdf") await exportFinanceiroPdf(exportRows, meta);
       else exportFinanceiroXlsx(exportRows, meta);
+      setCamposExportOpen(false);
       toast.success("Exportação concluída", `Arquivo ${formato.toUpperCase()} gerado (${exportRows.length} linha${exportRows.length === 1 ? "" : "s"}).`);
     } catch (e: unknown) {
       toast.error("Falha na exportação", (e as Error).message ?? String(e));
@@ -709,6 +835,7 @@ export function FinanceiroPage() {
   // ---- ações ----
   function openNew() {
     setEditId(null);
+    setEditSnapshot(null);
     setForm({ ...EMPTY_FORM });
     setTipoSaida("global");
     setDlSocioId(""); setDlClassif(""); setDlContaSocioId(""); setDlStatus("provisionado");
@@ -735,6 +862,7 @@ export function FinanceiroPage() {
   }
   function openEdit(row: TransacaoEmpresaRich) {
     setEditId(row.id);
+    setEditSnapshot(row);
     setForm(rowToForm(row));
     setModalOpen(true);
   }
@@ -742,6 +870,7 @@ export function FinanceiroPage() {
   // dados do existente — a Lola ajusta só a descrição (ou o que precisar) e salva.
   function openDuplicate(row: TransacaoEmpresaRich) {
     setEditId(null);
+    setEditSnapshot(null);
     setTipoSaida("global");
     setForm(rowToForm(row));
     setModalOpen(true);
@@ -853,7 +982,17 @@ export function FinanceiroPage() {
               });
             });
           }
-          toast.success("Lançamento atualizado");
+          // Desfazer (RF 31-jul): regrava o snapshot capturado no openEdit.
+          if (editSnapshot) {
+            const anterior = editSnapshot;
+            toast.desfazer("Lançamento atualizado", "Você tem 8 segundos para voltar ao valor anterior.", async () => {
+              await desfazerEdicao("transacoes_empresa", anterior);
+              await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+              toast.info("Edição desfeita", "O lançamento voltou como estava.");
+            });
+          } else {
+            toast.success("Lançamento atualizado");
+          }
         } else {
           // LANÇAMENTOS PARCELADOS (RF 23-jul): "3" gera 1/3..3/3; "2/6" gera
           // 2/6..6/6 — uma parcela por mês, mesmo valor, vencimentos mensais.
@@ -867,20 +1006,38 @@ export function FinanceiroPage() {
                 parcelas: `${i}/${serie.total}`,
               });
             }
-            if (forcado) await criarTransacoesSemSaldoInvest(lote);
-            else await criarTransacoesEmpresaLote(lote);
-            toast.success(
-              `${lote.length} parcelas geradas`,
-              `Parcelas ${serie.inicio}/${serie.total} a ${serie.total}/${serie.total}, vencendo mês a mês a partir de ${formatDate(form.data)}.`,
-            );
+            const resumoParcelas =
+              `Parcelas ${serie.inicio}/${serie.total} a ${serie.total}/${serie.total}, vencendo mês a mês a partir de ${formatDate(form.data)}.`;
+            if (forcado) {
+              // O caminho "Executar mesmo assim" não devolve os ids — sem ids
+              // não há como desfazer com segurança, então só confirma.
+              await criarTransacoesSemSaldoInvest(lote);
+              toast.success(`${lote.length} parcelas geradas`, resumoParcelas);
+            } else {
+              const criadas = await criarTransacoesEmpresaLote(lote);
+              const ids = criadas.map((t) => t.id);
+              toast.desfazer(`${lote.length} parcelas geradas`, resumoParcelas, async () => {
+                await desfazerCriacao("transacoes_empresa", ids);
+                await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+                toast.info("Parcelas removidas", `As ${ids.length} parcelas geradas foram apagadas.`);
+              });
+            }
           } else {
             const unico: TransacaoEmpresaInsert = {
               ...payload,
               parcelas: serie ? `${serie.inicio}/${serie.total}` : payload.parcelas,
             };
-            if (forcado) await criarTransacoesSemSaldoInvest([unico]);
-            else await criarTransacaoEmpresa(unico);
-            toast.success("Lançamento criado");
+            if (forcado) {
+              await criarTransacoesSemSaldoInvest([unico]);
+              toast.success("Lançamento criado");
+            } else {
+              const criado = await criarTransacaoEmpresa(unico);
+              toast.desfazer("Lançamento criado", "Você tem 8 segundos para desfazer.", async () => {
+                await desfazerCriacao("transacoes_empresa", [criado.id]);
+                await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+                toast.info("Criação desfeita", "O lançamento foi removido.");
+              });
+            }
           }
         }
         setModalOpen(false);
@@ -909,6 +1066,8 @@ export function FinanceiroPage() {
 
   async function handleDelete(id: string) {
     if (!confirm("Excluir este lançamento?")) return;
+    // Snapshot antes de apagar — é o que o "Desfazer" reinsere (mesmo id).
+    const snapshot = rows.find((r) => r.id === id);
     try {
       await deletarTransacaoEmpresa(id);
       // Tira o excluído da seleção (se estava) para não somar/exportar fantasma.
@@ -921,7 +1080,15 @@ export function FinanceiroPage() {
         const next = new Map(prev); next.delete(id); return next;
       });
       removerTag(id);
-      toast.success("Lançamento excluído");
+      if (snapshot) {
+        toast.desfazer("Lançamento excluído", "Você tem 8 segundos para recuperá-lo.", async () => {
+          await desfazerExclusao("transacoes_empresa", [snapshot]);
+          await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+          toast.info("Exclusão desfeita", "O lançamento foi restaurado.");
+        });
+      } else {
+        toast.success("Lançamento excluído");
+      }
       await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     } catch (e: unknown) {
       toast.error("Não foi possível excluir", (e as Error).message ?? String(e));
@@ -930,8 +1097,17 @@ export function FinanceiroPage() {
 
   // ---- status direto na tela (1 linha) — padrão da Distribuição (RF 23-jul) ----
   async function mudarStatusInline(row: TransacaoEmpresaRich, status: StatusAramburu) {
+    const statusAnterior = row.status;
     const concluir = async () => {
-      toast.success("Status atualizado", `${row.descricao ?? "Lançamento"}: ${getStatusLabel(status)}.`);
+      toast.desfazer(
+        "Status atualizado",
+        `${row.descricao ?? "Lançamento"}: ${getStatusLabel(status)}.`,
+        async () => {
+          await desfazerStatusEmMassa("transacoes_empresa", [{ id: row.id, status: statusAnterior }]);
+          await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+          toast.info("Status revertido", `Voltou para ${getStatusLabel(statusAnterior)}.`);
+        },
+      );
       await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     };
     try {
@@ -961,8 +1137,21 @@ export function FinanceiroPage() {
     if (!bulkStatus || selectedIds.size === 0) return;
     const ids = Array.from(selectedIds);
     const status = bulkStatus as StatusAramburu;
+    // Status de cada linha ANTES da aplicação — é o que o "Desfazer" restaura.
+    const anteriores = rows
+      .filter((r) => selectedIds.has(r.id))
+      .map((r) => ({ id: r.id, status: r.status as string }));
     const concluir = async (n: number) => {
-      toast.success("Status aplicado", `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"} para "${getStatusLabel(status)}".`);
+      const resumo = `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"} para "${getStatusLabel(status)}".`;
+      if (anteriores.length > 0) {
+        toast.desfazer("Status aplicado", resumo, async () => {
+          await desfazerStatusEmMassa("transacoes_empresa", anteriores);
+          await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+          toast.info("Status revertido", `${anteriores.length} lançamento${anteriores.length === 1 ? "" : "s"} voltou ao status anterior.`);
+        });
+      } else {
+        toast.success("Status aplicado", resumo);
+      }
       limparSelecao();
       setBulkStatus("");
       await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
@@ -995,12 +1184,24 @@ export function FinanceiroPage() {
     const n = selectedIds.size;
     if (n === 0) return;
     const alvo = n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`;
-    if (!confirm(`Excluir DEFINITIVAMENTE ${alvo}? Essa ação não pode ser desfeita.`)) return;
+    if (!confirm(`Excluir ${alvo}? Você ainda terá 8 segundos para desfazer.`)) return;
+    // Snapshots antes de apagar — o "Desfazer" reinsere com os mesmos ids.
+    const snapshots = rows.filter((r) => selectedIds.has(r.id));
     setBulkDeleteBusy(true);
     try {
       const excluidos = await deletarTransacoesEmpresaEmMassa(Array.from(selectedIds));
       if (excluidos < n) {
         toast.warning("Exclusão parcial", `${excluidos} de ${n} lançamentos excluídos — os demais podem estar protegidos (permissão).`);
+      } else if (snapshots.length > 0) {
+        toast.desfazer(
+          "Lançamentos excluídos",
+          `${excluidos} lançamento${excluidos === 1 ? "" : "s"} excluído${excluidos === 1 ? "" : "s"} de uma vez. Você tem 8 segundos para recuperá-los.`,
+          async () => {
+            await desfazerExclusao("transacoes_empresa", snapshots);
+            await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+            toast.info("Exclusão desfeita", `${snapshots.length} lançamento${snapshots.length === 1 ? "" : "s"} restaurado${snapshots.length === 1 ? "" : "s"}.`);
+          },
+        );
       } else {
         toast.success("Lançamentos excluídos", `${excluidos} lançamento${excluidos === 1 ? "" : "s"} excluído${excluidos === 1 ? "" : "s"} de uma vez.`);
       }
@@ -1060,14 +1261,16 @@ export function FinanceiroPage() {
               ).map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </label>
-          <Button variant="outline" size="sm" onClick={() => handleExport("pdf")}
+          {/* RF 31-jul: os dois botões abrem a MESMA tela de seleção de campos;
+              o formato final é escolhido lá dentro. */}
+          <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
             loading={exportandoPdf} disabled={exportandoPdf || exportandoXlsx}
-            title="Exporta um PDF espelho da tela com os lançamentos selecionados ou filtrados">
+            title="Escolhe os campos e exporta um PDF com os lançamentos selecionados ou filtrados">
             <FileDown size={14} /> {selectedIds.size > 0 ? `Exportar PDF (${selectedIds.size})` : "Exportar PDF"}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => handleExport("xlsx")}
+          <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
             loading={exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
-            title="Exporta uma planilha XLSX com os lançamentos selecionados ou filtrados">
+            title="Escolhe os campos e exporta uma planilha XLSX com os lançamentos selecionados ou filtrados">
             <FileSpreadsheet size={14} /> {selectedIds.size > 0 ? `Exportar XLSX (${selectedIds.size})` : "Exportar XLSX"}
           </Button>
           <Button variant="outline" size="sm" onClick={abrirEscopo}
@@ -1116,7 +1319,7 @@ export function FinanceiroPage() {
 
       {/* Indicadores de vencimento — foto global dos lançamentos em aberto (ajuste 24-jul) */}
       {indicadores && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
           {indicadorCards.map((c) => (
             <button
               key={c.key}
@@ -1142,8 +1345,110 @@ export function FinanceiroPage() {
               </span>
             </button>
           ))}
+
+          {/* Despesa Variável (RF 31-jul) — 5º card, estreito como os demais.
+              Clique abre o histórico mensal do ano. */}
+          <button
+            type="button"
+            onClick={() => setDvOpen(true)}
+            title={
+              `Saldo de Despesas Variáveis da competência ${mesHumano(dvMes)}: limite mensal ` +
+              `${formatCurrency(dvResumo?.limiteMensal ?? 0)} − utilizado ${formatCurrency(dvUtilizadoMes)}. ` +
+              `Considera os lançamentos com Tipo de Despesa "Despesas Variáveis" nos status A pagar, Pago e ` +
+              `Provisionado (a linha consolidada "Provisionado DV" é o próprio saldo e não entra na conta). ` +
+              `Clique para ver o histórico mês a mês.`
+            }
+            className="rounded-xl border border-stone-200 bg-white shadow-sm px-3.5 py-2.5 flex items-center gap-3 text-left transition-colors hover:border-stone-300 hover:bg-stone-50 cursor-pointer"
+          >
+            <span className="h-8 w-8 shrink-0 rounded-full flex items-center justify-center bg-sky-50 text-sky-600">
+              <BarChart3 size={15} />
+            </span>
+            <span className="leading-tight min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wide truncate text-sky-700">
+                Despesa Variável · {mesHumano(dvMes)}
+              </p>
+              <p className="text-sm font-bold tabular-nums whitespace-nowrap text-stone-800">
+                <span className="font-normal text-stone-400">saldo</span>{" "}
+                <span className={dvSaldoMes < 0 ? "text-red-600" : "text-emerald-700"}>
+                  {formatCurrency(dvSaldoMes)}
+                </span>
+              </p>
+            </span>
+          </button>
         </div>
       )}
+
+      {/* Histórico de Despesas Variáveis (RF 31-jul) */}
+      <Modal open={dvOpen} onClose={() => setDvOpen(false)} title="Despesas Variáveis" size="lg">
+        <div className="px-6 pt-4 flex items-center gap-3">
+          <span className="h-9 w-9 shrink-0 rounded-full flex items-center justify-center bg-emerald-50 text-emerald-600">
+            <BarChart3 size={17} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-stone-800">Histórico mensal</p>
+            <p className="text-xs text-stone-500">
+              Limite de {formatCurrency(dvResumo?.limiteMensal ?? 0)} por mês · ano {dvAno}
+            </p>
+          </div>
+          <select
+            value={dvAno}
+            onChange={(e) => setDvAno(e.target.value)}
+            className="ml-auto h-8 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+            aria-label="Ano do histórico"
+          >
+            {dvAnos.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </div>
+        <div className="p-4">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-stone-800 text-white">
+                {["Mês", "Utilizado (R$)", "Saldo do mês (R$)", "Saldo acumulado (R$)"].map((h, i) => (
+                  <th key={h} className={`px-3 py-2 font-semibold uppercase tracking-wide ${i === 0 ? "text-left" : "text-right"}`}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(dvResumo?.meses ?? []).map((m) => (
+                <tr key={m.mes} className={`border-b border-stone-50 ${m.mes === dvMes ? "bg-accent-50/60" : ""}`}>
+                  <td className="px-3 py-2 text-stone-700 font-medium whitespace-nowrap">
+                    <CalendarDays size={11} className="inline-block mr-1.5 text-stone-400" />
+                    {NOME_MES[Number(m.mes.slice(5)) - 1]}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-stone-700">{formatCurrency(m.utilizado)}</td>
+                  <td className={`px-3 py-2 text-right tabular-nums font-medium ${m.saldo < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                    {formatCurrency(m.saldo)}
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${m.saldoAcumulado < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                    {formatCurrency(m.saldoAcumulado)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="mt-3 rounded-xl bg-emerald-50/60 border border-emerald-100 px-4 py-3 flex flex-wrap items-center gap-x-10 gap-y-2">
+            <span className="leading-tight">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Total utilizado</p>
+              <p className="text-base font-bold tabular-nums text-stone-800">
+                {formatCurrency(dvResumo?.totalUtilizado ?? 0)}
+              </p>
+            </span>
+            <span className="leading-tight">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Saldo disponível no ano</p>
+              <p className={`text-base font-bold tabular-nums ${(dvResumo?.saldoAno ?? 0) < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                {formatCurrency(dvResumo?.saldoAno ?? 0)}
+              </p>
+            </span>
+          </div>
+          <p className="mt-2 text-[11px] text-stone-400 text-center">
+            Orçamento mensal programado: {formatCurrency(dvResumo?.limiteMensal ?? 0)} · ajustável em
+            Configurações → Automações
+          </p>
+        </div>
+      </Modal>
 
       {/* Tabela */}
       <Card>
@@ -1210,6 +1515,28 @@ export function FinanceiroPage() {
               searchPlaceholder="Buscar banco…"
               emptyText="Nenhum banco"
               unitLabel="bancos"
+            />
+            {/* Tipo de Despesa e Forma de Pagamento (RF 31-jul). A dupla
+                "competência + Cartão de Crédito" é o recorte da FATURA do mês. */}
+            <MultiSelect
+              className="w-40"
+              value={filterTipoDespesa}
+              onChange={(v) => { setFilterTipoDespesa(v); setPage(1); }}
+              options={TIPO_DESPESA_OPTIONS}
+              placeholder="Todas as despesas"
+              searchPlaceholder="Buscar tipo…"
+              emptyText="Nenhum tipo"
+              unitLabel="tipos"
+            />
+            <MultiSelect
+              className="w-44"
+              value={filterFormaPgto}
+              onChange={(v) => { setFilterFormaPgto(v); setPage(1); }}
+              options={FORMA_PGTO_OPTIONS}
+              placeholder="Todas as formas de pgto"
+              searchPlaceholder="Buscar forma de pgto…"
+              emptyText="Nenhuma forma"
+              unitLabel="formas"
             />
             {/* Período por VENCIMENTO (RF 23-jul: substitui o filtro de mês) */}
             <div
@@ -1383,6 +1710,14 @@ export function FinanceiroPage() {
               className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
               title="Exclui DE UMA VEZ todos os lançamentos selecionados (pede confirmação)">
               <Trash2 size={13} /> Excluir selecionados
+            </Button>
+            {/* Ver todos os selecionados (RF 31-jul): a seleção sobrevive à troca
+                de filtros/página, mas só o recorte atual aparece na tabela — aqui
+                ela confere a lista COMPLETA antes de aplicar status ou emitir o
+                relatório. */}
+            <Button size="sm" variant="outline" onClick={abrirSelecionados}
+              title="Abre a lista completa dos lançamentos selecionados, inclusive os que estão fora do filtro/página atual">
+              <ListChecks size={13} /> Ver selecionados ({selectedIds.size})
             </Button>
             {/* Autossoma estilo Excel (RF 24-jul) — soma com sinal dos selecionados */}
             <span
@@ -1737,6 +2072,98 @@ export function FinanceiroPage() {
         </div>
       </Modal>
       <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
+
+      {/* Seleção de campos antes de exportar (RF 31-jul) */}
+      <CamposExportModal
+        open={camposExportOpen}
+        onClose={() => setCamposExportOpen(false)}
+        totalLinhas={selectedIds.size > 0 ? selectedIds.size : total}
+        escopo={selectedIds.size > 0 ? "Seleção manual" : "Recorte pelos filtros da tela"}
+        exportando={exportandoPdf ? "pdf" : exportandoXlsx ? "xlsx" : null}
+        onExportar={handleExport}
+      />
+
+      {/* Lista completa da seleção (RF 31-jul) — inclusive fora do filtro/página */}
+      <Modal
+        open={selecionadosOpen}
+        onClose={() => setSelecionadosOpen(false)}
+        title={`Lançamentos selecionados (${selectedIds.size})`}
+        size="xl"
+      >
+        <div className="px-6 pt-4 text-xs text-stone-500 leading-relaxed">
+          Todos os lançamentos marcados, <b>independentemente dos filtros</b> aplicados na tela — é
+          esta lista que vai para o status em massa, a exportação e o relatório.
+        </div>
+        <div className="p-4 max-h-[60vh] overflow-auto">
+          {selecionadosLoading ? (
+            <div className="py-12 text-center text-stone-400">
+              <Loader2 size={18} className="inline-block animate-spin mr-2" /> Carregando…
+            </div>
+          ) : selecionadosRows.length === 0 ? (
+            <div className="py-12 text-center text-stone-400">Nenhum lançamento na seleção.</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-stone-50 border-b border-stone-100 text-stone-500 uppercase tracking-wide">
+                  {["Vencimento", "Conta", "Descrição", "Fornecedor", "Banco", "Status", "Valor", ""].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left font-semibold whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {selecionadosRows.map((r) => (
+                  <tr key={r.id} className="border-b border-stone-50 hover:bg-stone-50">
+                    <td className="px-3 py-2 whitespace-nowrap text-stone-500">{formatDate(r.data)}</td>
+                    <td className="px-3 py-2 text-stone-600 whitespace-nowrap">{r.conta_contabil_cod}</td>
+                    <td className="px-3 py-2 text-stone-700 max-w-[260px] truncate" title={r.descricao ?? ""}>
+                      {r.descricao ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 text-stone-500 max-w-[160px] truncate" title={r.fornecedor_nome ?? ""}>
+                      {r.fornecedor_nome ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 text-stone-500 whitespace-nowrap">
+                      {r.conta_bancaria?.apelido ?? r.conta_bancaria?.nome ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap text-stone-600">{getStatusLabel(r.status)}</td>
+                    <td className={`px-3 py-2 font-semibold tabular-nums whitespace-nowrap ${
+                      Number(r.valor) < 0 ? "text-red-600" : "text-emerald-700"}`}>
+                      {formatCurrency(Number(r.valor))}
+                    </td>
+                    <td className="px-3 py-2">
+                      <button
+                        onClick={() => removerDaSelecao(r.id)}
+                        className="text-stone-400 hover:text-red-600 transition cursor-pointer"
+                        title="Tirar este lançamento da seleção"
+                        aria-label="Tirar da seleção"
+                      >
+                        <X size={13} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700">
+                  <td colSpan={6} className="px-3 py-2 uppercase tracking-wide">
+                    Soma da seleção ({selecionadosRows.length})
+                  </td>
+                  <td className="px-3 py-2 tabular-nums whitespace-nowrap">
+                    {formatCurrency(selecionadosRows.reduce((s, r) => s + Number(r.valor), 0))}
+                  </td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
+        <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-between gap-2 bg-stone-50/50">
+          <button onClick={() => { limparSelecao(); setSelecionadosOpen(false); }}
+            className="text-xs text-stone-500 hover:text-red-600 underline cursor-pointer">
+            limpar seleção inteira
+          </button>
+          <Button variant="outline" onClick={() => setSelecionadosOpen(false)}>Fechar</Button>
+        </div>
+      </Modal>
 
       {/* Geração de relatório pelo recorte (RF-FIN-09) */}
       <RelatorioEscopoModal

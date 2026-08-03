@@ -233,6 +233,10 @@ export async function adicionarStatus(p: NovoStatusPayload): Promise<void> {
 // Configurações gerais (app_config — migration 0047, Configurações → Automações)
 // ----------------------------------------------------------------------------
 export const CONFIG_RESGATES_SICREDI = "resgates_automaticos_sicredi";
+/** Teto mensal de Despesas Variáveis — card DV do Financeiro (0048). */
+export const CONFIG_LIMITE_DV = "limite_despesa_variavel_mensal";
+/** Dia do vencimento da fatura do cartão Sicredi — resgate consolidado (0048). */
+export const CONFIG_FATURA_CARTAO_DIA = "fatura_cartao_sicredi_dia";
 
 /** Lê uma configuração; retorna o fallback se não existir (ou tabela ausente). */
 export async function obterConfigApp(chave: string, fallback: string): Promise<string> {

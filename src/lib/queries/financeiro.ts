@@ -3,6 +3,7 @@
 
 import { createClient } from "@/lib/supabase/client";
 import { compararCodigo } from "./configuracoes";
+import { semCamposDeOrigem } from "./preservar-origem";
 import type {
   TransacaoEmpresaRow,
   TransacaoEmpresaInsert,
@@ -26,6 +27,14 @@ export interface ListarTransacoesFiltros {
   contaContabilCod?: string | string[];  // "2.7" — 1 conta ou lista (multi-seleção)
   centroCustoCod?: string | string[]; // "2.7.2" — string (1) ou lista (multi-seleção)
   contaBancariaId?: string | string[];   // 1 banco ou lista (multi-seleção)
+  /** Tipo de despesa (fixa/variável/eventual/periódica) — RF 31-jul. */
+  tipoDespesa?: string | string[];
+  /**
+   * Forma de pagamento — RF 31-jul. Serve principalmente ao controle da FATURA
+   * DO CARTÃO: escolher a competência + "Cartão de Crédito" lista tudo que cai
+   * na fatura do mês.
+   */
+  formaPgto?: string | string[];
   mesReferencia?: string;           // "YYYY-MM" (legado — relatórios antigos)
   dataDe?: string;                  // vencimento (coluna data)
   dataAte?: string;
@@ -80,6 +89,8 @@ function aplicarFiltros<T>(query: T, filtros: ListarTransacoesFiltros): T {
   r = eqOuIn(r, "centro_custo_cod", filtros.centroCustoCod);
   r = eqOuIn(r, "conta_contabil_cod", filtros.contaContabilCod);
   r = eqOuIn(r, "conta_bancaria_id", filtros.contaBancariaId);
+  r = eqOuIn(r, "tipo_despesa", filtros.tipoDespesa);
+  r = eqOuIn(r, "forma_pgto", filtros.formaPgto);
   if (filtros.mesReferencia)     r = r.eq("mes_referencia", filtros.mesReferencia);
   if (filtros.dataDe)            r = r.gte("data", filtros.dataDe);
   if (filtros.dataAte)           r = r.lte("data", filtros.dataAte);
@@ -310,6 +321,92 @@ export async function getIndicadoresVencimentos(): Promise<IndicadoresVencimento
   return r;
 }
 
+// ----------------------------------------------------------------------------
+// Despesas Variáveis (DV) — RF 31-jul-2026
+// ----------------------------------------------------------------------------
+// Espelha a fórmula que a Adriane usava na planilha:
+//
+//   =-1*( SOMASES(valor; mês; "Agosto"; tipo; "Despesas Variáveis"; status; "A pagar")
+//       + SOMASES(... ; status; "Pago")
+//       + SOMASES(... ; status; "Provisionado") ) - 20000
+//
+// Dois pontos que a fórmula deixa explícitos e valem ouro aqui:
+//
+//   1. O status "Provisionado DV" NÃO entra na soma. Aquela linha consolidada
+//      que ela deixa lançada no financeiro É o próprio saldo (utilizado + linha
+//      DV = 20.000). Somá-la junto zeraria o indicador todo mês.
+//   2. O sinal: os lançamentos são negativos; o -1 traz o "utilizado" positivo.
+//
+// Conferência contra a planilha dela: fev/2026 → utilizado 11.916,92 e saldo
+// 8.083,08 — exatamente o que aparece no print do Excel.
+const DV_STATUS_UTILIZADO: StatusAramburu[] = ["a_pagar", "pago", "provisionado"];
+
+/** Limite mensal de DV (app_config). Default 20k = o valor que ela usa hoje. */
+export const DV_LIMITE_PADRAO = 20000;
+
+export interface DespesaVariavelMes {
+  mes: string;            // "YYYY-MM"
+  utilizado: number;      // positivo
+  saldo: number;          // limite − utilizado (negativo = estourou)
+  saldoAcumulado: number; // soma corrida dos saldos do ano
+}
+
+export interface ResumoDespesaVariavel {
+  limiteMensal: number;
+  meses: DespesaVariavelMes[];
+  totalUtilizado: number;
+  saldoAno: number;
+}
+
+export async function obterLimiteDespesaVariavel(): Promise<number> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("app_config").select("valor").eq("chave", "limite_despesa_variavel_mensal").maybeSingle();
+  if (error) return DV_LIMITE_PADRAO;   // chave ainda não criada → default
+  const n = Number((data as { valor: string } | null)?.valor);
+  return Number.isFinite(n) && n > 0 ? n : DV_LIMITE_PADRAO;
+}
+
+/**
+ * Histórico mensal de Despesas Variáveis de um ano — alimenta o card do
+ * Financeiro e o modal "Despesas Variáveis / Histórico mensal".
+ */
+export async function obterResumoDespesaVariavel(ano: string): Promise<ResumoDespesaVariavel> {
+  const supabase = createClient();
+  const [limiteMensal, res] = await Promise.all([
+    obterLimiteDespesaVariavel(),
+    supabase
+      .from("transacoes_empresa")
+      .select("mes_referencia, valor")
+      .eq("tipo_despesa", "variavel")
+      .in("status", DV_STATUS_UTILIZADO)
+      .gte("data", `${ano}-01-01`)
+      .lte("data", `${ano}-12-31`)
+      .range(0, 9999),
+  ]);
+  if (res.error) throw res.error;
+
+  const porMes = new Map<string, number>();
+  for (const r of (res.data ?? []) as { mes_referencia: string; valor: number }[]) {
+    porMes.set(r.mes_referencia, (porMes.get(r.mes_referencia) ?? 0) - Number(r.valor));
+  }
+
+  // Os 12 meses sempre aparecem: o histórico é uma leitura do ano inteiro, e
+  // um mês sem lançamento tem saldo cheio (é informação, não ausência dela).
+  const meses: DespesaVariavelMes[] = [];
+  let acumulado = 0;
+  let totalUtilizado = 0;
+  for (let m = 1; m <= 12; m++) {
+    const chave = `${ano}-${String(m).padStart(2, "0")}`;
+    const utilizado = porMes.get(chave) ?? 0;
+    const saldo = limiteMensal - utilizado;
+    acumulado += saldo;
+    totalUtilizado += utilizado;
+    meses.push({ mes: chave, utilizado, saldo, saldoAcumulado: acumulado });
+  }
+  return { limiteMensal, meses, totalUtilizado, saldoAno: acumulado };
+}
+
 /**
  * Meses (YYYY-MM) com lançamento na empresa, do menor ao maior, incluindo o mês
  * corrente — alimenta o seletor de Competência do header (ajuste 28-jul).
@@ -376,7 +473,10 @@ export async function atualizarTransacaoEmpresa(
   const supabase = createClient();
   const { data, error } = await supabase
     .from("transacoes_empresa")
-    .update(payload)
+    // A edição nunca toca em origem_planilha (ver preservar-origem.ts): apagar a
+    // etiqueta transformava linhas automáticas (DL, repasse, resgate do Invest)
+    // em "manuais" e travava os triggers que as mantêm.
+    .update(semCamposDeOrigem(payload))
     .eq("id", id)
     .select()
     .maybeSingle();
@@ -470,7 +570,7 @@ export async function atualizarTransacaoSemSaldoInvest(
   const supabase = createClient();
   const { error } = await supabase.rpc(
     "fn_atualizar_transacao_sem_saldo_invest" as never,
-    { p_id: id, p_payload: payload } as never,
+    { p_id: id, p_payload: semCamposDeOrigem(payload) } as never,
   );
   if (error) throw error;
 }

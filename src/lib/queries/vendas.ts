@@ -1,6 +1,7 @@
 // Queries do módulo Vendas Futuras / Provisionamento.
 
 import { createClient } from "@/lib/supabase/client";
+import { semCamposDeOrigem } from "./preservar-origem";
 import type {
   CulturaSafra,
   VendaProvisionadaRichRow,
@@ -67,7 +68,8 @@ export async function atualizarVenda(id: string, payload: VpUpdate): Promise<voi
   const supabase = createClient();
   const { error, data } = await supabase
     .from("vendas_provisionadas")
-    .update(payload)
+    // Preserva origem_planilha (venda_auto:/venda_taxa_auto:) — ver preservar-origem.ts.
+    .update(semCamposDeOrigem(payload))
     .eq("id", id)
     .select("id")
     .maybeSingle();

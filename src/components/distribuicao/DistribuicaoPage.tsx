@@ -25,6 +25,9 @@ import {
   listarSocios, listarClassificacoesPessoais, listarContasDoSocio, listarMesesDetalhado,
   type TransacaoSocioRich, type GlobalEmpresaMes, type RepasseConsolidado,
 } from "@/lib/queries/distribuicao";
+import {
+  desfazerCriacao, desfazerEdicao, desfazerExclusao, desfazerStatusEmMassa,
+} from "@/lib/queries/desfazer";
 import { exportDistribuicaoPdf, exportDistribuicaoXlsx } from "@/lib/export/distribuicao-export";
 import {
   STATUS_DL_LABEL, STATUS_DL_COLOR,
@@ -73,6 +76,28 @@ const mesCorrente = () => {
   const h = new Date();
   return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, "0")}`;
 };
+
+/** "2026-08" → "08/2026" (rótulo da competência na tabela). */
+const mesHumano = (m: string) => (m?.length === 7 ? `${m.slice(5)}/${m.slice(0, 4)}` : m || "—");
+
+/**
+ * A COMPETÊNCIA da Distribuição de Lucro é um campo próprio (grava
+ * `data = AAAA-MM-01`) e NÃO acompanha a Data do Repasse / o Vencimento — ao
+ * contrário do Financeiro, onde a competência É o mês do vencimento. Isso é
+ * proposital (folha de abril paga em maio continua sendo competência de abril),
+ * mas gerava confusão: um lançamento com as duas datas em 30/08 seguia
+ * aparecendo na consulta de julho, sem nada na tela explicando o porquê
+ * (apontamento de 31-jul-2026).
+ *
+ * Esta função devolve o mês que as DATAS do lançamento sugerem, quando ele
+ * diverge da competência — a tabela então marca a linha e oferece mover.
+ */
+function competenciaSugerida(r: TransacaoSocioRich): string | null {
+  const base = r.data_vencimento ?? r.data_vencimento_despesa;
+  if (!base) return null;
+  const mes = base.slice(0, 7);
+  return mes !== r.mes_referencia ? mes : null;
+}
 
 /**
  * TAG do dia (ajuste 27-jul — idem ao Financeiro): o "pintar de amarelo" da
@@ -376,10 +401,17 @@ export function DistribuicaoPage() {
   // ---- ações em massa ----
   async function aplicarEmMassa(payload: { status?: StatusDL; data_vencimento?: string }, rotulo: string) {
     if (selectedIds.size === 0) return;
+    // Snapshots antes da aplicação — base do "Desfazer" (RF 31-jul). Restaura
+    // linha a linha porque a ação em massa pode mexer em status E vencimento.
+    const anteriores = rows.filter((r) => selectedIds.has(r.id));
     setBulkBusy(true);
     try {
       const n = await atualizarDetalhadoEmMassa(Array.from(selectedIds), payload);
-      toast.success(rotulo, `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"}.`);
+      toast.desfazer(rotulo, `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"}.`, async () => {
+        for (const a of anteriores) await desfazerEdicao("transacoes_socio", a);
+        await fetchData();
+        toast.info("Alteração revertida", `${anteriores.length} lançamento${anteriores.length === 1 ? "" : "s"} voltou como estava.`);
+      });
       setSelectedIds(new Set());
       await fetchData();
     } catch (e: unknown) {
@@ -393,12 +425,23 @@ export function DistribuicaoPage() {
   async function excluirSelecionados() {
     const n = selectedIds.size;
     if (n === 0) return;
-    if (!confirm(`Excluir DEFINITIVAMENTE ${n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`}? Essa ação não pode ser desfeita.`)) return;
+    if (!confirm(`Excluir ${n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`}? Você ainda terá 8 segundos para desfazer.`)) return;
+    const snapshots = rows.filter((r) => selectedIds.has(r.id));
     setBulkDeleteBusy(true);
     try {
       const excluidos = await deletarDetalhadoEmMassa(Array.from(selectedIds));
       if (excluidos < n) {
         toast.warning("Exclusão parcial", `${excluidos} de ${n} lançamentos excluídos — os demais podem estar vinculados a repasse ou protegidos.`);
+      } else if (snapshots.length > 0) {
+        toast.desfazer(
+          "Lançamentos excluídos",
+          `${excluidos} lançamento${excluidos === 1 ? "" : "s"} excluído${excluidos === 1 ? "" : "s"} de uma vez. Você tem 8 segundos para recuperá-los.`,
+          async () => {
+            await desfazerExclusao("transacoes_socio", snapshots);
+            await fetchData();
+            toast.info("Exclusão desfeita", `${snapshots.length} lançamento${snapshots.length === 1 ? "" : "s"} restaurado${snapshots.length === 1 ? "" : "s"}.`);
+          },
+        );
       } else {
         toast.success("Lançamentos excluídos", `${excluidos} lançamento${excluidos === 1 ? "" : "s"} excluído${excluidos === 1 ? "" : "s"} de uma vez.`);
       }
@@ -511,12 +554,39 @@ export function DistribuicaoPage() {
 
   // ---- status inline (1 linha) ----
   async function mudarStatus(row: TransacaoSocioRich, status: StatusDL) {
+    const statusAnterior = row.status;
     try {
       await atualizarDetalhado(row.id, { status });
-      toast.success("Status atualizado", `${row.descricao}: ${STATUS_DL_LABEL[status]}.`);
+      toast.desfazer("Status atualizado", `${row.descricao}: ${STATUS_DL_LABEL[status]}.`, async () => {
+        await desfazerStatusEmMassa("transacoes_socio", [{ id: row.id, status: statusAnterior }]);
+        await fetchData();
+        toast.info("Status revertido", `Voltou para ${STATUS_DL_LABEL[statusAnterior]}.`);
+      });
       await fetchData();
     } catch (e: unknown) {
       toast.error("Não foi possível mudar o status", (e as Error).message ?? String(e));
+    }
+  }
+
+  /**
+   * Move a COMPETÊNCIA do lançamento para o mês indicado (RF 31-jul) — o atalho
+   * do aviso na coluna Competência. Grava só `data`, que é a coluna de onde o
+   * `mes_referencia` é derivado; datas de repasse/vencimento ficam como estão.
+   */
+  async function moverCompetencia(row: TransacaoSocioRich, destino: string) {
+    if (row.repasse_id) {
+      toast.warning("Lançamento vinculado a repasse", "Desfaça o repasse antes de mudar a competência.");
+      return;
+    }
+    try {
+      await atualizarDetalhado(row.id, { data: `${destino}-01` });
+      toast.success(
+        `Competência movida para ${mesHumano(destino)}`,
+        `"${row.descricao}" sai do recorte de ${mesHumano(row.mes_referencia)}.`,
+      );
+      await fetchData();
+    } catch (e: unknown) {
+      toast.error("Não foi possível mover a competência", (e as Error).message ?? String(e));
     }
   }
 
@@ -598,11 +668,20 @@ export function DistribuicaoPage() {
     setSaving(true);
     try {
       if (editRow) {
+        const anterior = editRow;
         await atualizarDetalhado(editRow.id, payload);
-        toast.success("Lançamento atualizado");
+        toast.desfazer("Lançamento atualizado", "Você tem 8 segundos para voltar ao valor anterior.", async () => {
+          await desfazerEdicao("transacoes_socio", anterior);
+          await fetchData();
+          toast.info("Edição desfeita", "O lançamento voltou como estava.");
+        });
       } else {
-        await criarDetalhado(payload);
-        toast.success("Lançamento detalhado criado");
+        const criado = await criarDetalhado(payload);
+        toast.desfazer("Lançamento detalhado criado", "Você tem 8 segundos para desfazer.", async () => {
+          await desfazerCriacao("transacoes_socio", [criado.id]);
+          await fetchData();
+          toast.info("Criação desfeita", "O lançamento foi removido.");
+        });
       }
       setModalOpen(false);
       await fetchData();
@@ -622,7 +701,11 @@ export function DistribuicaoPage() {
     try {
       await deletarDetalhado(row.id);
       removerTag(row.id);
-      toast.success("Lançamento excluído");
+      toast.desfazer("Lançamento excluído", "Você tem 8 segundos para recuperá-lo.", async () => {
+        await desfazerExclusao("transacoes_socio", [row]);
+        await fetchData();
+        toast.info("Exclusão desfeita", "O lançamento foi restaurado.");
+      });
       await fetchData();
     } catch (e: unknown) {
       toast.error("Não foi possível excluir", (e as Error).message ?? String(e));
@@ -1059,19 +1142,19 @@ export function DistribuicaoPage() {
                   <th className="px-1 py-3 w-8" title="Tag do dia — o 'pintar de amarelo' da planilha: marque o que está sendo trabalhado hoje">
                     <Tag size={12} className="text-amber-400 mx-auto" />
                   </th>
-                  {["Data do Repasse","Sócio","Classificação","Descrição","Conta destino","Vencimento","Valor","Status","Repasse","Ações"].map((h) => (
+                  {["Data do Repasse","Competência","Sócio","Classificação","Descrição","Conta destino","Vencimento","Valor","Status","Repasse","Ações"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={13} className="px-4 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="inline-block animate-spin mr-2" /> Carregando…
                   </td></tr>
                 )}
                 {!loading && rowsVisiveis.length === 0 && (
-                  <tr><td colSpan={12} className="px-4 py-12 text-center text-stone-400">
+                  <tr><td colSpan={13} className="px-4 py-12 text-center text-stone-400">
                     Nenhum lançamento detalhado no recorte. Clique em {"“Novo lançamento detalhado”"} para começar
                     — ou lance pelo Financeiro escolhendo {"“Saída detalhada”"} na conta 2.8.
                   </td></tr>
@@ -1107,6 +1190,38 @@ export function DistribuicaoPage() {
                       </td>
                       <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">
                         {r.data_vencimento ? formatDate(r.data_vencimento) : <span className="text-stone-300">—</span>}
+                      </td>
+                      {/* Competência — visível na linha (RF 31-jul): é ela que manda no
+                          recorte do mês, não as datas de repasse/vencimento. */}
+                      <td className="px-4 py-3 text-xs whitespace-nowrap">
+                        {(() => {
+                          const sugerida = competenciaSugerida(r);
+                          if (!sugerida) {
+                            return <span className="text-stone-500 tabular-nums">{mesHumano(r.mes_referencia)}</span>;
+                          }
+                          return (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="text-stone-700 tabular-nums font-medium">{mesHumano(r.mes_referencia)}</span>
+                              <button
+                                type="button"
+                                onClick={() => moverCompetencia(r, sugerida)}
+                                disabled={vinculado}
+                                title={
+                                  `Este lançamento está na competência ${mesHumano(r.mes_referencia)}, mas as datas ` +
+                                  `são de ${mesHumano(sugerida)} — por isso ele continua aparecendo no recorte de ` +
+                                  `${mesHumano(r.mes_referencia)}. ` +
+                                  (vinculado
+                                    ? "Já consolidado em repasse: desfaça o repasse para mover."
+                                    : `Clique para mover a competência para ${mesHumano(sugerida)}.`)
+                                }
+                                className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-amber-700 bg-amber-100 hover:bg-amber-200 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                <AlertTriangle size={10} />
+                                → {mesHumano(sugerida)}
+                              </button>
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3 text-stone-700 text-xs font-medium whitespace-nowrap">
                         {r.socio?.apelido ?? r.socio?.nome_completo ?? "—"}
@@ -1164,7 +1279,7 @@ export function DistribuicaoPage() {
               {!loading && rowsVisiveis.length > 0 && (
                 <tfoot>
                   <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700 text-xs">
-                    <td colSpan={8} className="px-4 py-2.5 uppercase tracking-wide">Total do recorte</td>
+                    <td colSpan={9} className="px-4 py-2.5 uppercase tracking-wide">Total do recorte</td>
                     <td className="px-4 py-2.5">{formatCurrency(rowsVisiveis.reduce((s, r) => s + Number(r.valor), 0))}</td>
                     <td colSpan={3}></td>
                   </tr>

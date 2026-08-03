@@ -2,10 +2,12 @@
 // Espelha a planilha "Provisionamento Safra 25.25 - Copasul.xlsx".
 
 import { createClient } from "@/lib/supabase/client";
+import { semCamposDeOrigem } from "./preservar-origem";
 import type {
   ArmazemRow,
   SafraParametrosRow,
   SafraDepositoCalculadoRow,
+  SafraDepositoRow,
   CulturaSafra,
   Database,
 } from "@/types";
@@ -140,22 +142,36 @@ export async function listarDepositosCalculados(filtros: ListarDepositosFiltros 
   return (data ?? []) as SafraDepositoCalculadoRow[];
 }
 
-export async function criarDeposito(payload: SdInsert): Promise<void> {
+export async function criarDeposito(payload: SdInsert): Promise<SafraDepositoRow> {
   const supabase = createClient();
   const { error, data } = await supabase
     .from("safra_depositos")
     .insert(payload)
-    .select("id")
+    .select("*")
     .maybeSingle();
   if (error) throw error;
   if (!data) throw new Error("Falha ao criar depósito");
+  return data as SafraDepositoRow;
+}
+
+/**
+ * Linha do depósito na TABELA BASE (não na view calculada) — usada como
+ * snapshot do "Desfazer" ao abrir a edição (RF 31-jul).
+ */
+export async function obterDeposito(id: string): Promise<SafraDepositoRow | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("safra_depositos").select("*").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return (data as SafraDepositoRow | null) ?? null;
 }
 
 export async function atualizarDeposito(id: string, payload: SdUpdate): Promise<void> {
   const supabase = createClient();
   const { error, data } = await supabase
     .from("safra_depositos")
-    .update(payload)
+    // Preserva origem_planilha (procedência da importação) — ver preservar-origem.ts.
+    .update(semCamposDeOrigem(payload))
     .eq("id", id)
     .select("id")
     .maybeSingle();
@@ -163,15 +179,25 @@ export async function atualizarDeposito(id: string, payload: SdUpdate): Promise<
   if (!data) throw new Error("Falha ao atualizar depósito");
 }
 
-export async function deletarDeposito(id: string): Promise<void> {
+/**
+ * Exclui um depósito e DEVOLVE a linha apagada (colunas da tabela base).
+ *
+ * A listagem da tela vem da view `v_safra_depositos_calculado`, que carrega
+ * colunas calculadas (kg líquido, saldo, taxas) inexistentes em
+ * `safra_depositos` — reinserir a partir dela quebraria. O retorno do próprio
+ * DELETE é o snapshot fiel para o "Desfazer" (RF 31-jul).
+ */
+export async function deletarDeposito(id: string): Promise<SafraDepositoRow> {
   const supabase = createClient();
   const { error, data } = await supabase
     .from("safra_depositos")
     .delete()
     .eq("id", id)
-    .select("id");
+    .select("*")
+    .maybeSingle();
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Depósito não encontrado ou sem permissão");
+  if (!data) throw new Error("Depósito não encontrado ou sem permissão");
+  return data as SafraDepositoRow;
 }
 
 // ----------------------------------------------------------------------------

@@ -45,6 +45,73 @@ export interface FinanceiroExportMeta {
   filtros?: string[];
   /** Aviso de truncamento (quando o recorte excede o limite). */
   aviso?: string;
+  /**
+   * Campos escolhidos na tela de seleção (RF 31-jul). Ausente = layout padrão.
+   * A ORDEM do relatório é sempre a do catálogo, não a de clique — assim dois
+   * relatórios com os mesmos campos saem idênticos.
+   */
+  campos?: CampoExport[];
+  /** Incluir a linha "Filtros aplicados" no cabeçalho (RF 31-jul). */
+  incluirFiltros?: boolean;
+  /** Incluir os subtotais por banco e o total geral (RF 31-jul). */
+  incluirTotais?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Catálogo de campos exportáveis (RF 31-jul) — fonte única do modal de seleção,
+// do PDF e do XLSX. Acrescentar um campo aqui o faz aparecer nos três lugares.
+// ---------------------------------------------------------------------------
+export type CampoExport =
+  | "vencimento" | "emissao" | "conta" | "centro" | "tipoDespesa" | "descricao"
+  | "fornecedor" | "obsObra" | "ref" | "parcelas" | "formaPgto" | "banco"
+  | "status" | "valor";
+
+export interface CampoExportDef {
+  key: CampoExport;
+  label: string;
+  /** Vem marcado por padrão (espelha as colunas da tela). */
+  padrao: boolean;
+  /** Largura relativa no PDF e no XLSX. */
+  larguraPdf: number;
+  larguraXlsx: number;
+  align: "left" | "right";
+  /** Máximo de linhas na célula do PDF. */
+  wrap: number;
+}
+
+export const CAMPOS_EXPORT: CampoExportDef[] = [
+  { key: "vencimento",  label: "Vencimento",               padrao: true,  larguraPdf: 54,  larguraXlsx: 12, align: "left",  wrap: 1 },
+  { key: "emissao",     label: "Emissão",                  padrao: true,  larguraPdf: 50,  larguraXlsx: 12, align: "left",  wrap: 1 },
+  { key: "conta",       label: "Conta Contábil",           padrao: true,  larguraPdf: 90,  larguraXlsx: 30, align: "left",  wrap: 2 },
+  { key: "centro",      label: "Centro de Custo",          padrao: true,  larguraPdf: 90,  larguraXlsx: 30, align: "left",  wrap: 2 },
+  { key: "tipoDespesa", label: "Tipo de Despesa",          padrao: false, larguraPdf: 62,  larguraXlsx: 18, align: "left",  wrap: 2 },
+  { key: "descricao",   label: "Descrição",                padrao: true,  larguraPdf: 132, larguraXlsx: 46, align: "left",  wrap: 3 },
+  { key: "fornecedor",  label: "Fornecedor / contraparte", padrao: true,  larguraPdf: 88,  larguraXlsx: 26, align: "left",  wrap: 2 },
+  { key: "obsObra",     label: "Obs. Obra",                padrao: false, larguraPdf: 58,  larguraXlsx: 16, align: "left",  wrap: 2 },
+  { key: "ref",         label: "Referência (NF / recibo)", padrao: true,  larguraPdf: 54,  larguraXlsx: 20, align: "left",  wrap: 1 },
+  { key: "parcelas",    label: "Parcelas",                 padrao: false, larguraPdf: 42,  larguraXlsx: 10, align: "left",  wrap: 1 },
+  { key: "formaPgto",   label: "Forma de Pagamento",       padrao: false, larguraPdf: 62,  larguraXlsx: 16, align: "left",  wrap: 2 },
+  { key: "banco",       label: "Banco",                    padrao: true,  larguraPdf: 52,  larguraXlsx: 14, align: "left",  wrap: 1 },
+  { key: "status",      label: "Status",                   padrao: true,  larguraPdf: 64,  larguraXlsx: 16, align: "left",  wrap: 1 },
+  { key: "valor",       label: "Valor",                    padrao: true,  larguraPdf: 70,  larguraXlsx: 16, align: "right", wrap: 1 },
+];
+
+export const CAMPOS_EXPORT_PADRAO: CampoExport[] =
+  CAMPOS_EXPORT.filter((c) => c.padrao).map((c) => c.key);
+
+/** Campos pedidos → definições, na ordem do catálogo. Vazio cai no padrão. */
+function resolverCampos(campos?: CampoExport[]): CampoExportDef[] {
+  if (!campos || campos.length === 0) {
+    return CAMPOS_EXPORT.filter((c) => c.padrao);
+  }
+  const escolhidos = new Set(campos);
+  const sel = CAMPOS_EXPORT.filter((c) => escolhidos.has(c.key));
+  return sel.length > 0 ? sel : CAMPOS_EXPORT.filter((c) => c.padrao);
+}
+
+/** Valor da célula (o "valor" tem versão numérica e formatada). */
+function celula(r: FinanceiroExportRow, key: CampoExport): string {
+  return key === "valor" ? r.valorStr : r[key];
 }
 
 export function toExportRows(rows: TransacaoEmpresaRich[]): FinanceiroExportRow[] {
@@ -123,67 +190,42 @@ export function exportFinanceiroXlsx(
   const rows = toExportRows(rowsRich);
   const { porBanco, totalGeral } = calcularTotais(rows);
 
+  // Campos escolhidos na tela de seleção (RF 31-jul); sem escolha = padrão.
+  const cols = resolverCampos(meta.campos);
+  const incluirTotais = meta.incluirTotais !== false;
+
   const titleRows: string[] = [meta.titulo ?? "AramBI — Relatório de Lançamentos Financeiros"];
   if (meta.escopo) titleRows.push(meta.escopo);
-  if (meta.filtros && meta.filtros.length) titleRows.push(`Filtros: ${meta.filtros.join(" · ")}`);
+  if (meta.incluirFiltros !== false && meta.filtros?.length) {
+    titleRows.push(`Filtros: ${meta.filtros.join(" · ")}`);
+  }
   titleRows.push(`Gerado em ${formatDate(new Date())} · ${rows.length} lançamento${rows.length === 1 ? "" : "s"}`);
   if (meta.aviso) titleRows.push(meta.aviso);
 
-  // Ordem das colunas pedida no ajuste 27-jul (Financeiro → Exportar XLS).
-  const dataRows: XlsxValue[][] = rows.map((r) => [
-    xtext(r.vencimento),
-    xtext(r.emissao),
-    xtext(r.conta),
-    xtext(r.centro),
-    xtext(r.tipoDespesa),
-    xtext(r.fornecedor),
-    xtext(r.descricao),
-    xtext(r.obsObra),
-    xtext(r.ref),
-    xtext(r.parcelas),
-    xtext(r.formaPgto),
-    xtext(r.banco),
-    xtext(r.status),
-    xmoney(r.valorNum),
-  ]);
+  const dataRows: XlsxValue[][] = rows.map((r) =>
+    cols.map((c) => (c.key === "valor" ? xmoney(r.valorNum) : xtext(celula(r, c.key)))),
+  );
 
-  const NCOLS = 14;
-  const pad = (n: number): XlsxValue[] => Array.from({ length: n }, () => xtext(""));
+  // Totais só fazem sentido se a coluna Valor estiver no relatório.
+  const temValor = cols.some((c) => c.key === "valor");
+  if (incluirTotais && temValor) {
+    const n = cols.length;
+    const pad = (q: number): XlsxValue[] => Array.from({ length: q }, () => xtext(""));
+    // Rótulo na penúltima coluna; com 1 coluna só, ele vira a linha inteira.
+    const rotulo = (texto: string, total: number): XlsxValue[] =>
+      n >= 2
+        ? [...pad(n - 2), xtext(texto, { bold: true }), xmoney(total, { bold: true })]
+        : [xmoney(total, { bold: true })];
 
-  // Linha em branco + subtotais por banco + total geral.
-  dataRows.push(pad(NCOLS));
-  for (const b of porBanco) {
-    dataRows.push([
-      ...pad(NCOLS - 2),
-      xtext(`Subtotal ${b.banco}`, { bold: true }),
-      xmoney(b.total, { bold: true }),
-    ]);
+    dataRows.push(pad(n));
+    for (const b of porBanco) dataRows.push(rotulo(`Subtotal ${b.banco}`, b.total));
+    dataRows.push(rotulo("TOTAL GERAL", totalGeral));
   }
-  dataRows.push([
-    ...pad(NCOLS - 2),
-    xtext("TOTAL GERAL", { bold: true }),
-    xmoney(totalGeral, { bold: true }),
-  ]);
 
   const bytes = buildXlsx({
     sheetName: "Lançamentos",
     titleRows,
-    columns: [
-      { header: "Vencimento", width: 12 },
-      { header: "Emissão", width: 12 },
-      { header: "Conta Contábil", width: 30 },
-      { header: "Centro de Custo", width: 30 },
-      { header: "Tipo de Despesa", width: 18 },
-      { header: "Fornecedor / contraparte", width: 26 },
-      { header: "Descrição", width: 46 },
-      { header: "Obs. Obra", width: 16 },
-      { header: "Referência (NF / recibo)", width: 20 },
-      { header: "Parcelas", width: 10 },
-      { header: "Forma de Pgto", width: 16 },
-      { header: "Banco", width: 14 },
-      { header: "Status", width: 16 },
-      { header: "Valor", width: 16 },
-    ],
+    columns: cols.map((c) => ({ header: c.label, width: c.larguraXlsx })),
     rows: dataRows,
   });
 
@@ -200,26 +242,15 @@ export function exportFinanceiroXlsx(
 const A4_LANDSCAPE = { w: 841.89, h: 595.28 };
 const MARGIN = { top: 40, bottom: 38, left: 32, right: 32 };
 
+// As colunas do PDF são montadas a partir do CAMPOS_EXPORT (RF 31-jul) — não
+// existe mais lista fixa aqui.
 interface ColDef {
-  key: keyof Pick<FinanceiroExportRow, "vencimento" | "emissao" | "conta" | "centro" | "descricao" | "fornecedor" | "ref" | "banco" | "status" | "valorStr">;
+  key: CampoExport;
   header: string;
   width: number;
   align: "left" | "right";
   wrap: number; // máx. de linhas
 }
-
-const COLS: ColDef[] = [
-  { key: "vencimento", header: "Vencimento", width: 54, align: "left", wrap: 1 },
-  { key: "emissao", header: "Emissão", width: 50, align: "left", wrap: 1 },
-  { key: "conta", header: "Conta", width: 90, align: "left", wrap: 2 },
-  { key: "centro", header: "Centro de Custo", width: 90, align: "left", wrap: 2 },
-  { key: "descricao", header: "Descrição", width: 132, align: "left", wrap: 3 },
-  { key: "fornecedor", header: "Fornecedor", width: 88, align: "left", wrap: 2 },
-  { key: "ref", header: "Ref.", width: 54, align: "left", wrap: 1 },
-  { key: "banco", header: "Banco", width: 52, align: "left", wrap: 1 },
-  { key: "status", header: "Status", width: 64, align: "left", wrap: 1 },
-  { key: "valorStr", header: "Valor", width: 70, align: "right", wrap: 1 },
-];
 
 // Paleta (alinhada à identidade do app)
 const C_INK = rgb(0.06, 0.12, 0.11);
@@ -305,13 +336,34 @@ export async function exportFinanceiroPdf(
 
   const contentLeft = MARGIN.left;
   const contentRight = A4_LANDSCAPE.w - MARGIN.right;
-  const tableWidth = COLS.reduce((s, c) => s + c.width, 0);
-  // Distribui sobra de largura para a coluna Descrição (mantém alinhada à direita).
-  const extra = (contentRight - contentLeft) - tableWidth;
-  const cols = COLS.map((c) => ({ ...c }));
+  const disponivel = contentRight - contentLeft;
+
+  // Colunas escolhidas na tela de seleção (RF 31-jul), na ordem do catálogo.
+  const cols: ColDef[] = resolverCampos(meta.campos).map((c) => ({
+    key: c.key,
+    header: c.label,
+    width: c.larguraPdf,
+    align: c.align,
+    wrap: c.wrap,
+  }));
+
+  // Ajuste de largura à página: sobra vai para a Descrição (ou para a maior
+  // coluna, se Descrição não foi escolhida); falta é rateada proporcionalmente
+  // — sem isso, marcar os 14 campos estouraria a margem direita.
+  const tableWidth = cols.reduce((s, c) => s + c.width, 0);
+  const extra = disponivel - tableWidth;
   if (extra > 0) {
-    const desc = cols.find((c) => c.key === "descricao")!;
-    desc.width += extra;
+    const alvo = cols.find((c) => c.key === "descricao")
+      ?? cols.reduce((a, b) => (b.width > a.width ? b : a), cols[0]);
+    if (alvo) alvo.width += extra;
+  } else if (extra < 0) {
+    const fator = disponivel / tableWidth;
+    cols.forEach((c) => { c.width = Math.max(28, c.width * fator); });
+    // O arredondamento do mínimo pode reestourar; devolve a diferença à maior.
+    const sobra = disponivel - cols.reduce((s, c) => s + c.width, 0);
+    if (sobra !== 0 && cols.length > 0) {
+      cols.reduce((a, b) => (b.width > a.width ? b : a), cols[0]).width += sobra;
+    }
   }
 
   const FS = 7.5;          // fonte das células
@@ -389,7 +441,7 @@ export async function exportFinanceiroPdf(
   for (const r of rows) {
     // Pré-calcula quebras por coluna para saber a altura da linha.
     const cellLines: string[][] = cols.map((c) => {
-      const raw = c.key === "valorStr" ? r.valorStr : (r[c.key] as string);
+      const raw = celula(r, c.key);
       return wrapLines(c.align === "right" ? fontBold : font, raw, FS, c.width - 8, c.wrap);
     });
     const nLines = Math.max(1, ...cellLines.map((l) => l.length));
@@ -408,7 +460,7 @@ export async function exportFinanceiroPdf(
     cols.forEach((c, i) => {
       const x = colX(i);
       const lines = cellLines[i];
-      const isValor = c.key === "valorStr";
+      const isValor = c.key === "valor";
       const color = isValor ? (r.valorNum < 0 ? C_RED : r.valorNum > 0 ? C_GREEN : C_INK) : C_INK;
       const f = isValor ? fontBold : font;
       lines.forEach((ln, li) => {

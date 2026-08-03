@@ -28,6 +28,7 @@ import {
   listarOcorrencias, criarOcorrencia, setOcorrenciaResolvida, excluirOcorrencia,
   type LoteFormPayload, type EventoFormPayload,
 } from "@/lib/queries/animais";
+import { desfazerExclusao } from "@/lib/queries/desfazer";
 import type {
   AnimalEspecieRow, AnimalLoteRow, AnimalEventoRow, AnimalOcorrenciaRow,
   AnimalLoteStatus, AnimalEventoTipo, OcorrenciaSeveridade,
@@ -177,10 +178,32 @@ export function AnimaisPage() {
     if (!confirmExcluir) return;
     setBusy(true);
     try {
-      if (confirmExcluir.tipo === "lote") await excluirLote(confirmExcluir.id);
-      else if (confirmExcluir.tipo === "evento") await excluirEvento(confirmExcluir.id);
-      else await excluirOcorrencia(confirmExcluir.id);
-      toast.success("Excluído com sucesso");
+      // Snapshot antes de apagar — base do "Desfazer" de 8s (RF 31-jul).
+      // Ocorrências não têm desfazer: a tabela não está no mapa do desfazer.
+      let snapshot: object | null = null;
+      let tabela: "animais_lotes" | "animais_eventos" | null = null;
+      if (confirmExcluir.tipo === "lote") {
+        snapshot = lotes.find((l) => l.id === confirmExcluir.id) ?? null;
+        tabela = "animais_lotes";
+        await excluirLote(confirmExcluir.id);
+      } else if (confirmExcluir.tipo === "evento") {
+        snapshot = eventos.find((e) => e.id === confirmExcluir.id) ?? null;
+        tabela = "animais_eventos";
+        await excluirEvento(confirmExcluir.id);
+      } else {
+        await excluirOcorrencia(confirmExcluir.id);
+      }
+      if (snapshot && tabela) {
+        const alvo = tabela;
+        const linha = snapshot;
+        toast.desfazer("Excluído com sucesso", "Você tem 8 segundos para recuperá-lo.", async () => {
+          await desfazerExclusao(alvo, [linha]);
+          fetchAll();
+          toast.info("Exclusão desfeita", "O registro foi restaurado.");
+        });
+      } else {
+        toast.success("Excluído com sucesso");
+      }
       setConfirmExcluir(null);
       fetchAll();
     } catch (e) {
