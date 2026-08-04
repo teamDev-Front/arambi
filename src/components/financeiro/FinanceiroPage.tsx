@@ -12,6 +12,9 @@ import { BankLogo } from "@/components/ui/BankLogo";
 import { Pagination } from "@/components/ui/Pagination";
 import { RelatorioEscopoModal } from "@/components/financeiro/RelatorioEscopoModal";
 import { CamposExportModal, type CamposExportEscolha } from "@/components/financeiro/CamposExportModal";
+import { ResgateComposicaoModal } from "@/components/financeiro/ResgateComposicaoModal";
+import { ConferenciaSicrediModal } from "@/components/financeiro/ConferenciaSicrediModal";
+import { ehResgateAutomatico } from "@/lib/queries/resgates";
 import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
   Plus, FileText, Search, Edit2, Trash2, Copy,
@@ -19,7 +22,7 @@ import {
   FileDown, FileSpreadsheet, CalendarRange,
   ChevronUp, ChevronDown, Wallet, FilterX,
   AlertTriangle, CalendarClock, CalendarDays,
-  Tag, X, ListChecks, BarChart3,
+  Tag, X, ListChecks, BarChart3, Layers, Scale,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
@@ -127,6 +130,8 @@ type FormState = {
   status: StatusAramburu;
   valor: string;
   observacao: string;
+  /** Pago pelo saldo da própria conta — não gera resgate do Invest (0049). */
+  dispensa_resgate: boolean;
 };
 
 /**
@@ -221,6 +226,7 @@ const EMPTY_FORM: FormState = {
   status: "pago",
   valor: "",
   observacao: "",
+  dispensa_resgate: false,
 };
 
 export function FinanceiroPage() {
@@ -349,6 +355,9 @@ export function FinanceiroPage() {
   const [dvOpen, setDvOpen] = useState(false);
   // Tela de seleção de campos da exportação (RF 31-jul).
   const [camposExportOpen, setCamposExportOpen] = useState(false);
+  // Análises do Sicredi (pedido 04-ago): composição do resgate e conferência.
+  const [resgateVerId, setResgateVerId] = useState<string | null>(null);
+  const [conferenciaOpen, setConferenciaOpen] = useState(false);
   const [dvAno, setDvAno] = useState(() => String(new Date().getFullYear()));
 
   // "Ver selecionados" (RF 31-jul) — lista completa da seleção, fora do filtro.
@@ -404,6 +413,15 @@ export function FinanceiroPage() {
   const [dlStatus, setDlStatus] = useState<StatusDL>("provisionado");
   const mostraTipoSaida = form.conta_contabil_cod === "2.8" && !editId;
   const salvandoDetalhada = mostraTipoSaida && tipoSaida === "detalhada";
+
+  // "Pago pelo saldo da conta" (0049) só faz sentido em SAÍDA do Sicredi: é a
+  // conta que mantém saldo próprio (transferência de jan/2026) para as tarifas.
+  const ehSaidaSicredi = useMemo(() => {
+    if (!form.conta_bancaria_id) return false;
+    const b = bancos.find((x) => x.id === form.conta_bancaria_id);
+    const nome = `${b?.nome ?? ""} ${b?.apelido ?? ""}`.toLowerCase();
+    return nome.includes("sicredi") && !nome.includes("invest") && Number(form.valor) < 0;
+  }, [form.conta_bancaria_id, form.valor, bancos]);
 
   // Lookups da saída detalhada — carregados só quando a opção aparece.
   useEffect(() => {
@@ -858,6 +876,7 @@ export function FinanceiroPage() {
       status: row.status,
       valor: String(row.valor),
       observacao: row.observacao ?? "",
+      dispensa_resgate: row.dispensa_resgate ?? false,
     };
   }
   function openEdit(row: TransacaoEmpresaRich) {
@@ -953,6 +972,7 @@ export function FinanceiroPage() {
         status: form.status,
         valor: Number(form.valor),
         observacao: form.observacao || null,
+        dispensa_resgate: form.dispensa_resgate,
         origem_planilha: null,
         created_by: null,
       };
@@ -1261,6 +1281,11 @@ export function FinanceiroPage() {
               ).map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </label>
+          {/* Conferência do Sicredi (pedido 04-ago) — "o Sicredi tem que zerar" */}
+          <Button variant="outline" size="sm" onClick={() => setConferenciaOpen(true)}
+            title="Confere mês a mês se toda saída do Sicredi tem o resgate equivalente entrando do Invest">
+            <Scale size={14} /> Conferência Sicredi
+          </Button>
           {/* RF 31-jul: os dois botões abrem a MESMA tela de seleção de campos;
               o formato final é escolhido lá dentro. */}
           <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
@@ -1519,7 +1544,7 @@ export function FinanceiroPage() {
             {/* Tipo de Despesa e Forma de Pagamento (RF 31-jul). A dupla
                 "competência + Cartão de Crédito" é o recorte da FATURA do mês. */}
             <MultiSelect
-              className="w-40"
+              className="w-40 ml-4"
               value={filterTipoDespesa}
               onChange={(v) => { setFilterTipoDespesa(v); setPage(1); }}
               options={TIPO_DESPESA_OPTIONS}
@@ -1529,7 +1554,7 @@ export function FinanceiroPage() {
               unitLabel="tipos"
             />
             <MultiSelect
-              className="w-44"
+              className="w-44 ml-4"
               value={filterFormaPgto}
               onChange={(v) => { setFilterFormaPgto(v); setPage(1); }}
               options={FORMA_PGTO_OPTIONS}
@@ -1849,6 +1874,21 @@ export function FinanceiroPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
+                          {/* Composição do resgate / resgate que cobre o título
+                              (pedido 04-ago: "não consigo me achar ele fazendo essa soma"). */}
+                          {ehResgateAutomatico(t) ? (
+                            <button onClick={() => setResgateVerId(t.id)}
+                              className="p-1.5 rounded hover:bg-emerald-50 text-emerald-500 hover:text-emerald-700 transition"
+                              title="Ver de quais títulos este resgate é formado">
+                              <Layers size={13} />
+                            </button>
+                          ) : t.resgate_auto_id ? (
+                            <button onClick={() => setResgateVerId(t.resgate_auto_id)}
+                              className="p-1.5 rounded hover:bg-emerald-50 text-stone-400 hover:text-emerald-600 transition"
+                              title="Ver o resgate do Invest que cobre este lançamento (e os demais títulos somados nele)">
+                              <Layers size={13} />
+                            </button>
+                          ) : null}
                           <button onClick={() => openEdit(t)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar">
                             <Edit2 size={13} />
                           </button>
@@ -2059,6 +2099,25 @@ export function FinanceiroPage() {
             </div>
           )}
 
+          {/* Pago pelo saldo da conta (0049) — só faz sentido em saída do Sicredi,
+              que é a conta que mantém saldo próprio para as tarifas. */}
+          {ehSaidaSicredi && (
+            <label className="flex items-start gap-2.5 rounded-lg border border-stone-200 px-3 py-2.5 cursor-pointer hover:bg-stone-50 select-none">
+              <input
+                type="checkbox"
+                checked={form.dispensa_resgate}
+                onChange={(e) => setForm({ ...form, dispensa_resgate: e.target.checked })}
+                className="h-3.5 w-3.5 mt-0.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
+              />
+              <span className="text-xs leading-relaxed">
+                <b className="text-stone-800">Pago pelo saldo da própria conta</b> — não gera resgate do Invest.
+                <span className="block text-stone-500">
+                  Para as tarifas bancárias, cobertas pela transferência que deixa saldo na conta Sicredi.
+                </span>
+              </span>
+            </label>
+          )}
+
           <Textarea label="Observação" value={form.observacao}
             onChange={(e) => setForm({ ...form, observacao: e.target.value })}
             rows={2} placeholder="Anotações livres (exceções, regras especiais…)" />
@@ -2072,6 +2131,20 @@ export function FinanceiroPage() {
         </div>
       </Modal>
       <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
+
+      {/* Composição do resgate + conferência do Sicredi (pedido 04-ago) */}
+      <ResgateComposicaoModal
+        open={!!resgateVerId}
+        resgateId={resgateVerId}
+        onClose={() => setResgateVerId(null)}
+      />
+      <ConferenciaSicrediModal
+        open={conferenciaOpen}
+        onClose={() => setConferenciaOpen(false)}
+        anos={dvAnos}
+        anoInicial={dvAno}
+        onVerResgate={(id) => { setConferenciaOpen(false); setResgateVerId(id); }}
+      />
 
       {/* Seleção de campos antes de exportar (RF 31-jul) */}
       <CamposExportModal

@@ -192,6 +192,12 @@ export type TransacaoEmpresaRow = {
   observacao: string | null;
   /** Resgate automático Sicredi Invest que cobre este título (triggers da migration 0044). */
   resgate_auto_id: string | null;
+  /**
+   * Despesa paga pelo SALDO DA PRÓPRIA CONTA, sem resgate do Invest (0049).
+   * Caso concreto: a Adri transferiu R$ 1.878,00 do Cora para o Sicredi em
+   * janeiro/2026 — exatamente 12 × R$ 156,50 — para bancar as tarifas do ano.
+   */
+  dispensa_resgate: boolean;
   origem_planilha: string | null;
   created_at: string;
   updated_at: string;
@@ -199,8 +205,8 @@ export type TransacaoEmpresaRow = {
 };
 
 export type TransacaoEmpresaInsert =
-  Omit<TransacaoEmpresaRow, "id" | "mes_referencia" | "created_at" | "updated_at" | "resgate_auto_id">
-  & { resgate_auto_id?: string | null };
+  Omit<TransacaoEmpresaRow, "id" | "mes_referencia" | "created_at" | "updated_at" | "resgate_auto_id" | "dispensa_resgate">
+  & { resgate_auto_id?: string | null; dispensa_resgate?: boolean };
 export type TransacaoEmpresaUpdate = Partial<TransacaoEmpresaInsert>;
 
 // Resumo mensal da Distribuição de Lucro (view v_dl_mensal_resumo — migration 0036)
