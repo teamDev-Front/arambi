@@ -19,7 +19,9 @@ import { FORMA_PGTO_LABEL } from "@/types";
 const EXPLICACAO: Record<ComposicaoResgate["tipo"], string> = {
   diario:
     "Resgate agrupado por DIA: soma todos os títulos do Sicredi que vencem na mesma data. " +
-    "É programado para o dia útil anterior ao vencimento.",
+    "Fica programado para o dia útil anterior ao vencimento — assim o dinheiro rende o máximo " +
+    "possível e o risco não se concentra num dia só. A exceção é quando o dia anterior cairia no " +
+    "mês passado: aí o resgate vai para o próprio dia do vencimento, para o mês fechar em zero.",
   fatura:
     "Resgate agrupado por FATURA do cartão: soma todos os lançamentos de Cartão de Crédito " +
     "do mês numa linha só, programada para o dia útil anterior ao vencimento da fatura.",
