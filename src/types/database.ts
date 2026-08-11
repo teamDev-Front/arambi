@@ -290,6 +290,13 @@ export type SafraParametrosRow = WithTimestamps & {
   devolucao_por_saca: number;
   carencia_dias: number;                    // carência p/ venda a TERCEIROS (migration 0037)
   carencia_armazem_dias: number;            // carência p/ venda ao PRÓPRIO ARMAZÉM (migration 0037)
+  /**
+   * Data-limite da armazenagem gratuita na venda ao próprio armazém — normativa
+   * da safra (ex.: milho 25/25 Copasul: 2026-05-31). Migration 0051.
+   * Quando preenchida PREVALECE sobre carencia_armazem_dias: a cobrança começa
+   * nesta data para todas as notas. null = contagem em dias por nota.
+   */
+  carencia_armazem_ate: string | null;      // "YYYY-MM-DD"
   taxa_recepcao_por_saca: number;           // R$/saca — só terceiros; 0 = isenta (migration 0037)
   kg_por_saca: number;
   data_atual: string;                       // "YYYY-MM-DD"
@@ -318,11 +325,12 @@ export type SafraDepositoRow = WithTimestamps & {
 export type SafraBaixaRow = {
   id: string;
   deposito_id: string;
-  /** Venda que consumiu o volume (null p/ retirada/perda ou venda excluída). */
+  /** Venda que consumiu o volume (null p/ retirada/perda/quebra ou venda excluída). */
   venda_id: string | null;
   data_baixa: string;
   kg: number;
-  motivo: "venda" | "retirada" | "perda";
+  /** "quebra_tecnica" = ajuste que zera o saldo residual do bruto × líquido fixado (migration 0051). */
+  motivo: "venda" | "retirada" | "perda" | "quebra_tecnica";
   observacao: string | null;
   created_at: string;
   created_by: string | null;
@@ -392,6 +400,8 @@ export type SafraDepositoCalculadoRow = {
   taxa_armazenagem_saldo_armazem: number;
   total_a_descontar_saldo_armazem: number;
   valor_venda_saldo_armazem: number;
+  /** Data-limite da carência do armazém em vigor nesta safra (migration 0051). */
+  carencia_armazem_ate: string | null;
 };
 
 export type VendaProvisionadaRow = WithTimestamps & {
@@ -1017,9 +1027,10 @@ export interface Database {
       };
       safra_parametros: {
         Row: SafraParametrosRow;
-        // carencia_armazem_dias / taxa_recepcao_por_saca / deposito_total_programado_kg têm default no banco → opcionais.
-        Insert: Omit<SafraParametrosRow, "id" | "created_at" | "updated_at" | "carencia_armazem_dias" | "taxa_recepcao_por_saca" | "deposito_total_programado_kg">
-          & { carencia_armazem_dias?: number; taxa_recepcao_por_saca?: number; deposito_total_programado_kg?: number };
+        // carencia_armazem_dias / carencia_armazem_ate / taxa_recepcao_por_saca /
+        // deposito_total_programado_kg têm default (ou null) no banco → opcionais.
+        Insert: Omit<SafraParametrosRow, "id" | "created_at" | "updated_at" | "carencia_armazem_dias" | "carencia_armazem_ate" | "taxa_recepcao_por_saca" | "deposito_total_programado_kg">
+          & { carencia_armazem_dias?: number; carencia_armazem_ate?: string | null; taxa_recepcao_por_saca?: number; deposito_total_programado_kg?: number };
         Update: Partial<Omit<SafraParametrosRow, "id" | "created_at" | "updated_at">>;
         Relationships: EmptyRels;
       };

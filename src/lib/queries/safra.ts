@@ -317,6 +317,8 @@ function rpc(): RpcCall {
 }
 
 export interface BaixaFifoNota {
+  /** id da linha em safra_baixas — alimenta o Desfazer (migration 0051). */
+  baixa_id?: string;
   deposito_id: string;
   dfe: string | null;
   nfp: string | null;
@@ -342,7 +344,7 @@ export async function baixarEstoqueFifo(params: {
   data?: string;
   vendaId?: string;
   armazemId?: string;
-  motivo?: "venda" | "retirada" | "perda";
+  motivo?: "venda" | "retirada" | "perda" | "quebra_tecnica";
   observacao?: string;
 }): Promise<BaixaFifoResultado> {
   const { data, error } = await rpc()("fn_baixar_estoque_fifo", {
@@ -362,6 +364,44 @@ export async function baixarEstoqueFifo(params: {
 /** Desfaz as baixas de uma venda (volume volta ao estoque). Retorna o nº de baixas removidas. */
 export async function desfazerBaixasVenda(vendaId: string): Promise<number> {
   const { data, error } = await rpc()("fn_desfazer_baixas_venda", { p_venda_id: vendaId });
+  if (error) throw new Error(error.message);
+  return Number(data ?? 0);
+}
+
+/**
+ * Zera o saldo residual de uma cultura×safra lançando baixas por QUEBRA TÉCNICA
+ * (migration 0051).
+ *
+ * Serve para o caso em que 100% do estoque já foi comercializado mas sobra um
+ * resíduo: as notas guardam o peso BRUTO depositado e o armazém fixa o peso
+ * LÍQUIDO, então a quebra real apurada por ele fica presa no estoque. O bruto
+ * depositado continua íntegro — a saída vira histórico em safra_baixas.
+ *
+ * Não recebe quantidade: o banco mede o saldo sob lock e baixa exatamente ele,
+ * evitando divergir do que a tela mostrava.
+ */
+export async function zerarSaldoQuebra(params: {
+  cultura: CulturaSafra;
+  safra: string;
+  armazemId?: string;
+  data?: string;
+  observacao?: string;
+}): Promise<BaixaFifoResultado> {
+  const { data, error } = await rpc()("fn_zerar_saldo_quebra", {
+    p_cultura: params.cultura,
+    p_safra: params.safra,
+    p_armazem_id: params.armazemId ?? null,
+    p_data: params.data ?? new Date().toISOString().slice(0, 10),
+    p_observacao: params.observacao ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as BaixaFifoResultado;
+}
+
+/** Desfaz baixas avulsas por id (volume volta ao estoque). Retorna o nº removido. */
+export async function desfazerBaixas(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const { data, error } = await rpc()("fn_desfazer_baixas", { p_ids: ids });
   if (error) throw new Error(error.message);
   return Number(data ?? 0);
 }

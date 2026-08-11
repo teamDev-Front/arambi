@@ -14,7 +14,7 @@ import {
   Plus, Search, Edit2, Trash2, Loader2, Save,
   Warehouse, Sprout, Calculator, Calendar, PackageCheck,
   Coins, TrendingDown, ArrowDownToLine, HelpCircle,
-  Copy, FileSpreadsheet, ClipboardList, Gauge, Handshake, Info,
+  Copy, FileSpreadsheet, ClipboardList, Gauge, Handshake, Info, Scale,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer,
@@ -22,7 +22,7 @@ import {
 import {
   listarArmazens, listarParametros, obterParametro, upsertParametro,
   listarDepositosCalculados, criarDeposito, atualizarDeposito, deletarDeposito, obterDeposito,
-  calcularResumoSafra, listarSafrasComDeposito,
+  calcularResumoSafra, listarSafrasComDeposito, zerarSaldoQuebra, desfazerBaixas,
 } from "@/lib/queries/safra";
 import { desfazerCriacao, desfazerEdicao, desfazerExclusao } from "@/lib/queries/desfazer";
 import { exportEstoqueXlsx } from "@/lib/export/estoque-export";
@@ -62,6 +62,7 @@ type ParamForm = {
   devolucao_por_saca: string;
   carencia_dias: string;             // carência p/ venda a TERCEIROS
   carencia_armazem_dias: string;     // carência p/ venda ao PRÓPRIO ARMAZÉM (normativa anual)
+  carencia_armazem_ate: string;      // data-limite da normativa — vazia = usa os dias acima
   taxa_recepcao_por_saca: string;    // R$/saca — só terceiros; 0 = isenta
   kg_por_saca: string;
   data_atual: string;
@@ -111,6 +112,14 @@ export function EstoquePage() {
   const depGuard = useUnsavedGuard(depModal, depForm, () => setDepModal(false));
   const [depSaving, setDepSaving] = useState(false);
 
+  // Ajuste de saldo por quebra técnica (10-ago) — zera o resíduo que sobra
+  // quando a venda foi lançada pelo peso LÍQUIDO fixado pelo armazém e as notas
+  // guardam o peso BRUTO depositado.
+  const [ajusteModal, setAjusteModal] = useState(false);
+  const [ajusteForm, setAjusteForm] = useState({ data: "", observacao: "" });
+  const ajusteGuard = useUnsavedGuard(ajusteModal, ajusteForm, () => setAjusteModal(false));
+  const [ajusteSaving, setAjusteSaving] = useState(false);
+
   // ---- Initial load: armazens & parametros ----
   useEffect(() => {
     (async () => {
@@ -156,6 +165,7 @@ export function EstoquePage() {
           devolucao_por_saca: String(p.devolucao_por_saca),
           carencia_dias: String(p.carencia_dias),
           carencia_armazem_dias: String(p.carencia_armazem_dias ?? 365),
+          carencia_armazem_ate: p.carencia_armazem_ate ?? "",
           taxa_recepcao_por_saca: String(p.taxa_recepcao_por_saca ?? 0),
           kg_por_saca: String(p.kg_por_saca),
           data_atual: p.data_atual,
@@ -167,6 +177,7 @@ export function EstoquePage() {
           devolucao_por_saca: "4.75",
           carencia_dias: "30",
           carencia_armazem_dias: "365",
+          carencia_armazem_ate: "",
           taxa_recepcao_por_saca: "0",
           kg_por_saca: "60",
           data_atual: new Date().toISOString().slice(0, 10),
@@ -259,6 +270,7 @@ export function EstoquePage() {
         devolucao_por_saca: Number(paramForm.devolucao_por_saca),
         carencia_dias: Number(paramForm.carencia_dias),
         carencia_armazem_dias: Number(paramForm.carencia_armazem_dias),
+        carencia_armazem_ate: paramForm.carencia_armazem_ate || null,
         taxa_recepcao_por_saca: Number(paramForm.taxa_recepcao_por_saca),
         kg_por_saca: Number(paramForm.kg_por_saca),
         data_atual: paramForm.data_atual,
@@ -404,6 +416,47 @@ export function EstoquePage() {
     }
   }
 
+  // ---- Ajuste de saldo: zerar o resíduo da quebra técnica ----
+  function openAjusteSaldo() {
+    setAjusteForm({
+      data: paramForm?.data_atual ?? new Date().toISOString().slice(0, 10),
+      observacao: "",
+    });
+    setAjusteModal(true);
+  }
+  async function zerarSaldo() {
+    if (!safra) return;
+    setAjusteSaving(true);
+    try {
+      // Sem quantidade: o banco mede o saldo sob lock e baixa exatamente ele,
+      // então não há divergência com o número que a tela estava mostrando.
+      const res = await zerarSaldoQuebra({
+        cultura,
+        safra,
+        armazemId: armazemId || undefined,
+        data: ajusteForm.data,
+        observacao: ajusteForm.observacao.trim() || undefined,
+      });
+      const ids = res.notas.map((n) => n.baixa_id).filter((id): id is string => !!id);
+      setAjusteModal(false);
+      await fetchDepositos();
+      const resumoTxt = `${fmtKg(Number(res.kg_baixado))} baixados como quebra técnica em ${res.notas.length} nota${res.notas.length === 1 ? "" : "s"}.`;
+      if (ids.length > 0) {
+        toast.desfazer("Saldo zerado", `${resumoTxt} Você tem 8 segundos para desfazer.`, async () => {
+          await desfazerBaixas(ids);
+          await fetchDepositos();
+          toast.info("Ajuste desfeito", "O saldo voltou ao estoque.");
+        });
+      } else {
+        toast.success("Saldo zerado", resumoTxt);
+      }
+    } catch (e: unknown) {
+      toast.error("Não foi possível zerar o saldo", (e as Error).message);
+    } finally {
+      setAjusteSaving(false);
+    }
+  }
+
   // ---- render ----
   return (
     <div className="space-y-6">
@@ -414,9 +467,16 @@ export function EstoquePage() {
             Acompanhamento de grãos armazenados — taxa de armazenagem, quebra técnica e simulação de venda
           </p>
         </div>
-        <Button size="sm" onClick={openNovoDep} disabled={!armazemId}>
-          <Plus size={14} /> Novo Depósito
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={openAjusteSaldo}
+            disabled={!armazemId || !safra || resumo.total_kg_saldo <= 0}
+            title="Zera o saldo remanescente lançando-o como quebra técnica — para quando 100% do estoque já foi comercializado e sobrou só a diferença do peso bruto para o líquido fixado pelo armazém">
+            <Scale size={14} /> Ajustar Saldo
+          </Button>
+          <Button size="sm" onClick={openNovoDep} disabled={!armazemId}>
+            <Plus size={14} /> Novo Depósito
+          </Button>
+        </div>
       </div>
 
       {/* Seletor: Armazém × Cultura × Safra */}
@@ -665,15 +725,44 @@ export function EstoquePage() {
                   <div>
                     <div className="flex items-center gap-1">
                       <label className="text-[10px] font-medium text-stone-500 uppercase">Carência Armazém</label>
-                      <Tooltip text="Dias sem cobrança quando a venda é PARA O PRÓPRIO armazém (Copasul). Vem da normativa anual e muda por produto/ano — ex.: milho 25/26 teve carência até 30/mai." position="bottom">
+                      <Tooltip text="Dias sem cobrança quando a venda é PARA O PRÓPRIO armazém (Copasul), contados a partir de cada depósito. Só vale quando a data-limite abaixo está vazia." position="bottom">
                         <HelpCircle size={10} className="text-stone-300" />
                       </Tooltip>
                     </div>
                     <input type="number" value={paramForm.carencia_armazem_dias}
+                      disabled={!!paramForm.carencia_armazem_ate}
                       onChange={(e) => setParamForm({ ...paramForm, carencia_armazem_dias: e.target.value })}
-                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                      className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs disabled:bg-stone-100 disabled:text-stone-400"
                     />
-                    <span className="text-[10px] text-stone-400">dias (normativa anual)</span>
+                    <span className="text-[10px] text-stone-400">
+                      {paramForm.carencia_armazem_ate ? "ignorado — usando a data-limite" : "dias desde cada depósito"}
+                    </span>
+                  </div>
+                  {/* Carência do armazém como DATA-LIMITE (ajuste 10-ago) — a normativa
+                      da safra libera armazenagem gratuita até uma data fixa (ex.: milho
+                      25/25 Copasul: 31/05/2026), igual para todas as notas. Era isto que
+                      faltava: com 365 dias por nota a taxa saía muito abaixo da Copasul. */}
+                  <div className="col-span-2">
+                    <div className="flex items-center gap-1">
+                      <label className="text-[10px] font-medium text-stone-500 uppercase">Carência Armazém até (data)</label>
+                      <Tooltip text="Data-limite da armazenagem gratuita pela normativa da safra na venda ao próprio armazém — ex.: milho 25/25 Copasul: 31/05/2026. Preenchida, a cobrança passa a contar dessa data para TODAS as notas (nota que entrou depois conta da própria entrada) e o campo 'Carência Armazém' em dias é ignorado." position="bottom">
+                        <HelpCircle size={10} className="text-stone-300" />
+                      </Tooltip>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input type="date" value={paramForm.carencia_armazem_ate}
+                        onChange={(e) => setParamForm({ ...paramForm, carencia_armazem_ate: e.target.value })}
+                        className="flex-1 h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
+                      />
+                      {paramForm.carencia_armazem_ate && (
+                        <button type="button"
+                          onClick={() => setParamForm({ ...paramForm, carencia_armazem_ate: "" })}
+                          className="h-8 px-2 rounded-lg border border-stone-200 text-[10px] text-stone-500 hover:bg-stone-50"
+                          title="Limpar e voltar a contar a carência em dias por nota"
+                        >Limpar</button>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-stone-400">vazio = contar pela carência em dias</span>
                   </div>
                   <div>
                     <div className="flex items-center gap-1">
@@ -811,7 +900,9 @@ export function EstoquePage() {
                     🏬 Venda ao Armazém {armazem?.apelido ? `(${armazem.apelido})` : ""}
                   </p>
                   <span className="text-[10px] text-stone-400">
-                    carência {paramForm?.carencia_armazem_dias ?? "—"} dias · normativa anual
+                    {paramForm?.carencia_armazem_ate
+                      ? `carência até ${formatDate(paramForm.carencia_armazem_ate)} · normativa da safra`
+                      : `carência ${paramForm?.carencia_armazem_dias ?? "—"} dias · desde cada depósito`}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -1055,6 +1146,65 @@ export function EstoquePage() {
         </div>
       </Modal>
       <UnsavedChangesDialog open={depGuard.confirmOpen} onStay={depGuard.stay} onDiscard={depGuard.discard} />
+
+      {/* Modal Ajuste de Saldo (quebra técnica) — 10-ago */}
+      <Modal open={ajusteModal} onClose={ajusteGuard.requestClose}
+        title="Ajustar Saldo do Estoque — Quebra Técnica" size="lg">
+        <div className="p-6 space-y-4">
+          <div className="rounded-lg bg-amber-50/70 border border-amber-100 px-4 py-3 flex items-start gap-2.5 text-xs text-stone-600">
+            <Info size={14} className="text-amber-700 shrink-0 mt-0.5" />
+            <span>
+              Use quando <b className="text-stone-700">100% do estoque já foi comercializado</b> e ainda
+              sobra saldo. Isso acontece porque as notas guardam o peso <b>bruto depositado</b> e o
+              armazém fixa o peso <b>líquido</b> — a diferença é a quebra técnica real apurada por ele.
+              O ajuste baixa exatamente esse resíduo com o motivo <b>quebra técnica</b>:
+              o bruto depositado continua íntegro no histórico e a saída fica registrada.
+            </span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-lg bg-stone-50 p-3">
+              <p className="text-[10px] uppercase text-stone-500 font-medium">Safra / Cultura</p>
+              <p className="text-sm font-bold text-stone-800">
+                {CULTURA_EMOJI[cultura]} {CULTURA_LABEL[cultura]} · {safra || "—"}
+              </p>
+            </div>
+            <div className="rounded-lg bg-stone-50 p-3">
+              <p className="text-[10px] uppercase text-stone-500 font-medium">Armazém</p>
+              <p className="text-sm font-bold text-stone-800">{armazem?.apelido ?? armazem?.nome ?? "—"}</p>
+            </div>
+            <div className="rounded-lg bg-red-50 border border-red-100 p-3">
+              <p className="text-[10px] uppercase text-red-700 font-medium">Saldo a zerar</p>
+              <p className="text-sm font-bold text-red-700">{fmtKg(resumo.total_kg_saldo)}</p>
+              <p className="text-[10px] text-stone-500">{fmtSc(resumo.total_sc_saldo)}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Data do ajuste *" type="date" value={ajusteForm.data}
+              onChange={(e) => setAjusteForm({ ...ajusteForm, data: e.target.value })} />
+          </div>
+          <Textarea label="Observação" rows={2}
+            placeholder="Ex.: quebra técnica apurada pela Copasul na fixação de 07/08/2026"
+            value={ajusteForm.observacao}
+            onChange={(e) => setAjusteForm({ ...ajusteForm, observacao: e.target.value })} />
+
+          <p className="text-[11px] text-stone-400">
+            O valor baixado é medido no banco no instante da confirmação — se alguém lançar uma venda
+            enquanto esta janela está aberta, o ajuste acompanha. Depois de confirmar você ainda tem
+            8 segundos para desfazer.
+          </p>
+
+          <div className="flex gap-3 justify-end pt-2">
+            <Button variant="ghost" onClick={ajusteGuard.requestClose}>Cancelar</Button>
+            <Button onClick={zerarSaldo} loading={ajusteSaving}
+              disabled={ajusteSaving || !ajusteForm.data || resumo.total_kg_saldo <= 0}>
+              <Scale size={14} /> Zerar Saldo
+            </Button>
+          </div>
+        </div>
+      </Modal>
+      <UnsavedChangesDialog open={ajusteGuard.confirmOpen} onStay={ajusteGuard.stay} onDiscard={ajusteGuard.discard} />
     </div>
   );
 }
