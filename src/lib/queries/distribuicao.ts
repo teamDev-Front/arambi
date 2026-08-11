@@ -309,6 +309,32 @@ export async function concluirRepasse(repasseId: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+export interface ReligarSyncResultado {
+  mes: string;
+  /** true = a linha provisionada do mês passou a ser mantida pelo sistema. */
+  adotou_linha: boolean;
+  linha_id: string | null;
+  soma_detalhado: number;
+  global_depois: number;
+  sincronizado: boolean;
+}
+
+/**
+ * Religa a sincronização automática do Provisionado DL de um mês (migration 0052).
+ *
+ * O global do Financeiro só acompanha o detalhado enquanto a linha carrega a
+ * etiqueta interna `dl_auto:<mês>`. Se ela se perder — ou se a linha tiver sido
+ * digitada à mão — o sistema para de sincronizar e não há como reatar pela
+ * interface, porque a etiqueta não é campo de formulário. Esta RPC adota a
+ * linha provisionada do mês e roda o SOMASE. Recusa (com mensagem) se houver
+ * mais de uma candidata no centro 2.8.1.
+ */
+export async function religarSyncDl(mes: string): Promise<ReligarSyncResultado> {
+  const { data, error } = await rpc()("fn_religar_sync_dl", { p_mes: mes });
+  if (error) throw new Error(error.message);
+  return data as ReligarSyncResultado;
+}
+
 // ----------------------------------------------------------------------------
 // Lookups
 // ----------------------------------------------------------------------------

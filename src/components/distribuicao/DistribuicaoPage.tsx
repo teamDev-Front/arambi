@@ -12,7 +12,7 @@ import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   Plus, Search, Edit2, Trash2, Loader2, HandCoins, CheckCheck,
   ArrowRightLeft, Undo2, CalendarCheck, PiggyBank, Landmark, AlertTriangle, FilterX,
-  Copy, Tag, X, FileDown, FileSpreadsheet, FileText,
+  Copy, Tag, X, FileDown, FileSpreadsheet, FileText, RefreshCw,
 } from "lucide-react";
 import { gerarPdfBloqueante } from "@/lib/pdfmonkey/frontend";
 import type { ReportScope } from "@/lib/pdfmonkey/types";
@@ -21,7 +21,7 @@ import { StatusSelect } from "@/components/ui/StatusSelect";
 import {
   listarDetalhado, criarDetalhado, atualizarDetalhado, deletarDetalhado,
   atualizarDetalhadoEmMassa, deletarDetalhadoEmMassa, obterResumoMensal, obterGlobalEmpresaMes,
-  listarRepassesDoMes, consolidarRepasse, desfazerRepasse, concluirRepasse,
+  listarRepassesDoMes, consolidarRepasse, desfazerRepasse, concluirRepasse, religarSyncDl,
   listarSocios, listarClassificacoesPessoais, listarContasDoSocio, listarMesesDetalhado,
   type TransacaoSocioRich, type GlobalEmpresaMes, type RepasseConsolidado,
 } from "@/lib/queries/distribuicao";
@@ -380,6 +380,34 @@ export function DistribuicaoPage() {
     const diff = Math.abs(globalMes.provisionadoGlobal - resumo.provisionado);
     return diff > 0.005 ? diff : null;
   }, [resumo, globalMes]);
+
+  // Religar a sincronização automática do Provisionado DL (migration 0052).
+  // A etiqueta `dl_auto:` que amarra o SOMASE não é campo de formulário — sem
+  // este botão, um mês que perdeu a etiqueta só voltava a sincronizar com
+  // intervenção no banco.
+  const [religando, setReligando] = useState(false);
+  async function handleReligarSync() {
+    setReligando(true);
+    try {
+      const r = await religarSyncDl(mes);
+      await fetchData();
+      if (r.sincronizado) {
+        toast.success(
+          "Sincronização religada",
+          `O provisionado global voltou a acompanhar o detalhado (${formatCurrency(r.global_depois)}).`,
+        );
+      } else {
+        toast.warning(
+          "Sincronização religada, mas os valores ainda diferem",
+          `Global ${formatCurrency(r.global_depois)} × detalhado ${formatCurrency(r.soma_detalhado)}. Confira se há outra linha provisionada no centro 2.8.1 do Financeiro.`,
+        );
+      }
+    } catch (e: unknown) {
+      toast.error("Não foi possível religar a sincronização", (e as Error).message ?? String(e));
+    } finally {
+      setReligando(false);
+    }
+  }
 
   // ---- seleção ----
   const toggleAll = () => {
@@ -876,16 +904,23 @@ export function DistribuicaoPage() {
 
       {/* Divergência entre global manual e detalhado */}
       {divergenciaProvisionado !== null && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 flex items-start gap-2">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 flex items-start gap-3">
           <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-          <span>
-            O provisionado global lançado à mão no Financeiro ({formatCurrency(globalMes?.provisionadoGlobal ?? 0)}) difere
-            da soma do detalhado ({formatCurrency(resumo?.provisionado ?? 0)}) em {formatCurrency(divergenciaProvisionado)}.
-            Enquanto existir lançamento provisionado manual no centro 2.8.1 (Distribuição de Lucros) deste mês, o sistema
-            não sincroniza o global automaticamente — ajuste ou exclua a linha manual no{" "}
-            <Link href="/dashboard/financeiro" className="underline font-medium">Financeiro</Link> para
-            ativar a sincronização automática.
-          </span>
+          <div className="space-y-2">
+            <span className="block">
+              O provisionado global no Financeiro ({formatCurrency(globalMes?.provisionadoGlobal ?? 0)}) difere
+              da soma do detalhado ({formatCurrency(resumo?.provisionado ?? 0)}) em {formatCurrency(divergenciaProvisionado)}.
+              A linha global deste mês está fora do controle automático, então ela não acompanha mais as mudanças do
+              detalhado — nem quando você consolida um repasse. Clique em <b>Religar sincronização</b> para o sistema
+              voltar a mantê-la; se preferir, ajuste ou exclua a linha no{" "}
+              <Link href="/dashboard/financeiro" className="underline font-medium">Financeiro</Link>.
+            </span>
+            <Button size="sm" variant="outline" onClick={handleReligarSync}
+              loading={religando} disabled={religando}
+              title="Passa a linha provisionada do centro 2.8.1 deste mês para o controle automático e recalcula o global pela soma do detalhado">
+              <RefreshCw size={13} /> Religar sincronização
+            </Button>
+          </div>
         </div>
       )}
 
