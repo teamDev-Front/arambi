@@ -33,8 +33,10 @@ export function ehResgateAutomatico(r: { conta_contabil_cod: string; origem_plan
 }
 
 /** Rótulo do tipo de agrupamento, para a tela explicar o critério da soma. */
-export function tipoDoResgate(origem: string | null): "fatura" | "diario" | "manual" {
+export function tipoDoResgate(origem: string | null): "provisionado" | "fatura" | "diario" | "manual" {
   if (!origem) return "manual";
+  // 0053: a linha amarela mensal, que soma o que ainda está só programado.
+  if (origem.startsWith("auto:resgate_invest_prov:")) return "provisionado";
   if (origem.startsWith("auto:resgate_invest_fatura:")) return "fatura";
   if (origem.startsWith("auto:resgate_invest:")) return "diario";
   return "manual";
@@ -47,7 +49,7 @@ export interface ComposicaoResgate {
   valorResgate: number;  // magnitude positiva
   /** Diferença entre o resgate e a soma dos títulos (deve ser 0). */
   diferenca: number;
-  tipo: "fatura" | "diario" | "manual";
+  tipo: "provisionado" | "fatura" | "diario" | "manual";
 }
 
 /**

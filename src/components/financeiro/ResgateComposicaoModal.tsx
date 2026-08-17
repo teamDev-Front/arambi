@@ -17,8 +17,14 @@ import { obterComposicaoResgate, type ComposicaoResgate } from "@/lib/queries/re
 import { FORMA_PGTO_LABEL } from "@/types";
 
 const EXPLICACAO: Record<ComposicaoResgate["tipo"], string> = {
+  provisionado:
+    "Programação do MÊS: soma tudo que ainda está provisionado na conta corrente Sicredi, numa " +
+    "linha só, no último dia do mês. Enquanto está aqui, o valor muda livre — provisionado ainda " +
+    "pode ser alterado. Quando o título passa para A Pagar, ele sai desta linha e vira um resgate " +
+    "próprio no dia do agendamento.",
   diario:
-    "Resgate agrupado por DIA: soma todos os títulos do Sicredi que vencem na mesma data. " +
+    "Resgate agrupado por DIA: soma os títulos do Sicredi que foram para o banco juntos e vencem " +
+    "na mesma data. " +
     "Fica programado para o dia útil anterior ao vencimento — assim o dinheiro rende o máximo " +
     "possível e o risco não se concentra num dia só. A exceção é quando o dia anterior cairia no " +
     "mês passado: aí o resgate vai para o próprio dia do vencimento, para o mês fechar em zero.",
