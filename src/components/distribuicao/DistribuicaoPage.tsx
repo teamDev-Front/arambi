@@ -400,6 +400,26 @@ export function DistribuicaoPage() {
     return s;
   }, [rows, selectedIds]);
 
+  /**
+   * Por que "Consolidar repasse" está desligado — null = está liberado.
+   *
+   * São DUAS condições, e a tela só falava de uma. A confusão de 18-ago foi
+   * essa: com uma competência escolhida, ela concluiu que o problema era a
+   * competência, quando na verdade não havia nada marcado como "A repassar"
+   * naquele mês (já estava tudo consolidado).
+   */
+  const motivoConsolidarBloqueado = useMemo<string | null>(() => {
+    if (!mesFoco) {
+      return "A consolidação gera um lançamento global de UMA competência — deixe só uma marcada no filtro Competência acima.";
+    }
+    if (qtdConsolidavel === 0) {
+      return `Nenhum lançamento de ${mesHumano(mesFoco)} está aguardando repasse. ` +
+        `A consolidação só pega o que está com status "A repassar" e ainda não foi consolidado — ` +
+        `marque os lançamentos na coluna Status da tabela abaixo (ou selecione vários e use a ação em massa).`;
+    }
+    return null;
+  }, [mesFoco, qtdConsolidavel]);
+
   const divergenciaProvisionado = useMemo(() => {
     if (!resumo || !globalMes) return null;
     if (!globalMes.temProvisionadoManual) return null;
@@ -898,19 +918,22 @@ export function DistribuicaoPage() {
             title="Gera a capa do repasse do sócio (PDFMonkey) — com opção de usar só os lançamentos tagueados">
             <FileText size={14} /> Capa do sócio
           </Button>
-          <Button
-            size="sm"
-            onClick={() => setConsolidarOpen(true)}
-            disabled={qtdConsolidavel === 0 || !mesFoco}
-            title={!mesFoco
-              ? "A consolidação gera um lançamento global de UMA competência — deixe só uma marcada no filtro Competência acima."
-              : qtdConsolidavel === 0
-                ? 'Marque lançamentos como "A repassar" para liberar a consolidação'
-                : "Cria o lançamento global no Financeiro a partir do detalhado marcado como A repassar"}
-          >
-            <ArrowRightLeft size={14} />
-            Consolidar repasse{totalConsolidavel > 0 ? ` (${formatCurrency(totalConsolidavel)})` : ""}
-          </Button>
+          {/* O <span> em volta existe porque o Button usa
+              `disabled:pointer-events-none`: com o botão desligado, o title
+              dele NUNCA aparece — e era o único lugar que dizia por que ele
+              estava desligado. O span não é disabled, então o tooltip volta a
+              funcionar (apontamento de 18-ago: "deixei somente 2026-08 e não
+              habilitou o botão consolidar"). */}
+          <span title={motivoConsolidarBloqueado ?? "Cria o lançamento global no Financeiro a partir do detalhado marcado como A repassar"}>
+            <Button
+              size="sm"
+              onClick={() => setConsolidarOpen(true)}
+              disabled={!!motivoConsolidarBloqueado}
+            >
+              <ArrowRightLeft size={14} />
+              Consolidar repasse{totalConsolidavel > 0 ? ` (${formatCurrency(totalConsolidavel)})` : ""}
+            </Button>
+          </span>
           <Button variant="outline" size="sm" onClick={openNew}>
             <Plus size={14} /> Novo lançamento detalhado
           </Button>
@@ -923,6 +946,15 @@ export function DistribuicaoPage() {
         <span><b className="text-stone-800">2.</b> Clique em <b>Consolidar repasse</b> — o sistema cria o valor global no Financeiro (Cora → Inter) automaticamente.</span>
         <span><b className="text-stone-800">3.</b> Feito o repasse aos sócios, clique em <b>Dar baixa</b> — tudo vira Repassado de uma vez.</span>
       </div>
+
+      {/* Por que o botão está desligado — dito na tela, não só no tooltip
+          (que nem aparece em botão desabilitado). Ajuste 18-ago. */}
+      {motivoConsolidarBloqueado && (
+        <div className="-mt-3 flex items-start gap-2 text-xs text-stone-500">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0 text-amber-500" />
+          <span><b className="text-stone-700">Consolidar repasse está desligado:</b> {motivoConsolidarBloqueado}</span>
+        </div>
+      )}
 
       {/* KPIs do mês — mesmo padrão visual dos cards do Financeiro (ajuste 27-jul) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
