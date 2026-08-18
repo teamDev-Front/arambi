@@ -490,10 +490,16 @@ export async function obterResumoDespesaVariavel(ano: string): Promise<ResumoDes
  * DV, o sistema entende que esse é o limite disponível e vai debitando
  * automático?" — passa a entender, a partir do clique neste botão.
  */
-export async function gerarLinhaSaldoDv(mes: string): Promise<void> {
+/**
+ * Retorna o id da linha, ou `null` quando o mês JÁ PASSOU do teto — nesse caso
+ * não há saldo a programar e a linha não fica no Financeiro (0055: "neste caso
+ * ele deveria sumir, pois excedeu os 20 mil mensal").
+ */
+export async function gerarLinhaSaldoDv(mes: string): Promise<string | null> {
   const supabase = createClient();
-  const { error } = await supabase.rpc("fn_dv_gerar_linha" as never, { p_mes: mes } as never);
+  const { data, error } = await supabase.rpc("fn_dv_gerar_linha" as never, { p_mes: mes } as never);
   if (error) throw error;
+  return (data as unknown as string | null) ?? null;
 }
 
 /**

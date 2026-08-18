@@ -1319,7 +1319,7 @@ export function FinanceiroPage() {
   async function gerarSaldoDvDoMes() {
     setDvGerando(true);
     try {
-      await gerarLinhaSaldoDv(dvMes);
+      const id = await gerarLinhaSaldoDv(dvMes);
       const [resumo] = await Promise.all([
         obterResumoDespesaVariavel(dvAno),
         fetchData(),
@@ -1327,10 +1327,18 @@ export function FinanceiroPage() {
         fetchSaldos(),
       ]);
       setDvResumo(resumo);
-      toast.success(
-        `Saldo de ${mesHumano(dvMes)} lançado no Financeiro`,
-        "A linha Provisionado DV do mês passa a acompanhar o saldo sozinha: cada Despesa Variável debita, cada lançamento positivo credita.",
-      );
+      if (id) {
+        toast.success(
+          `Saldo de ${mesHumano(dvMes)} lançado no Financeiro`,
+          "A linha Provisionado DV do mês passa a acompanhar o saldo sozinha: cada Despesa Variável debita, cada lançamento positivo credita.",
+        );
+      } else {
+        // Mês estourado: a linha do sistema não fica em R$ 0,00 no Financeiro.
+        toast.info(
+          `${mesHumano(dvMes)} não tem saldo a programar`,
+          `A competência já passou do teto de ${formatCurrency(dvResumo?.limiteMensal ?? 0)}, então não existe linha de saldo para lançar. Quando sobrar limite (por um estorno, ou em outra competência), ela aparece sozinha.`,
+        );
+      }
     } catch (e: unknown) {
       const msg = (e as Error).message ?? String(e);
       toast.error(
@@ -1581,8 +1589,10 @@ export function FinanceiroPage() {
                 <b> credita de volta</b> — sem precisar editar a linha à mão.
               </p>
               <p className="text-[11px] text-stone-400">
-                Se você já tem a linha do mês digitada, ela é <b>adotada</b> em vez de duplicada.
-                Para o ano inteiro de uma vez, use <b>Provisionamento Anual → Espelhar ano</b>.
+                Se o mês já tem uma linha Provisionado DV, ela é <b>adotada</b> (não duplica) — inclusive
+                a que veio da planilha. Se a competência já passou do teto, não há saldo a programar e a
+                linha não é criada. Vale só para <b>{mesHumano(dvMes)}</b>: para o ano inteiro de uma vez,
+                use <b>Provisionamento Anual → Espelhar ano</b>.
               </p>
             </div>
             <Button
