@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { MultiSelect } from "@/components/ui/MultiSelect";
+import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import { ComboBox } from "@/components/ui/ComboBox";
 import { StatusSelect } from "@/components/ui/StatusSelect";
 import { BankLogo } from "@/components/ui/BankLogo";
@@ -40,8 +41,10 @@ import {
   garantirFornecedor,
   getIndicadoresVencimentos,
   listarMesesFinanceiro,
-  STATUS_SAIDA_PENDENTE,
   STATUS_ENTRADA_PENDENTE,
+  STATUS_PROGRAMACAO_BANCARIA,
+  STATUS_PROVISIONADO,
+  gerarLinhaSaldoDv,
   isErroSaldoInvest,
   criarTransacoesSemSaldoInvest,
   atualizarTransacaoSemSaldoInvest,
@@ -291,6 +294,31 @@ export function FinanceiroPage() {
     });
   }, []);
 
+  /**
+   * Taguear/destaguear TUDO que está na tela de uma vez (17-ago). Mesma regra
+   * do "Selecionar todos" ao lado: se a página inteira já está tagueada, o
+   * clique tira; senão, completa o que falta (sem mexer nas tags de outras
+   * páginas — elas são o trabalho do dia acumulado).
+   */
+  const togglePageTags = useCallback(() => {
+    if (rows.length === 0) return;
+    const todosTagueados = rows.every((r) => tags.has(r.id));
+    setTags((prev) => {
+      const next = new Map(prev);
+      for (const row of rows) {
+        if (todosTagueados) next.delete(row.id);
+        else next.set(row.id, {
+          id: row.id,
+          data: row.data,
+          descricao: row.descricao ?? null,
+          fornecedor: row.fornecedor_nome ?? null,
+          valor: Number(row.valor),
+        });
+      }
+      return next;
+    });
+  }, [rows, tags]);
+
   const removerTag = useCallback((id: string) => {
     setTags((prev) => {
       if (!prev.has(id)) return prev;
@@ -316,7 +344,7 @@ export function FinanceiroPage() {
   const [search, setSearch] = useState("");
   // Competência (mês de referência) — seletor no HEADER, padronizado com a
   // Distribuição (ajuste 28-jul). "" = todas as competências.
-  const [filterCompetencia, setFilterCompetencia] = useState("");
+  const [filterCompetencias, setFilterCompetencias] = useState<string[]>([]);
   const [mesesCompetencia, setMesesCompetencia] = useState<string[]>([]);
   useEffect(() => {
     listarMesesFinanceiro().then(setMesesCompetencia).catch(() => undefined);
@@ -335,6 +363,10 @@ export function FinanceiroPage() {
   const [filterEmissaoDe, setFilterEmissaoDe] = useState("");
   const [filterEmissaoAte, setFilterEmissaoAte] = useState("");
   // Filtro por valor (magnitude R$ — ignora o sinal).
+  // Recorte "só o lado que sai" (17-ago) — ligado pelos cards de vencimento.
+  // Num par de resgate, separa a linha negativa (SICREDINVEST) da positiva
+  // (SICREDI), que são o mesmo dinheiro visto dos dois lados.
+  const [filterSoNegativos, setFilterSoNegativos] = useState(false);
   const [filterValorMin, setFilterValorMin] = useState("");
   const [filterValorMax, setFilterValorMax] = useState("");
   const [page, setPage] = useState(1);
@@ -359,6 +391,7 @@ export function FinanceiroPage() {
   const [resgateVerId, setResgateVerId] = useState<string | null>(null);
   const [conferenciaOpen, setConferenciaOpen] = useState(false);
   const [dvAno, setDvAno] = useState(() => String(new Date().getFullYear()));
+  const [dvGerando, setDvGerando] = useState(false);
 
   // "Ver selecionados" (RF 31-jul) — lista completa da seleção, fora do filtro.
   const [selecionadosOpen, setSelecionadosOpen] = useState(false);
@@ -473,7 +506,17 @@ export function FinanceiroPage() {
 
   // Cards de vencimento no topo (ajuste 24-jul — substituem os KPIs "da página").
   // Clicar num card espelha o recorte dele nos filtros da tabela.
-  type IndicadorKey = "atraso" | "hoje" | "pagar" | "receber";
+  //
+  // 17-ago-2026: o antigo "A pagar até 31/08" virou DOIS cards, porque ele
+  // misturava as duas leituras da planilha e escondia justamente a diferença
+  // que importa na hora de agendar no banco:
+  //   🔴 PROGRAMAÇÃO BANCÁRIA — A pagar / A repassar / A aplicar / A resgatar.
+  //      Já foi para o banco. Vermelho, a cor que ela usa para "realizado no
+  //      extrato".
+  //   🟡 PROVISIONADO — Provisionado / Aplicação / Resgate / Provisionado DV /
+  //      Provisionado DL. Ainda é programação e pode mudar. Dourado, a cor que
+  //      o card "A pagar até…" usava.
+  type IndicadorKey = "atraso" | "hoje" | "programacao" | "provisionado" | "receber";
   const indicadorCards = useMemo(() => {
     if (!indicadores) return [];
     const hojeFmt = formatDate(indicadores.hoje);
@@ -489,7 +532,7 @@ export function FinanceiroPage() {
         labelClass: "text-red-700",
         valorClass: "text-red-600",
         ...indicadores.emAtraso,
-        help: `Saídas em aberto (A pagar, A repassar, A aplicar e Provisionados) vencidas antes de hoje (${hojeFmt}). Clique para ver esses lançamentos na tabela.`,
+        help: `Tudo em aberto (programação bancária e provisionados) vencido antes de hoje (${hojeFmt}). Só o lado que SAI: num resgate, a linha negativa do Sicredi Invest. Clique para ver esses lançamentos na tabela.`,
       },
       {
         key: "hoje" as IndicadorKey,
@@ -500,18 +543,29 @@ export function FinanceiroPage() {
         labelClass: "text-orange-700",
         valorClass: "text-orange-600",
         ...indicadores.vencemHoje,
-        help: `Saídas em aberto que vencem hoje (${hojeFmt}). Clique para ver na tabela.`,
+        help: `Tudo em aberto que vence hoje (${hojeFmt}) — inclui os A resgatar do dia, pelo valor NEGATIVO do Sicredi Invest (marcar o resgate lá atualiza sozinho o lado positivo do Sicredi). Clique para ver na tabela.`,
       },
       {
-        key: "pagar" as IndicadorKey,
-        label: `A pagar até ${ateDia}`,
+        key: "programacao" as IndicadorKey,
+        label: `Programação bancária até ${ateDia}`,
+        unidade: "conta",
+        icon: <CalendarDays size={15} />,
+        iconClass: "bg-red-50 text-red-600",
+        labelClass: "text-red-700",
+        valorClass: "text-red-600",
+        ...indicadores.programacaoBancariaAteFimDoMes,
+        help: `O que já foi ao banco e vence de hoje até ${fimFmt}: A pagar, A repassar, A aplicar e A resgatar (o negativo do Sicredi Invest). As atrasadas ficam no card "Contas em atraso". Clique para ver na tabela.`,
+      },
+      {
+        key: "provisionado" as IndicadorKey,
+        label: `Provisionado até ${ateDia}`,
         unidade: "conta",
         icon: <CalendarDays size={15} />,
         iconClass: "bg-amber-50 text-amber-700",
         labelClass: "text-amber-700",
         valorClass: "text-amber-700",
-        ...indicadores.aPagarAteFimDoMes,
-        help: `Saídas em aberto (inclui provisionados) vencendo de hoje até ${fimFmt}. As atrasadas ficam no card "Contas em atraso". Clique para ver na tabela.`,
+        ...indicadores.provisionadoAteFimDoMes,
+        help: `O que ainda é programação e pode mudar, vencendo de hoje até ${fimFmt}: Provisionado, Aplicação, Resgate, Provisionado DV e Provisionado DL. Clique para ver na tabela.`,
       },
       {
         key: "receber" as IndicadorKey,
@@ -522,24 +576,24 @@ export function FinanceiroPage() {
         labelClass: "text-emerald-700",
         valorClass: "text-emerald-600",
         ...indicadores.aReceberAteFimDoMes,
-        help: `Entradas em aberto (A receber e A resgatar) com vencimento até ${fimFmt} — inclui as atrasadas. Clique para ver na tabela.`,
+        help: `Apenas os A RECEBER com vencimento até ${fimFmt} — inclui os atrasados. Os A resgatar saíram daqui (17-ago): eles aparecem em "Vencem hoje" e "Programação bancária", pelo valor negativo do Sicredi Invest. Clique para ver na tabela.`,
       },
     ];
   }, [indicadores]);
 
   // Há algum filtro aplicado? (controla a visibilidade do "Limpar todos os filtros")
   const temFiltrosAtivos = Boolean(
-    search || filterCompetencia || filterStatus.length || filterContaContabil.length || filterCentroCusto.length ||
+    search || filterCompetencias.length || filterStatus.length || filterContaContabil.length || filterCentroCusto.length ||
     filterBanco.length || filterTipoDespesa.length || filterFormaPgto.length ||
     filterDataDe || filterDataAte || filterEmissaoDe || filterEmissaoAte ||
-    filterValorMin || filterValorMax || mostrarSoTagueados,
+    filterValorMin || filterValorMax || mostrarSoTagueados || filterSoNegativos,
   );
 
   // "Limpar todos os filtros" (RF 24-jul) — volta a listagem ao estado completo.
   // Desliga também o recorte "só tagueados", mas NÃO apaga as tags em si.
   function limparTodosFiltros() {
     setSearch("");
-    setFilterCompetencia("");
+    setFilterCompetencias([]);
     setFilterStatus([]);
     setFilterTipoDespesa([]);
     setFilterFormaPgto([]);
@@ -550,6 +604,7 @@ export function FinanceiroPage() {
     setFilterDataAte("");
     setFilterEmissaoDe("");
     setFilterEmissaoAte("");
+    setFilterSoNegativos(false);
     setFilterValorMin("");
     setFilterValorMax("");
     setMostrarSoTagueados(false);
@@ -561,16 +616,25 @@ export function FinanceiroPage() {
     // Zera os filtros e aplica só o recorte do card — a tabela espelha o número.
     limparTodosFiltros();
     const { hoje, fimDoMes } = indicadores;
+    const emAberto = [...STATUS_PROGRAMACAO_BANCARIA, ...STATUS_PROVISIONADO];
     if (key === "atraso") {
-      setFilterStatus([...STATUS_SAIDA_PENDENTE]);
+      setFilterStatus(emAberto);
+      setFilterSoNegativos(true);
       setFilterDataDe("");
       setFilterDataAte(isoAddDias(hoje, -1));
     } else if (key === "hoje") {
-      setFilterStatus([...STATUS_SAIDA_PENDENTE]);
+      setFilterStatus(emAberto);
+      setFilterSoNegativos(true);
       setFilterDataDe(hoje);
       setFilterDataAte(hoje);
-    } else if (key === "pagar") {
-      setFilterStatus([...STATUS_SAIDA_PENDENTE]);
+    } else if (key === "programacao") {
+      setFilterStatus([...STATUS_PROGRAMACAO_BANCARIA]);
+      setFilterSoNegativos(true);
+      setFilterDataDe(hoje);
+      setFilterDataAte(fimDoMes);
+    } else if (key === "provisionado") {
+      setFilterStatus([...STATUS_PROVISIONADO]);
+      setFilterSoNegativos(true);
       setFilterDataDe(hoje);
       setFilterDataAte(fimDoMes);
     } else {
@@ -582,6 +646,7 @@ export function FinanceiroPage() {
   }
 
   // ---- seleção (RF-FIN-09) ----
+  const allPageTagged = rows.length > 0 && rows.every((r) => tags.has(r.id));
   const allPageSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
   const togglePageSelection = useCallback(() => {
     if (rows.length === 0) return;
@@ -651,7 +716,11 @@ export function FinanceiroPage() {
   // ---- Despesas Variáveis (RF 31-jul) ----
   // A competência do card segue o seletor do header; com "Todas" selecionada,
   // cai no mês corrente (é o mês que ela está tocando na planilha).
-  const dvMes = filterCompetencia || new Date().toISOString().slice(0, 7);
+  // Com várias competências marcadas o card de DV segue a MAIS RECENTE — é o
+  // mês que ela está tocando; com nenhuma, o mês corrente.
+  const dvMes = filterCompetencias.length
+    ? [...filterCompetencias].sort().at(-1)!
+    : new Date().toISOString().slice(0, 7);
   const dvAnos = useMemo(() => {
     const anos = new Set(mesesCompetencia.map((m) => m.slice(0, 4)));
     anos.add(dvMes.slice(0, 4));
@@ -686,7 +755,7 @@ export function FinanceiroPage() {
   // Filtros atuais (para gerar relatório pelo recorte) e competência sugerida.
   const filtrosAtuais: ListarTransacoesFiltros = useMemo(() => ({
     search: search || undefined,
-    mesReferencia: filterCompetencia || undefined,
+    mesReferencia: filterCompetencias.length ? filterCompetencias : undefined,
     status: filterStatus.length ? filterStatus : undefined,
     contaContabilCod: filterContaContabil.length ? filterContaContabil : undefined,
     centroCustoCod: filterCentroCusto.length ? filterCentroCusto : undefined,
@@ -697,15 +766,16 @@ export function FinanceiroPage() {
     dataAte: filterDataAte || undefined,
     emissaoDe: filterEmissaoDe || undefined,
     emissaoAte: filterEmissaoAte || undefined,
+    somenteNegativos: filterSoNegativos || undefined,
     valorMin: filterValorMin ? Math.abs(Number(filterValorMin)) || undefined : undefined,
     valorMax: filterValorMax ? Math.abs(Number(filterValorMax)) || undefined : undefined,
     // "Ver só tagueados" (RF 24-jul): restringe a listagem — e, por tabela,
     // exportações/relatórios "pelos filtros" — aos lançamentos com TAG.
     ids: mostrarSoTagueados && tags.size > 0 ? Array.from(tags.keys()) : undefined,
-  }), [search, filterCompetencia, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
-       filterTipoDespesa, filterFormaPgto, filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte, filterValorMin, filterValorMax,
+  }), [search, filterCompetencias, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
+       filterTipoDespesa, filterFormaPgto, filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte, filterSoNegativos, filterValorMin, filterValorMax,
        mostrarSoTagueados, tags]);
-  const competenciaSugerida = filterCompetencia || filterDataDe?.slice(0, 7) || new Date().toISOString().slice(0, 7);
+  const competenciaSugerida = filterCompetencias[0] || filterDataDe?.slice(0, 7) || new Date().toISOString().slice(0, 7);
 
   function abrirEscopo() {
     setEscopoTipo(selectedIds.size > 0 ? "por_selecao" : "por_filtros");
@@ -716,7 +786,7 @@ export function FinanceiroPage() {
   const montarMetaExport = useCallback((): FinanceiroExportMeta => {
     const f: string[] = [];
     if (search) f.push(`Busca: "${search}"`);
-    if (filterCompetencia) f.push(`Competência: ${filterCompetencia}`);
+    if (filterCompetencias.length) f.push(`Competência: ${filterCompetencias.join(", ")}`);
     if (filterStatus.length) f.push(`Status: ${filterStatus.map((s) => getStatusLabel(s)).join(", ")}`);
     if (filterContaContabil.length) {
       f.push(`Conta: ${filterContaContabil.map((cod) => {
@@ -751,6 +821,7 @@ export function FinanceiroPage() {
     if (filterValorMin || filterValorMax) {
       f.push(`Valor: ${filterValorMin ? formatCurrency(Number(filterValorMin)) : "…"} a ${filterValorMax ? formatCurrency(Number(filterValorMax)) : "…"}`);
     }
+    if (filterSoNegativos) f.push('Apenas o lado que sai (valores negativos)');
     if (mostrarSoTagueados && tags.size > 0) {
       f.push(`Apenas lançamentos tagueados (${tags.size})`);
     }
@@ -758,9 +829,9 @@ export function FinanceiroPage() {
       ? `Seleção manual — ${selectedIds.size} lançamento${selectedIds.size === 1 ? "" : "s"}`
       : "Recorte pelos filtros aplicados na tela";
     return { titulo: "Relatório de Lançamentos Financeiros", escopo, filtros: f };
-  }, [search, filterCompetencia, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
+  }, [search, filterCompetencias, filterStatus, filterContaContabil, filterCentroCusto, filterBanco,
       filterTipoDespesa, filterFormaPgto, filterDataDe, filterDataAte, filterEmissaoDe, filterEmissaoAte,
-      filterValorMin, filterValorMax, selectedIds, classificacoesN2, classificacoesN3, bancos,
+      filterSoNegativos, filterValorMin, filterValorMax, selectedIds, classificacoesN2, classificacoesN3, bancos,
       mostrarSoTagueados, tags]);
 
   /**
@@ -1241,6 +1312,38 @@ export function FinanceiroPage() {
     }
   }
 
+  /**
+   * Lança (ou adota) a linha "Provisionado DV" do mês e liga a manutenção
+   * automática dela no banco — migration 0054.
+   */
+  async function gerarSaldoDvDoMes() {
+    setDvGerando(true);
+    try {
+      await gerarLinhaSaldoDv(dvMes);
+      const [resumo] = await Promise.all([
+        obterResumoDespesaVariavel(dvAno),
+        fetchData(),
+        fetchIndicadores(),
+        fetchSaldos(),
+      ]);
+      setDvResumo(resumo);
+      toast.success(
+        `Saldo de ${mesHumano(dvMes)} lançado no Financeiro`,
+        "A linha Provisionado DV do mês passa a acompanhar o saldo sozinha: cada Despesa Variável debita, cada lançamento positivo credita.",
+      );
+    } catch (e: unknown) {
+      const msg = (e as Error).message ?? String(e);
+      toast.error(
+        "Não foi possível lançar o saldo",
+        /fn_dv_gerar_linha|does not exist|schema cache/i.test(msg)
+          ? "A migration 0054 ainda não foi aplicada neste banco."
+          : msg,
+      );
+    } finally {
+      setDvGerando(false);
+    }
+  }
+
   // Copia as TAGs para a seleção — libera tudo que a seleção já sabe fazer:
   // Exportar PDF/XLSX, Gerar relatório (capa), status em massa, autossoma.
   function selecionarTagueados() {
@@ -1265,21 +1368,16 @@ export function FinanceiroPage() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap items-center">
-          {/* Competência no header — idem à Distribuição (ajuste 28-jul) */}
+          {/* Competência no header — multi-seleção com checkbox (17-ago) */}
           <label className="flex items-center gap-1.5 text-xs text-stone-500"
-            title="Competência (mês de referência) da listagem, exportações e relatórios. 'Todas' = sem recorte de competência.">
+            title="Competência (mês de referência) da listagem, exportações e relatórios. Marque quantas quiser e clique em Aplicar; nenhuma marcada = todas.">
             Competência
-            <select
-              value={filterCompetencia}
-              onChange={(e) => { setFilterCompetencia(e.target.value); setPage(1); }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs bg-white"
-            >
-              <option value="">Todas</option>
-              {(filterCompetencia && !mesesCompetencia.includes(filterCompetencia)
-                ? [filterCompetencia, ...mesesCompetencia]
-                : mesesCompetencia
-              ).map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
+            <CompetenciaMultiSelect
+              className="w-40"
+              options={mesesCompetencia}
+              value={filterCompetencias}
+              onChange={(v) => { setFilterCompetencias(v); setPage(1); }}
+            />
           </label>
           {/* Conferência do Sicredi (pedido 04-ago) — "o Sicredi tem que zerar" */}
           <Button variant="outline" size="sm" onClick={() => setConferenciaOpen(true)}
@@ -1344,7 +1442,7 @@ export function FinanceiroPage() {
 
       {/* Indicadores de vencimento — foto global dos lançamentos em aberto (ajuste 24-jul) */}
       {indicadores && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
           {indicadorCards.map((c) => (
             <button
               key={c.key}
@@ -1468,6 +1566,37 @@ export function FinanceiroPage() {
               </p>
             </span>
           </div>
+          {/* Linha automática do saldo (17-ago) — a resposta ao "o sistema vai
+              debitando automático desse valor conforme as despesas variáveis
+              forem sendo lançadas?". Passa a ir, a partir daqui. */}
+          <div className="mt-3 rounded-xl border border-stone-200 bg-white px-4 py-3 flex items-start justify-between gap-4 flex-wrap">
+            <div className="text-xs text-stone-600 max-w-xl space-y-1">
+              <p className="font-semibold text-stone-800">
+                Lançar o saldo de {mesHumano(dvMes)} no Financeiro (Provisionado DV)
+              </p>
+              <p className="leading-relaxed">
+                Cria no Financeiro a linha <b>Provisionado DV</b> do mês e passa a mantê-la igual ao
+                <b> saldo</b> ({formatCurrency(dvResumo?.limiteMensal ?? 0)} − o que já foi usado). A partir daí
+                cada Despesa Variável nova <b>debita sozinha</b>, e um lançamento positivo (devolução, reembolso)
+                <b> credita de volta</b> — sem precisar editar a linha à mão.
+              </p>
+              <p className="text-[11px] text-stone-400">
+                Se você já tem a linha do mês digitada, ela é <b>adotada</b> em vez de duplicada.
+                Para o ano inteiro de uma vez, use <b>Provisionamento Anual → Espelhar ano</b>.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              loading={dvGerando}
+              disabled={dvGerando}
+              onClick={gerarSaldoDvDoMes}
+              title="Cria (ou adota) a linha Provisionado DV do mês e liga a atualização automática"
+            >
+              <Layers size={14} /> Lançar/atualizar saldo
+            </Button>
+          </div>
+
           <p className="mt-2 text-[11px] text-stone-400 text-center">
             Orçamento mensal programado: {formatCurrency(dvResumo?.limiteMensal ?? 0)} · ajustável em
             Configurações → Automações
@@ -1544,7 +1673,7 @@ export function FinanceiroPage() {
             {/* Tipo de Despesa e Forma de Pagamento (RF 31-jul). A dupla
                 "competência + Cartão de Crédito" é o recorte da FATURA do mês. */}
             <MultiSelect
-              className="w-40 ml-4"
+              className="w-40"
               value={filterTipoDespesa}
               onChange={(v) => { setFilterTipoDespesa(v); setPage(1); }}
               options={TIPO_DESPESA_OPTIONS}
@@ -1554,7 +1683,7 @@ export function FinanceiroPage() {
               unitLabel="tipos"
             />
             <MultiSelect
-              className="w-44 ml-4"
+              className="w-44"
               value={filterFormaPgto}
               onChange={(v) => { setFilterFormaPgto(v); setPage(1); }}
               options={FORMA_PGTO_OPTIONS}
@@ -1565,7 +1694,7 @@ export function FinanceiroPage() {
             />
             {/* Período por VENCIMENTO (RF 23-jul: substitui o filtro de mês) */}
             <div
-              className="flex items-center gap-1 ml-4"
+              className="flex items-center gap-1"
               title="Período pelo VENCIMENTO. Use a mesma data nos dois campos para um único dia."
             >
               <CalendarRange size={14} className="text-stone-400 shrink-0" />
@@ -1675,6 +1804,24 @@ export function FinanceiroPage() {
                 </button>
               )}
             </div>
+            {/* Recorte "só o lado que sai" — ligado pelos cards de vencimento (17-ago) */}
+            {filterSoNegativos && (
+              <span
+                className="h-8 inline-flex items-center gap-1.5 rounded-lg bg-red-50 border border-red-200 px-2 text-xs font-medium text-red-700"
+                title="Mostrando apenas os valores negativos. Num par de resgate isso deixa só a linha do SICREDINVEST — a do SICREDI é o mesmo dinheiro entrando."
+              >
+                Só o lado que sai
+                <button
+                  type="button"
+                  onClick={() => { setFilterSoNegativos(false); setPage(1); }}
+                  className="text-red-400 hover:text-red-700 cursor-pointer"
+                  aria-label="Mostrar também os valores positivos"
+                  title="Mostrar também os valores positivos"
+                >
+                  ×
+                </button>
+              </span>
+            )}
             {/* Recorte "só tagueados" ativo — chip visível junto dos filtros (RF 24-jul) */}
             {mostrarSoTagueados && (
               <span
@@ -1773,8 +1920,24 @@ export function FinanceiroPage() {
                       className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
                     />
                   </th>
-                  <th className="px-1 py-3 w-8" title="Tag do dia — o 'pintar de amarelo' da planilha: marque o que está sendo trabalhado hoje">
-                    <Tag size={12} className="text-amber-400 mx-auto" />
+                  {/* Taguear TODOS os lançamentos da tela de uma vez (17-ago:
+                      "permitir seleção múltiplas simultâneas em TAG DO DIA,
+                      conforme os lançamentos apresentados na tela"). */}
+                  <th className="px-1 py-3 w-8">
+                    <button
+                      type="button"
+                      onClick={togglePageTags}
+                      disabled={rows.length === 0}
+                      className={`p-1 rounded transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed mx-auto block ${
+                        allPageTagged ? "text-amber-500 hover:text-amber-600" : "text-amber-300 hover:text-amber-500"
+                      }`}
+                      title={allPageTagged
+                        ? "Remover a tag de todos os lançamentos desta página"
+                        : "Taguear todos os lançamentos desta página de uma vez (o 'pintar de amarelo' da planilha)"}
+                      aria-label={allPageTagged ? "Remover tag de todos" : "Taguear todos"}
+                    >
+                      <Tag size={13} fill={allPageTagged ? "currentColor" : "none"} />
+                    </button>
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">
                     <button

@@ -10,6 +10,7 @@ import {
   Bot,
   Receipt,
   ScrollText,
+  Trash2,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
@@ -63,6 +64,7 @@ const navItems: NavEntry[] = [
   { label: "Documentos", href: "/dashboard/documentos", icon: FileText },
   { label: "Assistentes IA", href: "/dashboard/assistentes", icon: Bot },
   { label: "Recibos & Termos", href: "/dashboard/recibos", icon: Receipt },
+  { label: "Lixeira", href: "/dashboard/lixeira", icon: Trash2 },
   { label: "Logs do Sistema", href: "/dashboard/logs", icon: ScrollText },
   { label: "Configurações", href: "/dashboard/configuracoes", icon: Settings },
 ];

@@ -18,9 +18,10 @@ import { gerarPdfBloqueante } from "@/lib/pdfmonkey/frontend";
 import type { ReportScope } from "@/lib/pdfmonkey/types";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { StatusSelect } from "@/components/ui/StatusSelect";
+import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import {
   listarDetalhado, criarDetalhado, atualizarDetalhado, deletarDetalhado,
-  atualizarDetalhadoEmMassa, deletarDetalhadoEmMassa, obterResumoMensal, obterGlobalEmpresaMes,
+  atualizarDetalhadoEmMassa, deletarDetalhadoEmMassa, obterResumoMeses, obterGlobalEmpresaMes,
   listarRepassesDoMes, consolidarRepasse, desfazerRepasse, concluirRepasse, religarSyncDl,
   listarSocios, listarClassificacoesPessoais, listarContasDoSocio, listarMesesDetalhado,
   type TransacaoSocioRich, type GlobalEmpresaMes, type RepasseConsolidado,
@@ -134,8 +135,16 @@ export function DistribuicaoPage() {
   const toast = useToast();
 
   // ---- competência (KPIs / consolidação / repasses do mês) ----
-  const [mes, setMes] = useState(mesCorrente());
+  // Competência multi-seleção (17-ago). Lista vazia = TODAS as competências —
+  // "colocar a opção TODAS, idem do FINANCEIRO".
+  const [mesesSel, setMesesSel] = useState<string[]>([mesCorrente()]);
   const [meses, setMeses] = useState<string[]>([]);
+  /**
+   * A CONSOLIDAÇÃO é sempre de um mês só: ela gera um lançamento global com
+   * uma competência. Com "Todas" (ou várias) marcadas, o botão fica desligado
+   * e explica o motivo — melhor que consolidar meses juntos por engano.
+   */
+  const mesFoco = mesesSel.length === 1 ? mesesSel[0] : null;
 
   // ---- filtros da listagem (RF 23-jul: períodos em vez de mês) ----
   const [filterSocio, setFilterSocio] = useState("");
@@ -303,7 +312,7 @@ export function DistribuicaoPage() {
         listarDetalhado({
           // A LISTAGEM segue a COMPETÊNCIA do header (ajuste 28-jul: um único
           // seletor comanda KPIs, repasses, consolidação E a tabela).
-          mesReferencia: mes,
+          mesReferencia: mesesSel,
           socioId: filterSocio || undefined,
           classificacao: filterClassif || undefined,
           status: filterStatus || undefined,
@@ -315,9 +324,9 @@ export function DistribuicaoPage() {
           valorMin: filterValorMin ? Math.abs(Number(filterValorMin)) || undefined : undefined,
           valorMax: filterValorMax ? Math.abs(Number(filterValorMax)) || undefined : undefined,
         }),
-        obterResumoMensal(mes),
-        obterGlobalEmpresaMes(mes),
-        listarRepassesDoMes(mes),
+        obterResumoMeses(mesesSel),
+        obterGlobalEmpresaMes(mesesSel),
+        listarRepassesDoMes(mesesSel),
       ]);
       setRows(r);
       setResumo(res);
@@ -329,7 +338,7 @@ export function DistribuicaoPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mes, filterSocio, filterClassif, filterStatus, search,
+  }, [mesesSel, filterSocio, filterClassif, filterStatus, search,
       filterRepasseDe, filterRepasseAte, filterVencDe, filterVencAte,
       filterValorMin, filterValorMax]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -339,8 +348,8 @@ export function DistribuicaoPage() {
   // Consolidáveis exibidos no modal: recorte da COMPETÊNCIA (a listagem pode
   // estar mostrando outros meses agora que o filtro é por período).
   const consolidaveis = useMemo(
-    () => rows.filter((r) => r.status === "a_pagar" && !r.repasse_id && r.mes_referencia === mes),
-    [rows, mes],
+    () => rows.filter((r) => r.status === "a_pagar" && !r.repasse_id && r.mes_referencia === mesFoco),
+    [rows, mesFoco],
   );
   // Total consolidável do MÊS (independe dos filtros de sócio/classificação da tela)
   const totalConsolidavel = resumo?.a_pagar_sem_repasse ?? 0;
@@ -364,8 +373,25 @@ export function DistribuicaoPage() {
     [rows, mostrarSoTagueados, tags],
   );
 
-  const selecionaveis = useMemo(() => rowsVisiveis.filter((r) => !r.repasse_id), [rowsVisiveis]);
+  /**
+   * 17-ago: "permitir SELECIONAR (individual e todos) e TAG DO DIA (individual
+   * e todos), mesmo após consolidados e repassados".
+   *
+   * Selecionar deixou de excluir o que já foi consolidado — a seleção serve
+   * para relatório, capa e exportação tanto quanto para ação em massa. O que
+   * continua protegido é a ESCRITA: as ações em massa pulam os consolidados e
+   * dizem quantos pularam (mudar valor ou status de um lançamento já repassado
+   * não atualizaria o global, e a Distribuição sairia do lugar).
+   */
+  const selecionaveis = rowsVisiveis;
   const allSelected = selecionaveis.length > 0 && selecionaveis.every((r) => selectedIds.has(r.id));
+  const allTagged = rowsVisiveis.length > 0 && rowsVisiveis.every((r) => tags.has(r.id));
+  /** Selecionados que podem ser ALTERADOS (fora os já consolidados). */
+  const selecionadosEditaveis = useMemo(
+    () => rows.filter((r) => selectedIds.has(r.id) && !r.repasse_id),
+    [rows, selectedIds],
+  );
+  const selecionadosBloqueados = selectedIds.size - selecionadosEditaveis.length;
 
   // Autossoma dos selecionados (ajuste 27-jul — idem ao Financeiro).
   const somaSelecionados = useMemo(() => {
@@ -387,9 +413,17 @@ export function DistribuicaoPage() {
   // intervenção no banco.
   const [religando, setReligando] = useState(false);
   async function handleReligarSync() {
+    // A religação é de UM mês (a etiqueta dl_auto: é por competência).
+    if (!mesFoco) {
+      toast.warning(
+        "Escolha uma competência",
+        "Religar a sincronização vale para um mês de cada vez — deixe só uma competência marcada no filtro acima.",
+      );
+      return;
+    }
     setReligando(true);
     try {
-      const r = await religarSyncDl(mes);
+      const r = await religarSyncDl(mesFoco);
       await fetchData();
       if (r.sincronizado) {
         toast.success(
@@ -418,6 +452,25 @@ export function DistribuicaoPage() {
       return next;
     });
   };
+
+  /** Taguear/destaguear tudo que está na tela de uma vez (17-ago). */
+  const toggleAllTags = () => {
+    if (rowsVisiveis.length === 0) return;
+    const todos = rowsVisiveis.every((r) => tags.has(r.id));
+    setTags((prev) => {
+      const next = new Map(prev);
+      for (const r of rowsVisiveis) {
+        if (todos) next.delete(r.id);
+        else next.set(r.id, {
+          id: r.id,
+          socio: r.socio?.apelido ?? r.socio?.nome_completo ?? null,
+          descricao: r.descricao ?? null,
+          valor: Number(r.valor),
+        });
+      }
+      return next;
+    });
+  };
   const toggleOne = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -429,12 +482,29 @@ export function DistribuicaoPage() {
   // ---- ações em massa ----
   async function aplicarEmMassa(payload: { status?: StatusDL; data_vencimento?: string }, rotulo: string) {
     if (selectedIds.size === 0) return;
+    // Consolidados podem ser SELECIONADOS (17-ago), mas não alterados: mudar
+    // valor ou status de um lançamento já repassado não atualiza o global, e a
+    // Distribuição sairia do lugar. Aqui eles ficam de fora, e a tela diz.
+    const alvos = selecionadosEditaveis;
+    if (alvos.length === 0) {
+      toast.warning(
+        "Nada a alterar",
+        "Todos os selecionados já foram consolidados em repasse — desfaça o repasse para poder alterá-los.",
+      );
+      return;
+    }
     // Snapshots antes da aplicação — base do "Desfazer" (RF 31-jul). Restaura
     // linha a linha porque a ação em massa pode mexer em status E vencimento.
-    const anteriores = rows.filter((r) => selectedIds.has(r.id));
+    const anteriores = alvos;
     setBulkBusy(true);
     try {
-      const n = await atualizarDetalhadoEmMassa(Array.from(selectedIds), payload);
+      const n = await atualizarDetalhadoEmMassa(alvos.map((r) => r.id), payload);
+      if (selecionadosBloqueados > 0) {
+        toast.info(
+          `${selecionadosBloqueados} consolidado${selecionadosBloqueados === 1 ? "" : "s"} não alterado${selecionadosBloqueados === 1 ? "" : "s"}`,
+          "Lançamentos já consolidados em repasse ficam de fora das ações em massa. Desfaça o repasse para alterá-los.",
+        );
+      }
       toast.desfazer(rotulo, `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"}.`, async () => {
         for (const a of anteriores) await desfazerEdicao("transacoes_socio", a);
         await fetchData();
@@ -451,13 +521,24 @@ export function DistribuicaoPage() {
 
   // ---- exclusão em lote (ajuste 27-jul) ----
   async function excluirSelecionados() {
-    const n = selectedIds.size;
-    if (n === 0) return;
-    if (!confirm(`Excluir ${n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`}? Você ainda terá 8 segundos para desfazer.`)) return;
-    const snapshots = rows.filter((r) => selectedIds.has(r.id));
+    // Consolidados entram na seleção (17-ago) mas não são excluídos aqui.
+    const snapshots = selecionadosEditaveis;
+    const n = snapshots.length;
+    if (selectedIds.size === 0) return;
+    if (n === 0) {
+      toast.warning(
+        "Nada a excluir",
+        "Todos os selecionados já foram consolidados em repasse — desfaça o repasse antes de excluí-los.",
+      );
+      return;
+    }
+    const aviso = selecionadosBloqueados > 0
+      ? `\n\n${selecionadosBloqueados} lançamento${selecionadosBloqueados === 1 ? "" : "s"} já consolidado${selecionadosBloqueados === 1 ? "" : "s"} não será excluído.`
+      : "";
+    if (!confirm(`Excluir ${n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`}? Você ainda terá 8 segundos para desfazer.${aviso}`)) return;
     setBulkDeleteBusy(true);
     try {
-      const excluidos = await deletarDetalhadoEmMassa(Array.from(selectedIds));
+      const excluidos = await deletarDetalhadoEmMassa(snapshots.map((r) => r.id));
       if (excluidos < n) {
         toast.warning("Exclusão parcial", `${excluidos} de ${n} lançamentos excluídos — os demais podem estar vinculados a repasse ou protegidos.`);
       } else if (snapshots.length > 0) {
@@ -492,7 +573,7 @@ export function DistribuicaoPage() {
   // ---- exportação PDF/XLSX do recorte da tela (ajuste 27-jul) ----
   function montarFiltrosExport(): string[] {
     const f: string[] = [];
-    f.push(`Competência: ${mes}`);
+    f.push(`Competência: ${mesesSel.length ? mesesSel.join(", ") : "todas"}`);
     if (search) f.push(`Busca: "${search}"`);
     if (filterSocio) {
       const s = socios.find((x) => x.id === filterSocio);
@@ -559,7 +640,7 @@ export function DistribuicaoPage() {
         : undefined;
       const res = await gerarPdfBloqueante({
         slug: "capa_socio",
-        mes_referencia: mes,
+        mes_referencia: mesFoco ?? mesCorrente(),
         socio_id: capaSocioId,
         scope,
       });
@@ -626,7 +707,7 @@ export function DistribuicaoPage() {
       classificacao_pessoal: filterClassif || "",
       descricao: "",
       conta_bancaria_socio_id: "",
-      competencia: mes,
+      competencia: mesFoco ?? mesCorrente(),
       data_vencimento: "",
       data_vencimento_despesa: "",
       valor: "",
@@ -744,7 +825,8 @@ export function DistribuicaoPage() {
   async function handleConsolidar() {
     setConsolidando(true);
     try {
-      await consolidarRepasse(mes, consolidarData, incluirTransferencia);
+      if (!mesFoco) return;
+      await consolidarRepasse(mesFoco, consolidarData, incluirTransferencia);
       toast.success(
         "Repasse consolidado",
         `O valor global de ${formatCurrency(totalConsolidavel)} foi lançado no Financeiro da empresa.`,
@@ -791,14 +873,16 @@ export function DistribuicaoPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-1.5 text-xs text-stone-500" title="Competência da tela toda: KPIs, repasses consolidados, consolidação e a tabela detalhada seguem o mês selecionado aqui.">
+          {/* Competência multi-seleção com "Todas" (17-ago) — idem ao Financeiro */}
+          <label className="flex items-center gap-1.5 text-xs text-stone-500"
+            title="Competência da tela toda: KPIs, repasses consolidados e a tabela detalhada seguem o que estiver marcado aqui. Nenhuma marcada = todas as competências. A consolidação exige UMA competência só.">
             Competência
-            <select
-              value={mes}
-              onChange={(e) => setMes(e.target.value)}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs bg-white">
-              {(meses.includes(mes) ? meses : [mes, ...meses]).map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
+            <CompetenciaMultiSelect
+              className="w-40"
+              options={meses}
+              value={mesesSel}
+              onChange={setMesesSel}
+            />
           </label>
           <Button variant="outline" size="sm" onClick={() => handleExport("pdf")}
             loading={exportandoPdf} disabled={exportandoPdf || exportandoXlsx}
@@ -817,10 +901,12 @@ export function DistribuicaoPage() {
           <Button
             size="sm"
             onClick={() => setConsolidarOpen(true)}
-            disabled={qtdConsolidavel === 0}
-            title={qtdConsolidavel === 0
-              ? 'Marque lançamentos como "A repassar" para liberar a consolidação'
-              : "Cria o lançamento global no Financeiro a partir do detalhado marcado como A repassar"}
+            disabled={qtdConsolidavel === 0 || !mesFoco}
+            title={!mesFoco
+              ? "A consolidação gera um lançamento global de UMA competência — deixe só uma marcada no filtro Competência acima."
+              : qtdConsolidavel === 0
+                ? 'Marque lançamentos como "A repassar" para liberar a consolidação'
+                : "Cria o lançamento global no Financeiro a partir do detalhado marcado como A repassar"}
           >
             <ArrowRightLeft size={14} />
             Consolidar repasse{totalConsolidavel > 0 ? ` (${formatCurrency(totalConsolidavel)})` : ""}
@@ -916,8 +1002,10 @@ export function DistribuicaoPage() {
               <Link href="/dashboard/financeiro" className="underline font-medium">Financeiro</Link>.
             </span>
             <Button size="sm" variant="outline" onClick={handleReligarSync}
-              loading={religando} disabled={religando}
-              title="Passa a linha provisionada do centro 2.8.1 deste mês para o controle automático e recalcula o global pela soma do detalhado">
+              loading={religando} disabled={religando || !mesFoco}
+              title={mesFoco
+                ? "Passa a linha provisionada do centro 2.8.1 deste mês para o controle automático e recalcula o global pela soma do detalhado"
+                : "Religar vale para um mês de cada vez — deixe só uma competência marcada no filtro acima"}>
               <RefreshCw size={13} /> Religar sincronização
             </Button>
           </div>
@@ -1174,8 +1262,22 @@ export function DistribuicaoPage() {
                     <input type="checkbox" aria-label="Selecionar todos" checked={allSelected} onChange={toggleAll}
                       className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer" />
                   </th>
-                  <th className="px-1 py-3 w-8" title="Tag do dia — o 'pintar de amarelo' da planilha: marque o que está sendo trabalhado hoje">
-                    <Tag size={12} className="text-amber-400 mx-auto" />
+                  {/* Taguear TODOS os lançamentos da tela de uma vez (17-ago) */}
+                  <th className="px-1 py-3 w-8">
+                    <button
+                      type="button"
+                      onClick={toggleAllTags}
+                      disabled={rowsVisiveis.length === 0}
+                      className={`p-1 rounded transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed mx-auto block ${
+                        allTagged ? "text-amber-500 hover:text-amber-600" : "text-amber-300 hover:text-amber-500"
+                      }`}
+                      title={allTagged
+                        ? "Remover a tag de todos os lançamentos da tela"
+                        : "Taguear todos os lançamentos da tela de uma vez (o 'pintar de amarelo' da planilha)"}
+                      aria-label={allTagged ? "Remover tag de todos" : "Taguear todos"}
+                    >
+                      <Tag size={13} fill={allTagged ? "currentColor" : "none"} />
+                    </button>
                   </th>
                   {["Data do Repasse","Competência","Sócio","Classificação","Descrição","Conta destino","Vencimento","Valor","Status","Repasse","Ações"].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
@@ -1205,9 +1307,11 @@ export function DistribuicaoPage() {
                           type="checkbox"
                           aria-label="Selecionar lançamento"
                           checked={selected}
-                          disabled={vinculado}
                           onChange={() => toggleOne(r.id)}
-                          className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer disabled:opacity-30"
+                          title={vinculado
+                            ? "Já consolidado — pode entrar em relatórios, capa e exportação; as ações em massa não o alteram."
+                            : "Selecionar lançamento"}
+                          className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
                         />
                       </td>
                       <td className="px-1 py-3 text-center">
@@ -1405,7 +1509,7 @@ export function DistribuicaoPage() {
         title="Consolidar repasse global" size="lg" closeOnBackdrop={false}>
         <div className="p-6 space-y-4">
           <p className="text-sm text-stone-600">
-            Serão consolidados <b>{qtdConsolidavel}</b> lançamento{qtdConsolidavel === 1 ? "" : "s"} detalhado{qtdConsolidavel === 1 ? "" : "s"} de <b>{mes}</b> com
+            Serão consolidados <b>{qtdConsolidavel}</b> lançamento{qtdConsolidavel === 1 ? "" : "s"} detalhado{qtdConsolidavel === 1 ? "" : "s"} de <b>{mesFoco}</b> com
             status {"“A repassar”"} — total de <b className="text-stone-800">{formatCurrency(totalConsolidavel)}</b>.
           </p>
 
@@ -1467,7 +1571,7 @@ export function DistribuicaoPage() {
         title="Capa do repasse do sócio" size="md" closeOnBackdrop={false}>
         <div className="p-6 space-y-4">
           <p className="text-sm text-stone-600">
-            Gera a capa em PDF (template do PDFMonkey) do repasse de <b>{mes}</b> para o sócio escolhido —
+            Gera a capa em PDF (template do PDFMonkey) do repasse de <b>{mesFoco ?? mesCorrente()}</b> para o sócio escolhido —
             a mesma capa da tela Relatórios, agora direto daqui.
           </p>
 

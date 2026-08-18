@@ -243,14 +243,26 @@ export async function exportDistribuicaoPdf(
 
   const colX = (i: number): number => contentLeft + cols.slice(0, i).reduce((s, c) => s + c.width, 0);
 
+  // Cabeçalho que quebra em até 2 linhas em vez de invadir a coluna vizinha
+  // (mesmo defeito corrigido no PDF do Financeiro em 17-ago-2026).
+  const HEAD_WRAP = 2;
+
+  function linhasCabecalho(): string[][] {
+    return cols.map((c) => wrapLines(fontBold, c.header, FS_HEAD, c.width - 8, HEAD_WRAP));
+  }
+
   function drawCabecalhoTabela(): void {
-    const headH = LINE_H + ROW_PAD * 2 - 2;
+    const linhas = linhasCabecalho();
+    const nLinhas = Math.max(1, ...linhas.map((l) => l.length));
+    const headH = nLinhas * LINE_H + ROW_PAD * 2 - (LINE_H - FS_HEAD) - 2;
     page.drawRectangle({ x: contentLeft, y: y - headH, width: contentRight - contentLeft, height: headH, color: C_HEADER_BG });
     cols.forEach((c, i) => {
       const x = colX(i);
-      const tw = widthOf(fontBold, c.header, FS_HEAD);
-      const tx = c.align === "right" ? x + c.width - 4 - tw : x + 4;
-      page.drawText(c.header, { x: tx, y: y - ROW_PAD - FS_HEAD + 1, size: FS_HEAD, font: fontBold, color: C_INK });
+      linhas[i].forEach((ln, li) => {
+        const tw = widthOf(fontBold, ln, FS_HEAD);
+        const tx = c.align === "right" ? x + c.width - 4 - tw : x + 4;
+        page.drawText(ln, { x: tx, y: y - ROW_PAD - FS_HEAD + 1 - li * LINE_H, size: FS_HEAD, font: fontBold, color: C_INK });
+      });
     });
     y -= headH;
   }

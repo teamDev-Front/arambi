@@ -34,7 +34,11 @@ const TS_SELECT = `
 `;
 
 export interface ListarDetalhadoFiltros {
-  mesReferencia?: string;        // "YYYY-MM" (competência — opcional desde 23-jul)
+  /**
+   * Competência em "YYYY-MM". Desde 17-ago aceita LISTA (o seletor virou
+   * multi-seleção com checkbox); lista vazia = todas as competências.
+   */
+  mesReferencia?: string | string[];
   socioId?: string;
   classificacao?: string;        // "1.01".."1.06"
   status?: StatusDL;
@@ -70,7 +74,11 @@ export async function listarDetalhado(
     .order("data_vencimento", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true });
 
-  if (filtros.mesReferencia) q = q.eq("mes_referencia", filtros.mesReferencia);
+  if (Array.isArray(filtros.mesReferencia)) {
+    if (filtros.mesReferencia.length) q = q.in("mes_referencia", filtros.mesReferencia);
+  } else if (filtros.mesReferencia) {
+    q = q.eq("mes_referencia", filtros.mesReferencia);
+  }
   if (filtros.socioId)       q = q.eq("socio_id", filtros.socioId);
   if (filtros.classificacao) q = q.eq("classificacao_pessoal", filtros.classificacao);
   if (filtros.status)        q = q.eq("status", filtros.status);
@@ -183,6 +191,39 @@ export async function obterResumoMensal(mes: string): Promise<DlMensalResumoRow 
   return (data as DlMensalResumoRow | null) ?? null;
 }
 
+/**
+ * Resumo consolidado de VÁRIAS competências (17-ago). Lista vazia = o ano
+ * inteiro que a view enxerga — é a opção "Todas" do seletor.
+ *
+ * Soma as linhas da v_dl_mensal_resumo em vez de refazer a conta em cima do
+ * detalhado: o número tem que ser o MESMO que a tela mostra com uma
+ * competência só selecionada, e a view já é a fonte disso.
+ */
+export async function obterResumoMeses(meses: string[]): Promise<DlMensalResumoRow | null> {
+  const supabase = createClient();
+  let q = supabase.from("v_dl_mensal_resumo").select("*");
+  if (meses.length) q = q.in("mes_referencia", meses);
+  const { data, error } = await q;
+  if (error) throw error;
+  const rows = (data ?? []) as DlMensalResumoRow[];
+  if (rows.length === 0) return null;
+  if (rows.length === 1) return rows[0];
+  return rows.reduce((acc, r) => ({
+    mes_referencia: meses.length === 1 ? meses[0] : "",
+    provisionado: acc.provisionado + Number(r.provisionado ?? 0),
+    a_pagar: acc.a_pagar + Number(r.a_pagar ?? 0),
+    a_pagar_sem_repasse: acc.a_pagar_sem_repasse + Number(r.a_pagar_sem_repasse ?? 0),
+    realizado: acc.realizado + Number(r.realizado ?? 0),
+    qtd_provisionado: acc.qtd_provisionado + Number(r.qtd_provisionado ?? 0),
+    qtd_a_pagar: acc.qtd_a_pagar + Number(r.qtd_a_pagar ?? 0),
+    qtd_a_pagar_sem_repasse: acc.qtd_a_pagar_sem_repasse + Number(r.qtd_a_pagar_sem_repasse ?? 0),
+    qtd_realizado: acc.qtd_realizado + Number(r.qtd_realizado ?? 0),
+  }), {
+    mes_referencia: "", provisionado: 0, a_pagar: 0, a_pagar_sem_repasse: 0, realizado: 0,
+    qtd_provisionado: 0, qtd_a_pagar: 0, qtd_a_pagar_sem_repasse: 0, qtd_realizado: 0,
+  } as DlMensalResumoRow);
+}
+
 // Lançamentos globais 2.8 do mês na empresa (para conferência lado a lado).
 export interface GlobalEmpresaMes {
   rows: TransacaoEmpresaRow[];
@@ -197,14 +238,16 @@ export interface GlobalEmpresaMes {
   totalCentro281: number;
 }
 
-export async function obterGlobalEmpresaMes(mes: string): Promise<GlobalEmpresaMes> {
+export async function obterGlobalEmpresaMes(mes: string | string[]): Promise<GlobalEmpresaMes> {
   const supabase = createClient();
-  const { data, error } = await supabase
+  const meses = Array.isArray(mes) ? mes : [mes];
+  let q = supabase
     .from("transacoes_empresa")
     .select("*")
-    .eq("mes_referencia", mes)
     .eq("conta_contabil_cod", "2.8")
     .order("data", { ascending: true });
+  if (meses.length) q = q.in("mes_referencia", meses);
+  const { data, error } = await q;
   if (error) throw error;
 
   const rows = (data ?? []) as TransacaoEmpresaRow[];
@@ -245,15 +288,17 @@ export interface RepasseConsolidado extends TransacaoEmpresaRow {
   qtd_detalhados: number;
 }
 
-export async function listarRepassesDoMes(mes: string): Promise<RepasseConsolidado[]> {
+export async function listarRepassesDoMes(mes: string | string[]): Promise<RepasseConsolidado[]> {
   const supabase = createClient();
-  const { data, error } = await supabase
+  const meses = Array.isArray(mes) ? mes : [mes];
+  let q = supabase
     .from("transacoes_empresa")
     .select("*")
-    .eq("mes_referencia", mes)
     .eq("conta_contabil_cod", "2.8")
     .like("origem_planilha", "dl_repasse:%")
     .order("created_at", { ascending: true });
+  if (meses.length) q = q.in("mes_referencia", meses);
+  const { data, error } = await q;
   if (error) throw error;
   const globais = (data ?? []) as TransacaoEmpresaRow[];
   if (globais.length === 0) return [];

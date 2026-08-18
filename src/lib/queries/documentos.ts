@@ -8,7 +8,7 @@ import type { DocumentoPayloadMap } from "@/lib/pdf";
 export interface ListarDocumentosFiltros {
   search?: string;
   tipo?: DocumentoGeradoTipo | "";
-  mes?: string;        // "YYYY-MM"
+  mes?: string | string[];        // "YYYY-MM"
   page?: number;
   pageSize?: number;
 }
@@ -32,7 +32,12 @@ export async function listarDocumentosGerados(f: ListarDocumentosFiltros = {}): 
     .range(from, to);
 
   if (f.tipo) q = q.eq("tipo", f.tipo);
-  if (f.mes)  q = q.eq("mes_referencia", f.mes);
+  // Competência aceita LISTA desde 17-ago (o seletor virou multi-seleção).
+  if (Array.isArray(f.mes)) {
+    if (f.mes.length) q = q.in("mes_referencia", f.mes);
+  } else if (f.mes) {
+    q = q.eq("mes_referencia", f.mes);
+  }
   if (f.search && f.search.trim()) {
     const term = f.search.trim().replace(/[%_]/g, "\\$&");
     q = q.or(

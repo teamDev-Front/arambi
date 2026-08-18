@@ -1410,6 +1410,21 @@ export interface Database {
         Row: FazendaAramburuYtdRow;
         Relationships: EmptyRels;
       };
+      /** Itens recuperáveis da Lixeira (migration 0054). */
+      v_lixeira: {
+        Row: {
+          id: string;
+          tabela: string;
+          registro_id: string;
+          resumo: string | null;
+          dados: Json;
+          excluido_em: string;
+          expira_em: string;
+          dias_restantes: number;
+          excluido_por_nome: string | null;
+        };
+        Relationships: EmptyRels;
+      };
     };
     // IMPORTANTE: manter Record<string, never> — tipar Functions "de verdade" faz o
     // postgrest-js entrar no modo estrito de inferência e quebrar os joins existentes

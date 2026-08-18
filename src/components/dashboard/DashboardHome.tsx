@@ -24,6 +24,7 @@ import { STATUS_ARAMBURU_LABEL } from "@/types";
 import { BancoDetalheModal } from "@/components/dashboard/BancoDetalheModal";
 import { LancamentoDetalheModal } from "@/components/dashboard/LancamentoDetalheModal";
 import { SaldosBancariosGrid } from "@/components/dashboard/SaldosBancariosGrid";
+import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import { AgroPanoramaSection } from "@/components/dashboard/AgroPanoramaSection";
 import { useToast } from "@/components/ui/Toast";
 
@@ -59,7 +60,8 @@ export function DashboardHome() {
   const [recent, setRecent]     = useState<TransacaoEmpresaRich[]>([]);
   const [loading, setLoading]   = useState(true);
 
-  const [mesFiltro, setMesFiltro] = useState<string>("");      // "" = todos
+  // Competência multi-seleção (17-ago) — lista vazia = todos os meses.
+  const [mesesFiltro, setMesesFiltro] = useState<string[]>([]);
   const [contaSelecionada, setContaSelecionada] = useState<string | null>(null);   // drill no PieChart
   const [bancoModal, setBancoModal] = useState<SaldoAtualBanco | null>(null);
   const [lancModal, setLancModal] = useState<TransacaoEmpresaRich | null>(null);
@@ -69,12 +71,12 @@ export function DashboardHome() {
     try {
       const [k, c, sb, fx, fxb, r] = await Promise.all([
         getKpiMensal(),
-        getPorContaContabil(mesFiltro || undefined),
+        getPorContaContabil(mesesFiltro),
         getSaldoAtualPorBanco(),
         getFluxoCaixaMensal(),
         // View da migration 0044 — se ainda não aplicada, degrada sem quebrar.
         getFluxoCaixaBancos().catch(() => [] as FluxoCaixaBancoMes[]),
-        listarTransacoesEmpresa(mesFiltro ? { mesReferencia: mesFiltro } : {}, 1, 5),
+        listarTransacoesEmpresa(mesesFiltro.length ? { mesReferencia: mesesFiltro } : {}, 1, 5),
       ]);
       setKpiAll(k);
       setByConta(c);
@@ -88,12 +90,12 @@ export function DashboardHome() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesFiltro]);
+  }, [mesesFiltro]);
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   // KPI consolidado: usa o mês filtrado ou totaliza tudo.
   const kpiAtual = useMemo(() => {
-    const base = mesFiltro ? kpiAll.filter((r) => r.mes_referencia === mesFiltro) : kpiAll;
+    const base = mesesFiltro.length ? kpiAll.filter((r) => mesesFiltro.includes(r.mes_referencia)) : kpiAll;
     return base.reduce(
       (acc, r) => {
         acc.entradas += Number(r.entradas_realizadas ?? 0);
@@ -104,7 +106,7 @@ export function DashboardHome() {
       },
       { entradas: 0, saidas: 0, aPagar: 0, provis: 0 },
     );
-  }, [kpiAll, mesFiltro]);
+  }, [kpiAll, mesesFiltro]);
 
   // BarChart: receita vs despesa mensal
   const barData = useMemo(() => kpiAll.map((r) => ({
@@ -166,14 +168,18 @@ export function DashboardHome() {
           <p className="text-sm text-stone-500">Visão geral da Agropecuária Aramburu</p>
         </div>
         <div className="flex items-center gap-2">
-          <select
-            value={mesFiltro}
-            onChange={(e) => { setMesFiltro(e.target.value); setContaSelecionada(null); }}
-            className="h-9 rounded-lg border border-stone-200 px-3 text-sm bg-white"
-          >
-            <option value="">Todos os meses</option>
-            {meses.map((m) => <option key={m} value={m}>{mesShort(m)}</option>)}
-          </select>
+          {/* Competência multi-seleção — mesmo padrão do Financeiro (17-ago) */}
+          <label className="flex items-center gap-1.5 text-xs text-stone-500"
+            title="Competência dos indicadores e do gráfico de despesa por conta. Nenhuma marcada = todos os meses.">
+            Competência
+            <CompetenciaMultiSelect
+              className="w-40"
+              options={meses}
+              value={mesesFiltro}
+              onChange={(v: string[]) => { setMesesFiltro(v); setContaSelecionada(null); }}
+              todasLabel="Todos os meses"
+            />
+          </label>
           <Button variant="outline" size="sm">
             <Download size={14} /> Relatório Financeiro
           </Button>
@@ -256,7 +262,7 @@ export function DashboardHome() {
                   const label = s?.activeLabel as string | undefined;
                   if (!label) return;
                   const found = meses.find((m) => mesShort(m) === label);
-                  if (found) setMesFiltro(found);
+                  if (found) setMesesFiltro([found]);
                 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" />
@@ -278,7 +284,14 @@ export function DashboardHome() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Despesa por Conta Contábil{mesFiltro ? ` — ${mesShort(mesFiltro)}` : ""}</CardTitle>
+            <CardTitle>
+              Despesa por Conta Contábil
+              {mesesFiltro.length === 1
+                ? ` — ${mesShort(mesesFiltro[0])}`
+                : mesesFiltro.length > 1
+                  ? ` — ${mesesFiltro.length} competências`
+                  : ""}
+            </CardTitle>
             {contaSelecionada && (
               <button onClick={() => setContaSelecionada(null)} className="text-xs text-accent-600 hover:underline">limpar</button>
             )}

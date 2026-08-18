@@ -137,6 +137,13 @@ export interface VendasResumo {
   por_trimestre: Array<{ trimestre: string; valor: number; sacas: number }>;
   por_mes: Array<{ mes: string; valor: number; sacas: number }>;
   por_safra: Array<{ safra: string; valor: number; sacas: number }>;
+  /**
+   * Sacas por CULTURA (17-ago: "Em VENDAS FUTURAS, informar as sacas por
+   * culturas"). O total de 35.733 sc do card não dizia se era soja ou milho —
+   * e é o que ela precisa para conferir contra o estoque de cada grão.
+   * Ordenado da maior para a menor quantidade.
+   */
+  por_cultura: Array<{ cultura: CulturaSafra; valor: number; sacas: number }>;
 }
 
 export function calcularResumo(vendas: VendaProvisionadaRichRow[]): VendasResumo {
@@ -144,6 +151,7 @@ export function calcularResumo(vendas: VendaProvisionadaRichRow[]): VendasResumo
   const aggTri = new Map<string, { valor: number; sacas: number }>();
   const aggMes = new Map<string, { valor: number; sacas: number }>();
   const aggSaf = new Map<string, { valor: number; sacas: number }>();
+  const aggCul = new Map<CulturaSafra, { valor: number; sacas: number }>();
 
   for (const v of vendas) {
     total_valor += v.valor_total ?? 0;
@@ -163,6 +171,10 @@ export function calcularResumo(vendas: VendaProvisionadaRichRow[]): VendasResumo
     const s = aggSaf.get(v.safra) ?? { valor: 0, sacas: 0 };
     s.valor += v.valor_total ?? 0; s.sacas += v.sacas ?? 0;
     aggSaf.set(v.safra, s);
+
+    const c = aggCul.get(v.cultura) ?? { valor: 0, sacas: 0 };
+    c.valor += v.valor_total ?? 0; c.sacas += v.sacas ?? 0;
+    aggCul.set(v.cultura, c);
   }
 
   return {
@@ -173,5 +185,7 @@ export function calcularResumo(vendas: VendaProvisionadaRichRow[]): VendasResumo
       .sort((a, b) => a.mes.localeCompare(b.mes)),
     por_safra: Array.from(aggSaf, ([safra, x]) => ({ safra, ...x }))
       .sort((a, b) => a.safra.localeCompare(b.safra)),
+    por_cultura: Array.from(aggCul, ([cultura, x]) => ({ cultura, ...x }))
+      .sort((a, b) => b.sacas - a.sacas),
   };
 }

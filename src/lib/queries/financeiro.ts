@@ -35,7 +35,12 @@ export interface ListarTransacoesFiltros {
    * na fatura do mês.
    */
   formaPgto?: string | string[];
-  mesReferencia?: string;           // "YYYY-MM" (legado — relatórios antigos)
+  /**
+   * Competência (mês de referência) em "YYYY-MM". Desde 17-ago aceita LISTA: o
+   * seletor do header virou multi-seleção com checkbox em todas as telas.
+   * Lista vazia = sem recorte (todas as competências).
+   */
+  mesReferencia?: string | string[];
   dataDe?: string;                  // vencimento (coluna data)
   dataAte?: string;
   emissaoDe?: string;               // emissão (coluna data_emissao) — UX 23-jul
@@ -45,6 +50,15 @@ export interface ListarTransacoesFiltros {
   valorMax?: number;
   /** Recorte por ids explícitos (ex.: lançamentos TAGUEADOS — RF 24-jul). */
   ids?: string[];
+  /**
+   * Só lançamentos com valor NEGATIVO (17-ago). É o que separa a linha do
+   * SICREDINVEST da do SICREDI num par de resgate: ambos têm status
+   * "A resgatar", mas só o negativo é a saída do Invest — e é essa que ela
+   * acompanha ("não é necessário do valor positivo > SICREDI, já que, ao marcar
+   * o resgate no SICREDINVEST, o sistema atualiza automaticamente o status
+   * correspondente no SICREDI, por estarem amarrados").
+   */
+  somenteNegativos?: boolean;
 }
 
 export interface ListarTransacoesResult {
@@ -69,6 +83,7 @@ interface QueryFiltravel {
   in: (col: string, vals: readonly unknown[]) => QueryFiltravel;
   gte: (col: string, val: unknown) => QueryFiltravel;
   lte: (col: string, val: unknown) => QueryFiltravel;
+  lt:  (col: string, val: unknown) => QueryFiltravel;
   or: (filtros: string) => QueryFiltravel;
 }
 
@@ -91,7 +106,8 @@ function aplicarFiltros<T>(query: T, filtros: ListarTransacoesFiltros): T {
   r = eqOuIn(r, "conta_bancaria_id", filtros.contaBancariaId);
   r = eqOuIn(r, "tipo_despesa", filtros.tipoDespesa);
   r = eqOuIn(r, "forma_pgto", filtros.formaPgto);
-  if (filtros.mesReferencia)     r = r.eq("mes_referencia", filtros.mesReferencia);
+  r = eqOuIn(r, "mes_referencia", filtros.mesReferencia);
+  if (filtros.somenteNegativos)  r = r.lt("valor", 0);
   if (filtros.dataDe)            r = r.gte("data", filtros.dataDe);
   if (filtros.dataAte)           r = r.lte("data", filtros.dataAte);
   if (filtros.emissaoDe)         r = r.gte("data_emissao", filtros.emissaoDe);
@@ -249,12 +265,44 @@ export async function resumirEscopoTransacoes(
 // aberto — atrasado, vencendo hoje e o que sai/entra até o fim do mês corrente.
 // ----------------------------------------------------------------------------
 
-/** Saídas em aberto (compromissos ainda não realizados) — mesmo recorte da v_kpi_mensal. */
+/**
+ * As DUAS famílias do que está em aberto (ajuste 17-ago-2026) — é a legenda de
+ * cores da planilha virando dois cards separados, no lugar do antigo "A pagar
+ * até 31/08" que misturava as duas:
+ *
+ *   🔴 PROGRAMAÇÃO BANCÁRIA — já foi ao banco, não muda mais.
+ *   🟡 PROVISIONADO         — ainda é programação, pode mudar.
+ *
+ * Nas palavras dela (14-ago): "as linhas em amarelo representam as programações,
+ * enquanto as linhas em vermelho correspondem aos lançamentos efetivamente
+ * realizados no banco".
+ */
+export const STATUS_PROGRAMACAO_BANCARIA: StatusAramburu[] = [
+  "a_pagar", "a_repassar", "a_aplicar", "a_resgatar",
+];
+export const STATUS_PROVISIONADO: StatusAramburu[] = [
+  "provisionado", "aplicacao", "resgate", "provisionado_dv", "provisionado_dl",
+];
+
+/**
+ * Saídas em aberto — recorte histórico da v_kpi_mensal, mantido porque o
+ * "Contas em atraso" e os filtros salvos ainda apontam para ele.
+ */
 export const STATUS_SAIDA_PENDENTE: StatusAramburu[] = [
   "a_pagar", "a_repassar", "a_aplicar", "provisionado", "provisionado_dl", "provisionado_dv",
 ];
-/** Entradas em aberto — mesmo recorte da v_kpi_mensal. */
-export const STATUS_ENTRADA_PENDENTE: StatusAramburu[] = ["a_receber", "a_resgatar"];
+/**
+ * Entradas em aberto. "A resgatar" saiu daqui em 17-ago: no card A RECEBER ele
+ * inflava o número com o lado positivo do par de resgate ("deixar apenas os
+ * valores de A RECEBER"). O resgate continua visível — pelo lado NEGATIVO
+ * (SICREDINVEST), nos cards Vencem hoje e Programação bancária.
+ */
+export const STATUS_ENTRADA_PENDENTE: StatusAramburu[] = ["a_receber"];
+
+/** Tudo que está em aberto, das duas famílias — base do "Contas em atraso". */
+const STATUS_EM_ABERTO: StatusAramburu[] = [
+  ...STATUS_PROGRAMACAO_BANCARIA, ...STATUS_PROVISIONADO,
+];
 
 export interface IndicadorVencimento {
   qtd: number;
@@ -264,9 +312,10 @@ export interface IndicadorVencimento {
 export interface IndicadoresVencimentos {
   hoje: string;                             // YYYY-MM-DD no fuso LOCAL
   fimDoMes: string;                         // último dia do mês corrente
-  emAtraso: IndicadorVencimento;            // saídas em aberto com vencimento < hoje
-  vencemHoje: IndicadorVencimento;          // saídas em aberto vencendo hoje
-  aPagarAteFimDoMes: IndicadorVencimento;   // saídas em aberto de hoje até o fim do mês
+  emAtraso: IndicadorVencimento;            // saídas em aberto (as duas famílias) com vencimento < hoje
+  vencemHoje: IndicadorVencimento;          // saídas em aberto vencendo hoje (inclui A resgatar do Invest)
+  programacaoBancariaAteFimDoMes: IndicadorVencimento; // 🔴 de hoje até o fim do mês
+  provisionadoAteFimDoMes: IndicadorVencimento;        // 🟡 de hoje até o fim do mês
   aReceberAteFimDoMes: IndicadorVencimento; // entradas em aberto até o fim do mês (inclui atrasadas)
 }
 
@@ -286,7 +335,7 @@ export async function getIndicadoresVencimentos(): Promise<IndicadoresVencimento
   const { data, error } = await supabase
     .from("transacoes_empresa")
     .select("data, valor, status")
-    .in("status", [...STATUS_SAIDA_PENDENTE, ...STATUS_ENTRADA_PENDENTE])
+    .in("status", [...STATUS_EM_ABERTO, ...STATUS_ENTRADA_PENDENTE])
     .lte("data", fimDoMes)
     .range(0, INDICADORES_CAP - 1);
   if (error) throw error;
@@ -297,7 +346,8 @@ export async function getIndicadoresVencimentos(): Promise<IndicadoresVencimento
     fimDoMes,
     emAtraso: zero(),
     vencemHoje: zero(),
-    aPagarAteFimDoMes: zero(),
+    programacaoBancariaAteFimDoMes: zero(),
+    provisionadoAteFimDoMes: zero(),
     aReceberAteFimDoMes: zero(),
   };
   const soma = (ind: IndicadorVencimento, valor: number) => {
@@ -308,15 +358,29 @@ export async function getIndicadoresVencimentos(): Promise<IndicadoresVencimento
   const rows = (data ?? []) as { data: string; valor: number; status: StatusAramburu }[];
   for (const t of rows) {
     const valor = Number(t.valor);
+
     if (STATUS_ENTRADA_PENDENTE.includes(t.status)) {
       // Entradas atrasadas não têm card próprio — entram aqui para não sumirem.
       soma(r.aReceberAteFimDoMes, valor);
-    } else if (t.data < hoje) {
-      soma(r.emAtraso, valor);
-    } else {
-      soma(r.aPagarAteFimDoMes, valor);
-      if (t.data === hoje) soma(r.vencemHoje, valor);
+      continue;
     }
+
+    // Só o lado NEGATIVO conta. Um resgate é um PAR de linhas do mesmo valor
+    // (+ na corrente Sicredi, − no Sicredi Invest); somar as duas dobraria o
+    // número e ainda faria um resgate "aumentar" o que há a pagar no mês.
+    if (valor >= 0) continue;
+
+    if (t.data < hoje) {
+      soma(r.emAtraso, valor);
+      continue;
+    }
+
+    if (STATUS_PROGRAMACAO_BANCARIA.includes(t.status)) {
+      soma(r.programacaoBancariaAteFimDoMes, valor);
+    } else {
+      soma(r.provisionadoAteFimDoMes, valor);
+    }
+    if (t.data === hoje) soma(r.vencemHoje, valor);
   }
   return r;
 }
@@ -339,7 +403,17 @@ export async function getIndicadoresVencimentos(): Promise<IndicadoresVencimento
 //
 // Conferência contra a planilha dela: fev/2026 → utilizado 11.916,92 e saldo
 // 8.083,08 — exatamente o que aparece no print do Excel.
-const DV_STATUS_UTILIZADO: StatusAramburu[] = ["a_pagar", "pago", "provisionado"];
+//
+// 17-ago-2026: "somar/creditar a DV quando existir um lançamento positivo".
+// O caso é a devolução — NF 1886 paga por engano (−1.750), NF cancelada e a
+// diferença de +190 estornada com Tipo de Despesa "Despesas Variáveis" e status
+// "Recebido". Sem os status de ENTRADA na lista, esses 190 ficavam de fora e o
+// mês seguia consumindo um limite que já tinha voltado. Como a soma é feita com
+// o SINAL do lançamento (-valor), o positivo credita sozinho.
+const DV_STATUS_UTILIZADO: StatusAramburu[] = [
+  "a_pagar", "pago", "provisionado",
+  "recebido", "a_receber",
+];
 
 /** Limite mensal de DV (app_config). Default 20k = o valor que ela usa hoje. */
 export const DV_LIMITE_PADRAO = 20000;
@@ -405,6 +479,21 @@ export async function obterResumoDespesaVariavel(ano: string): Promise<ResumoDes
     meses.push({ mes: chave, utilizado, saldo, saldoAcumulado: acumulado });
   }
   return { limiteMensal, meses, totalUtilizado, saldoAno: acumulado };
+}
+
+/**
+ * Cria (ou readota) a linha "Provisionado DV" automática de um mês — migration
+ * 0054. A partir daí o banco a mantém igual ao SALDO do teto: cada despesa
+ * variável nova debita sozinha, e um lançamento positivo credita de volta.
+ *
+ * É a resposta ao "quando eu lançar esse valor de 20k com o status PROVISIONADO
+ * DV, o sistema entende que esse é o limite disponível e vai debitando
+ * automático?" — passa a entender, a partir do clique neste botão.
+ */
+export async function gerarLinhaSaldoDv(mes: string): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.rpc("fn_dv_gerar_linha" as never, { p_mes: mes } as never);
+  if (error) throw error;
 }
 
 /**

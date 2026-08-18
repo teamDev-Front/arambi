@@ -20,6 +20,7 @@ import {
   Link2,
 } from "lucide-react";
 import { MultiSelect } from "@/components/ui/MultiSelect";
+import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import {
   listarVendas, criarVenda, atualizarVenda, deletarVenda, calcularResumo,
   atualizarStatusVendasEmMassa, deletarVendasEmMassa,
@@ -114,7 +115,10 @@ export function VendasFuturasPage() {
   const [filterCultura, setFilterCultura] = useState<CulturaSafra | "">("");
   const [filterSafra, setFilterSafra] = useState("");
   const [filterDestino, setFilterDestino] = useState<"empresa" | "socio" | "">("");
-  const [filterMes, setFilterMes] = useState("");
+  // Competência (mês do recebimento previsto) — multi-seleção no header, mesmo
+  // padrão do Financeiro e da Distribuição, com "Todas" (17-ago). Substitui o
+  // antigo seletor "Todos meses" de escolha única que ficava entre os filtros.
+  const [filterCompetencias, setFilterCompetencias] = useState<string[]>([]);
   // Exercício (anual) — multi-seleção para análise/soma/comparação (ajuste 27-jul).
   const [filterExercicios, setFilterExercicios] = useState<string[]>([]);
   const [page, setPage] = useState(1);
@@ -163,7 +167,7 @@ export function VendasFuturasPage() {
         cultura: filterCultura || undefined,
         safra: filterSafra || undefined,
         destino: filterDestino || undefined,
-        mesRecebimento: filterMes || undefined,
+
       };
       const [data, baixas] = await Promise.all([
         listarVendas(filtros),
@@ -177,7 +181,7 @@ export function VendasFuturasPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, filterStatus, filterCultura, filterSafra, filterDestino, filterMes]);
+  }, [search, filterStatus, filterCultura, filterSafra, filterDestino]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); setSelectedIds(new Set()); }, [fetchData]);
@@ -209,12 +213,17 @@ export function VendasFuturasPage() {
   }, [modalOpen, form.cultura, form.safra]);
 
   // ---- derivados ----
-  // Recorte por exercício (anual): filtra pelo ANO do recebimento previsto.
+  // Recortes no client, pelo mês do recebimento previsto:
+  //   • COMPETÊNCIA (17-ago) — mês a mês, com "Todas";
+  //   • EXERCÍCIO (27-jul)   — o ano inteiro, para somar/comparar.
+  // Os dois se somam: exercício 2027 + competências 01 e 02 = jan e fev/2027.
   const rowsFiltradas = useMemo(
-    () => (filterExercicios.length
-      ? rows.filter((r) => filterExercicios.includes(r.mes_recebimento.slice(0, 4)))
-      : rows),
-    [rows, filterExercicios],
+    () => rows.filter((r) => {
+      if (filterExercicios.length && !filterExercicios.includes(r.mes_recebimento.slice(0, 4))) return false;
+      if (filterCompetencias.length && !filterCompetencias.includes(r.mes_recebimento)) return false;
+      return true;
+    }),
+    [rows, filterExercicios, filterCompetencias],
   );
   const resumo = useMemo(() => calcularResumo(rowsFiltradas), [rowsFiltradas]);
   const safrasDistintas = useMemo(() => Array.from(new Set(rows.map((r) => r.safra))).sort(), [rows]);
@@ -656,7 +665,20 @@ export function VendasFuturasPage() {
             Provisionamento de receitas — contratos firmados aguardando pagamento
           </p>
         </div>
-        <Button size="sm" onClick={openNova}><Plus size={14} /> Nova Venda</Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Competência no header — mesmo padrão do Financeiro e da DL (17-ago) */}
+          <label className="flex items-center gap-1.5 text-xs text-stone-500"
+            title="Competência (mês do recebimento previsto) de toda a página: cards, gráficos e tabela seguem o que estiver marcado aqui. Nenhuma marcada = todas.">
+            Competência
+            <CompetenciaMultiSelect
+              className="w-40"
+              options={mesesDistintos}
+              value={filterCompetencias}
+              onChange={(v) => { setFilterCompetencias(v); setPage(1); }}
+            />
+          </label>
+          <Button size="sm" onClick={openNova}><Plus size={14} /> Nova Venda</Button>
+        </div>
       </div>
 
       {/* KPIs */}
@@ -674,11 +696,32 @@ export function VendasFuturasPage() {
           icon={<Wallet size={16}/>}
           helpText="Valor total de TODAS as vendas no filtro atual, incluindo liquidadas e canceladas."
         />
+        {/* Sacas por CULTURA (17-ago): o total sozinho não dizia quanto era de
+            cada grão, que é o número usado para conferir contra o estoque. */}
         <KpiCard
           label="Sacas Vendidas"
           value={`${resumo.total_sacas.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} sc`}
           icon={<Sprout size={16}/>}
-          helpText="Total de sacas (60kg) já comprometidas em contratos no filtro."
+          helpText="Total de sacas já comprometidas em contratos no filtro, aberto por cultura. A conversão kg → sacas usa o kg/saca informado em cada venda (60 kg por padrão)."
+          detalhe={
+            resumo.por_cultura.length > 0 ? (
+              <div className="flex flex-wrap gap-x-3 gap-y-1 -mt-1">
+                {resumo.por_cultura.map((c) => (
+                  <span
+                    key={c.cultura}
+                    className="inline-flex items-center gap-1 text-xs text-stone-600 whitespace-nowrap"
+                    title={`${CULTURA_LABEL[c.cultura]}: ${c.sacas.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} sacas · ${formatCurrency(c.valor)}`}
+                  >
+                    <span aria-hidden>{CULTURA_EMOJI[c.cultura]}</span>
+                    <span className="text-stone-400">{CULTURA_LABEL[c.cultura]}</span>
+                    <b className="tabular-nums text-stone-700">
+                      {c.sacas.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}
+                    </b>
+                  </span>
+                ))}
+              </div>
+            ) : null
+          }
         />
         <KpiCard
           label="Contratos firmados"
@@ -779,12 +822,6 @@ export function VendasFuturasPage() {
               <option value="">Todos destinos</option>
               <option value="empresa">Empresa Aramburu</option>
               <option value="socio">Sócios (direto)</option>
-            </select>
-            <select value={filterMes}
-              onChange={(e) => { setFilterMes(e.target.value); setPage(1); }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs">
-              <option value="">Todos meses</option>
-              {mesesDistintos.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
             {/* Exercício (anual) — 1+ anos para análise/soma/comparação (27-jul) */}
             <MultiSelect

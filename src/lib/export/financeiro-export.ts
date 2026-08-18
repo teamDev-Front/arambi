@@ -377,14 +377,58 @@ export async function exportFinanceiroPdf(
 
   const colX = (i: number): number => contentLeft + cols.slice(0, i).reduce((s, c) => s + c.width, 0);
 
+  /**
+   * Cabeçalho da tabela.
+   *
+   * Até 17-ago-2026 cada título era desenhado inteiro a partir do x da coluna,
+   * sem nenhum limite de largura — então "Fornecedor / contraparte" invadia
+   * "Referência (NF / recibo)", que invadia "Forma de Pagamento", e o
+   * cabeçalho saía ilegível ("Fornecedor / contraparteReferência (NF Forma…").
+   * As CÉLULAS já quebravam em várias linhas (wrapLines); só o cabeçalho não.
+   * Agora ele quebra igual — em até 2 linhas — e a faixa cresce conforme a
+   * necessidade da coluna mais alta.
+   */
+  const HEAD_WRAP = 2;
+
+  /**
+   * O corpo trunca com reticências quando não cabe (é o certo para um valor
+   * longo), mas um TÍTULO truncado — "Venciment…", "Referência (NF…" — deixa a
+   * coluna sem nome. Marcar os 14 campos aperta tanto as colunas que nem
+   * "Parcelas" cabe em 7,5pt. Então, em vez de cortar, o cabeçalho encolhe:
+   * procura o maior corpo em que TODOS os títulos cabem inteiros em até duas
+   * linhas. Só se nem no menor couber é que a quebra volta a truncar.
+   */
+  const TAMANHOS_HEAD = [FS_HEAD, 7, 6.5, 6, 5.5];
+
+  const fsHead = (() => {
+    for (const size of TAMANHOS_HEAD) {
+      const cabe = cols.every((c) => {
+        const linhas = wrapLines(fontBold, c.header, size, c.width - 6, HEAD_WRAP);
+        return linhas.every((l) => !l.endsWith("…"));
+      });
+      if (cabe) return size;
+    }
+    return TAMANHOS_HEAD[TAMANHOS_HEAD.length - 1];
+  })();
+
+  const headLineH = Math.max(LINE_H * (fsHead / FS_HEAD), fsHead + 1.2);
+
+  function linhasCabecalho(): string[][] {
+    return cols.map((c) => wrapLines(fontBold, c.header, fsHead, c.width - 6, HEAD_WRAP));
+  }
+
   function drawCabecalhoTabela(): void {
-    const headH = LINE_H + ROW_PAD * 2 - 2;
+    const linhas = linhasCabecalho();
+    const nLinhas = Math.max(1, ...linhas.map((l) => l.length));
+    const headH = nLinhas * headLineH + ROW_PAD * 2 - 2;
     page.drawRectangle({ x: contentLeft, y: y - headH, width: contentRight - contentLeft, height: headH, color: C_HEADER_BG });
     cols.forEach((c, i) => {
       const x = colX(i);
-      const tw = widthOf(fontBold, c.header, FS_HEAD);
-      const tx = c.align === "right" ? x + c.width - 4 - tw : x + 4;
-      page.drawText(c.header, { x: tx, y: y - ROW_PAD - FS_HEAD + 1, size: FS_HEAD, font: fontBold, color: C_INK });
+      linhas[i].forEach((ln, li) => {
+        const tw = widthOf(fontBold, ln, fsHead);
+        const tx = c.align === "right" ? x + c.width - 3 - tw : x + 3;
+        page.drawText(ln, { x: tx, y: y - ROW_PAD - fsHead + 1 - li * headLineH, size: fsHead, font: fontBold, color: C_INK });
+      });
     });
     y -= headH;
   }

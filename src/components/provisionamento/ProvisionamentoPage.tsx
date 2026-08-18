@@ -5,7 +5,9 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
-import { Loader2, CalendarClock, TrendingUp, TrendingDown, HandCoins, Scale, HelpCircle } from "lucide-react";
+import { Loader2, CalendarClock, TrendingUp, TrendingDown, HandCoins, Scale, HelpCircle, CopyPlus } from "lucide-react";
+import { Button } from "@/components/ui/Button";
+import { EspelharAnoModal } from "@/components/provisionamento/EspelharAnoModal";
 import { formatCurrency } from "@/lib/utils/format";
 import {
   listarProvisionamentoAnual, listarResumoDlAno, listarVendasPorMesAno, listarAnosDisponiveis,
@@ -42,6 +44,7 @@ export function ProvisionamentoPage() {
   const [dl, setDl] = useState<DlMensalResumoRow[]>([]);
   const [vendas, setVendas] = useState<VendaPorPeriodoRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [espelharOpen, setEspelharOpen] = useState(false);
 
   useEffect(() => {
     listarAnosDisponiveis()
@@ -161,11 +164,26 @@ export function ProvisionamentoPage() {
             Tudo que está programado até dezembro — custos, repasses e vendas firmadas, sem depender de planilha
           </p>
         </div>
-        <select value={ano} onChange={(e) => setAno(e.target.value)}
-          className="h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm">
-          {(anos.includes(ano) ? anos : [ano, ...anos]).map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Espelhamento da virada do ano (17-ago) */}
+          <Button variant="outline" size="sm" onClick={() => setEspelharOpen(true)}
+            title="Copia as despesas fixas e periódicas deste ano para o ano seguinte, já provisionadas — sem lançar item por item">
+            <CopyPlus size={14} /> Espelhar ano
+          </Button>
+          <select value={ano} onChange={(e) => setAno(e.target.value)}
+            className="h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm">
+            {(anos.includes(ano) ? anos : [ano, ...anos]).map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </div>
       </div>
+
+      <EspelharAnoModal
+        open={espelharOpen}
+        onClose={() => setEspelharOpen(false)}
+        anoOrigem={ano}
+        anos={anos}
+        onConcluido={fetchData}
+      />
 
       {/* KPIs do ano */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

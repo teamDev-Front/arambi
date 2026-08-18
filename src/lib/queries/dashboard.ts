@@ -29,10 +29,15 @@ export async function getKpiMensal(mesRef?: string): Promise<KpiMensalRow[]> {
   return (data ?? []) as KpiMensalRow[];
 }
 
-export async function getPorContaContabil(mesRef?: string): Promise<PorContaContabilRow[]> {
+/** `mesRef` aceita LISTA desde 17-ago (competência virou multi-seleção). */
+export async function getPorContaContabil(mesRef?: string | string[]): Promise<PorContaContabilRow[]> {
   const supabase = createClient();
   let q = supabase.from("v_por_conta_contabil_mensal").select("*");
-  if (mesRef) q = q.eq("mes_referencia", mesRef);
+  if (Array.isArray(mesRef)) {
+    if (mesRef.length) q = q.in("mes_referencia", mesRef);
+  } else if (mesRef) {
+    q = q.eq("mes_referencia", mesRef);
+  }
   const { data, error } = await q;
   if (error) throw error;
   return (data ?? []) as PorContaContabilRow[];

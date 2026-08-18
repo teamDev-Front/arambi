@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Pagination } from "@/components/ui/Pagination";
+import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import { useToast } from "@/components/ui/Toast";
 import { clearDraft } from "@/lib/hooks/useFormDraft";
 import {
@@ -59,7 +60,8 @@ export function DocumentosPage() {
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState("");
   const [filterTipo, setFilterTipo] = useState<DocumentoGeradoTipo | "">("");
-  const [filterMes,  setFilterMes]  = useState("");
+  // Competência multi-seleção (17-ago) — lista vazia = todos os meses.
+  const [filterMeses, setFilterMeses] = useState<string[]>([]);
   const [page, setPage]         = useState(1);
 
   const [tipoAberto, setTipoAberto]     = useState<DocumentoGeradoTipo | null>(null);
@@ -84,7 +86,7 @@ export function DocumentosPage() {
         listarDocumentosGerados({
           search,
           tipo: filterTipo,
-          mes: filterMes,
+          mes: filterMeses,
           // Agrupado: traz o histórico inteiro do recorte (cap 1000) numa página só.
           page: agruparPorFornecedor ? 1 : page,
           pageSize: agruparPorFornecedor ? 1000 : PAGE_SIZE,
@@ -100,7 +102,7 @@ export function DocumentosPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, filterTipo, filterMes, page, agruparPorFornecedor]);
+  }, [search, filterTipo, filterMeses, page, agruparPorFornecedor]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void carregar(); }, [carregar]);
@@ -352,14 +354,14 @@ export function DocumentosPage() {
                 <option key={m.tipo} value={m.tipo}>{DOCUMENTO_GERADO_LABEL_CURTO[m.tipo]}</option>
               ))}
             </select>
-            <select
-              value={filterMes}
-              onChange={(e) => { setFilterMes(e.target.value); setPage(1); }}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs focus:outline-none"
-            >
-              <option value="">Todos os meses</option>
-              {meses.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
+            <CompetenciaMultiSelect
+              className="w-36"
+              options={meses}
+              value={filterMeses}
+              onChange={(v) => { setFilterMeses(v); setPage(1); }}
+              todasLabel="Todos os meses"
+              title="Competência dos documentos listados. Nenhuma marcada = todos os meses."
+            />
             {/* RF 24-jul — histórico por fornecedor (cadastro único por prestador) */}
             <Button
               size="sm"

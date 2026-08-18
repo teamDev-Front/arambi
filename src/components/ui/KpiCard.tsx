@@ -10,9 +10,11 @@ interface KpiCardProps {
   icon?: React.ReactNode;
   className?: string;
   helpText?: string;       // tooltip explicativo opcional
+  /** Detalhe abaixo do número (ex.: as sacas abertas por cultura — 17-ago). */
+  detalhe?: React.ReactNode;
 }
 
-export function KpiCard({ label, value, change, trend = "neutral", icon, className, helpText }: KpiCardProps) {
+export function KpiCard({ label, value, change, trend = "neutral", icon, className, helpText, detalhe }: KpiCardProps) {
   const trendColor =
     trend === "up" ? "text-green-600" : trend === "down" ? "text-red-500" : "text-stone-400";
   const TrendIcon =
@@ -39,6 +41,7 @@ export function KpiCard({ label, value, change, trend = "neutral", icon, classNa
         )}
       </div>
       <div className="text-2xl font-bold text-stone-900">{value}</div>
+      {detalhe}
       {change !== undefined && (
         <div className={cn("flex items-center gap-1 text-xs font-medium", trendColor)}>
           <TrendIcon size={13} />
