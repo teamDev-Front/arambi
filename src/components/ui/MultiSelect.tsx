@@ -79,7 +79,12 @@ export function MultiSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
         className={cn(
-          "h-8 rounded-lg border border-stone-200 pl-2 pr-1.5 text-xs flex items-center gap-1 bg-white w-full min-w-[10rem]",
+          // A largura de cada filtro vem do `className` do wrapper (w-36/w-40/w-44).
+          // O min-width aqui é só para o caso de uso sem largura definida — e
+          // precisa caber DENTRO da menor caixa usada (w-36 = 9rem), senão o
+          // botão transborda, come o espaçamento da linha de filtros e encosta
+          // no vizinho (era o que acontecia com "Todos os bancos" até 18-ago).
+          "h-8 rounded-lg border border-stone-200 pl-2 pr-1.5 text-xs flex items-center gap-1 bg-white w-full min-w-32",
           value.length > 0 ? "text-stone-700" : "text-stone-500",
         )}
       >

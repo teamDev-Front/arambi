@@ -124,7 +124,7 @@ export function CompetenciaMultiSelect({
         aria-expanded={open}
         title={title}
         className={cn(
-          "h-8 rounded-lg border border-stone-200 pl-2.5 pr-1.5 text-xs flex items-center gap-1.5 bg-white w-full min-w-[8.5rem]",
+          "h-8 rounded-lg border border-stone-200 pl-2.5 pr-1.5 text-xs flex items-center gap-1.5 bg-white w-full min-w-32",
           "disabled:opacity-50 disabled:cursor-not-allowed",
           value.length > 0 ? "text-stone-700 font-medium" : "text-stone-500",
         )}
