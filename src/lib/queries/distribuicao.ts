@@ -236,6 +236,8 @@ export interface GlobalEmpresaMes {
    * o card "Global na empresa (2.8.1)" (ajuste 27-jul: centro em vez da conta).
    */
   totalCentro281: number;
+  /** Quantos lançamentos entram no total acima (card 19-ago mostra a contagem). */
+  qtdCentro281: number;
 }
 
 export async function obterGlobalEmpresaMes(mes: string | string[]): Promise<GlobalEmpresaMes> {
@@ -251,7 +253,7 @@ export async function obterGlobalEmpresaMes(mes: string | string[]): Promise<Glo
   if (error) throw error;
 
   const rows = (data ?? []) as TransacaoEmpresaRow[];
-  let prov = 0, aPagar = 0, realizado = 0, manual = false, centro281 = 0;
+  let prov = 0, aPagar = 0, realizado = 0, manual = false, centro281 = 0, qtd281 = 0;
   for (const r of rows) {
     // Desde a 0047 a DL global vive no CENTRO 2.8.1 — outros centros da conta
     // 2.8 (ex.: 2.8.3 Plano de Saúde) não entram nos totais nem bloqueiam a
@@ -271,7 +273,7 @@ export async function obterGlobalEmpresaMes(mes: string | string[]): Promise<Glo
       considerado = true;
       if (ehDL) realizado += -r.valor;
     }
-    if (considerado && ehDL) centro281 += -r.valor;
+    if (considerado && ehDL) { centro281 += -r.valor; qtd281 += 1; }
   }
   return {
     rows,
@@ -280,6 +282,7 @@ export async function obterGlobalEmpresaMes(mes: string | string[]): Promise<Glo
     realizadoGlobal: realizado,
     temProvisionadoManual: manual,
     totalCentro281: centro281,
+    qtdCentro281: qtd281,
   };
 }
 

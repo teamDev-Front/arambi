@@ -11,7 +11,7 @@ import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   Plus, Search, Edit2, Trash2, Loader2, HandCoins, CheckCheck,
-  ArrowRightLeft, Undo2, CalendarCheck, PiggyBank, Landmark, AlertTriangle, FilterX,
+  ArrowRightLeft, Undo2, CalendarCheck, CalendarDays, Users, Landmark, AlertTriangle, FilterX,
   Copy, Tag, X, FileDown, FileSpreadsheet, FileText, RefreshCw,
 } from "lucide-react";
 import { gerarPdfBloqueante } from "@/lib/pdfmonkey/frontend";
@@ -30,6 +30,7 @@ import {
   desfazerCriacao, desfazerEdicao, desfazerExclusao, desfazerStatusEmMassa,
 } from "@/lib/queries/desfazer";
 import { exportDistribuicaoPdf, exportDistribuicaoXlsx } from "@/lib/export/distribuicao-export";
+import { CamposExportDlModal, type CamposExportDlEscolha } from "./CamposExportDlModal";
 import {
   STATUS_DL_LABEL, STATUS_DL_COLOR,
   type StatusDL, type SocioRow, type ClassificacaoPessoalRow,
@@ -80,6 +81,10 @@ const mesCorrente = () => {
 
 /** "2026-08" → "08/2026" (rótulo da competência na tabela). */
 const mesHumano = (m: string) => (m?.length === 7 ? `${m.slice(5)}/${m.slice(0, 4)}` : m || "—");
+
+/** Minúsculas e sem acento — "Cláudio" e "claudio" se encontram na busca. */
+const normalizarBusca = (s: string) =>
+  s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
 
 /**
  * A COMPETÊNCIA da Distribuição de Lucro é um campo próprio (grava
@@ -260,9 +265,12 @@ export function DistribuicaoPage() {
   // Status genérico + exclusão em lote (ajuste 27-jul — idem ao Financeiro).
   const [bulkStatusSel, setBulkStatusSel] = useState("");
   const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
-  // ---- exportação (ajuste 27-jul) ----
+  // ---- exportação (ajuste 27-jul; 19-ago: tela de seleção de campos) ----
   const [exportandoPdf, setExportandoPdf] = useState(false);
   const [exportandoXlsx, setExportandoXlsx] = useState(false);
+  const [camposExportOpen, setCamposExportOpen] = useState(false);
+  // ---- modal Repasses consolidados (19-ago: saiu da tela fixa, virou card) ----
+  const [repassesOpen, setRepassesOpen] = useState(false);
 
   // ---- modal CRUD ----
   const [modalOpen, setModalOpen] = useState(false);
@@ -316,7 +324,9 @@ export function DistribuicaoPage() {
           socioId: filterSocio || undefined,
           classificacao: filterClassif || undefined,
           status: filterStatus || undefined,
-          search: search || undefined,
+          // A busca é aplicada no CLIENT (19-ago): a arte pede "Buscar
+          // descrição, sócio, conta…", e sócio/classificação/conta são joins —
+          // o ilike do servidor só alcançava descrição/observação.
           repasseDe: filterRepasseDe || undefined,
           repasseAte: filterRepasseAte || undefined,
           vencimentoDe: filterVencDe || undefined,
@@ -338,7 +348,7 @@ export function DistribuicaoPage() {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesesSel, filterSocio, filterClassif, filterStatus, search,
+  }, [mesesSel, filterSocio, filterClassif, filterStatus,
       filterRepasseDe, filterRepasseAte, filterVencDe, filterVencAte,
       filterValorMin, filterValorMax]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -367,10 +377,31 @@ export function DistribuicaoPage() {
     return Array.from(m.values()).sort((a, b) => a.nome.localeCompare(b.nome));
   }, [consolidaveis]);
 
+  // Busca ampliada (19-ago, conforme a arte): além de descrição/observação,
+  // alcança sócio, classificação e conta destino. Roda no client, sem acento e
+  // sem caixa — o recorte já vem inteiro do servidor (filtros de competência,
+  // períodos etc.), então buscar aqui não perde nenhuma linha.
+  const rowsBuscados = useMemo(() => {
+    const termo = normalizarBusca(search);
+    if (!termo) return rows;
+    return rows.filter((r) => {
+      const campos = [
+        r.descricao,
+        r.observacao,
+        r.socio?.apelido,
+        r.socio?.nome_completo,
+        r.classificacao_pessoal,
+        r.classificacao?.nome,
+        r.conta_bancaria_socio?.nome ?? r.conta_bancaria_socio_nome,
+      ];
+      return campos.some((c) => c && normalizarBusca(c).includes(termo));
+    });
+  }, [rows, search]);
+
   // Recorte "só tagueados" (ajuste 27-jul) — filtra a tabela no client.
   const rowsVisiveis = useMemo(
-    () => (mostrarSoTagueados && tags.size > 0 ? rows.filter((r) => tags.has(r.id)) : rows),
-    [rows, mostrarSoTagueados, tags],
+    () => (mostrarSoTagueados && tags.size > 0 ? rowsBuscados.filter((r) => tags.has(r.id)) : rowsBuscados),
+    [rowsBuscados, mostrarSoTagueados, tags],
   );
 
   /**
@@ -614,7 +645,9 @@ export function DistribuicaoPage() {
     return f;
   }
 
-  async function handleExport(formato: "pdf" | "xlsx") {
+  // Os botões Exportar abrem a tela de seleção de campos (19-ago — idem ao
+  // Financeiro); o formato final é escolhido lá dentro.
+  async function handleExport(formato: "pdf" | "xlsx", escolha: CamposExportDlEscolha) {
     // Seleção manual tem precedência sobre os filtros (idem ao Financeiro).
     const selecionadas = rows.filter((r) => selectedIds.has(r.id));
     const alvo = selecionadas.length > 0 ? selecionadas : rowsVisiveis;
@@ -622,20 +655,39 @@ export function DistribuicaoPage() {
       toast.info("Nada para exportar", "Nenhum lançamento no recorte atual.");
       return;
     }
-    const filtros = selecionadas.length > 0
-      ? [`Seleção manual — ${selecionadas.length} lançamento${selecionadas.length === 1 ? "" : "s"}`]
-      : montarFiltrosExport();
+    const meta = {
+      escopo: selecionadas.length > 0
+        ? `Seleção manual — ${selecionadas.length} lançamento${selecionadas.length === 1 ? "" : "s"}`
+        : "Recorte pelos filtros da tela",
+      filtros: selecionadas.length > 0 ? [] : montarFiltrosExport(),
+      campos: escolha.campos,
+      incluirFiltros: escolha.incluirFiltros,
+      incluirTotais: escolha.incluirTotais,
+    };
     const setBusy = formato === "pdf" ? setExportandoPdf : setExportandoXlsx;
     setBusy(true);
     try {
-      if (formato === "pdf") await exportDistribuicaoPdf(alvo, { filtros });
-      else exportDistribuicaoXlsx(alvo, { filtros });
+      if (formato === "pdf") await exportDistribuicaoPdf(alvo, meta);
+      else exportDistribuicaoXlsx(alvo, meta);
+      setCamposExportOpen(false);
       toast.success("Exportação concluída", `Arquivo ${formato.toUpperCase()} gerado (${alvo.length} linha${alvo.length === 1 ? "" : "s"}).`);
     } catch (e: unknown) {
       toast.error("Falha na exportação", (e as Error).message ?? String(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * Filtro dos CARDS (19-ago — "todos devem funcionar como botões, seguindo o
+   * mesmo padrão utilizado no FINANCEIRO"): zera os demais filtros e aplica só
+   * o recorte de status do card — a tabela passa a espelhar o número dele.
+   * "" = todos os status (card Global na empresa: provisionado + a repassar +
+   * repassado).
+   */
+  function aplicarFiltroCard(status: StatusDL | "") {
+    limparTodosFiltros();
+    setFilterStatus(status);
   }
 
   // ---- capa do repasse do sócio (PDFMonkey — ajuste 29-jul) ----
@@ -904,15 +956,17 @@ export function DistribuicaoPage() {
               onChange={setMesesSel}
             />
           </label>
-          <Button variant="outline" size="sm" onClick={() => handleExport("pdf")}
+          {/* 19-ago: os dois botões abrem a MESMA tela de seleção de campos
+              (idem ao Financeiro); o formato final é escolhido lá dentro. */}
+          <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
             loading={exportandoPdf} disabled={exportandoPdf || exportandoXlsx}
-            title="Exporta um PDF espelho da tela com os lançamentos selecionados ou filtrados">
-            <FileDown size={14} /> Exportar PDF
+            title="Escolhe os campos e exporta um PDF com os lançamentos selecionados ou filtrados">
+            <FileDown size={14} /> {selectedIds.size > 0 ? `Exportar PDF (${selectedIds.size})` : "Exportar PDF"}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => handleExport("xlsx")}
+          <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
             loading={exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
-            title="Exporta uma planilha XLSX (Data do Repasse, Sócio, Classificação, Descrição, Conta Destino, Valor, Vencimento, Status)">
-            <FileSpreadsheet size={14} /> Exportar XLSX
+            title="Escolhe os campos e exporta uma planilha XLSX com os lançamentos selecionados ou filtrados">
+            <FileSpreadsheet size={14} /> {selectedIds.size > 0 ? `Exportar XLSX (${selectedIds.size})` : "Exportar XLSX"}
           </Button>
           <Button variant="outline" size="sm" onClick={abrirCapa}
             title="Gera a capa do repasse do sócio (PDFMonkey) — com opção de usar só os lançamentos tagueados">
@@ -956,54 +1010,71 @@ export function DistribuicaoPage() {
         </div>
       )}
 
-      {/* KPIs do mês — mesmo padrão visual dos cards do Financeiro (ajuste 27-jul) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+      {/* KPIs do mês (19-ago) — ordem, cores e escrita da arte nova, todos
+          funcionando como BOTÕES no padrão do Financeiro: os quatro primeiros
+          filtram a tabela pelo status do card; o quinto abre os Repasses
+          consolidados do mês (idem card Despesa Variável do Financeiro). */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
         {([
           {
-            key: "prov",
-            label: "Provisionado (mês)",
-            valor: resumo?.provisionado ?? 0,
-            icon: <PiggyBank size={15} />,
-            iconClass: "bg-emerald-50 text-emerald-600",
-            labelClass: "text-emerald-700",
-            valorClass: "text-emerald-700",
-            help: "Soma do detalhado com status Provisionado neste mês. É o que ainda falta conferir/marcar.",
+            key: "glob",
+            label: "Global na empresa (2.8.1)",
+            qtd: globalMes?.qtdCentro281 ?? 0,
+            unidade: "lançamento",
+            valor: globalMes?.totalCentro281 ?? 0,
+            icon: <Landmark size={15} />,
+            iconClass: "bg-blue-50 text-blue-600",
+            labelClass: "text-blue-700",
+            valorClass: "text-blue-700",
+            help: "Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa neste mês — provisionado + a repassar + repassado. Deve bater com o detalhado. Clique para ver a tabela com todos os status.",
+            filtro: "" as StatusDL | "",
           },
           {
             key: "arep",
             label: "A repassar (pronto p/ repasse)",
+            qtd: resumo?.qtd_a_pagar ?? 0,
+            unidade: "repasse",
             valor: resumo?.a_pagar ?? 0,
             icon: <CalendarCheck size={15} />,
-            iconClass: "bg-orange-50 text-orange-600",
-            labelClass: "text-orange-700",
-            valorClass: "text-orange-600",
-            help: "Soma do detalhado marcado como A repassar. A parte ainda não consolidada aparece no botão Consolidar.",
+            iconClass: "bg-red-50 text-red-600",
+            labelClass: "text-red-700",
+            valorClass: "text-red-600",
+            help: "Soma do detalhado marcado como A repassar. A parte ainda não consolidada aparece no botão Consolidar. Clique para filtrar a tabela.",
+            filtro: "a_pagar" as StatusDL | "",
+          },
+          {
+            key: "prov",
+            label: "Provisionado (mês)",
+            qtd: resumo?.qtd_provisionado ?? 0,
+            unidade: "repasse",
+            valor: resumo?.provisionado ?? 0,
+            icon: <CalendarDays size={15} />,
+            iconClass: "bg-amber-50 text-amber-600",
+            labelClass: "text-amber-700",
+            valorClass: "text-amber-600",
+            help: "Soma do detalhado com status Provisionado neste mês. É o que ainda falta conferir/marcar. Clique para filtrar a tabela.",
+            filtro: "provisionado" as StatusDL | "",
           },
           {
             key: "rep",
-            label: "Repassado (mês)",
+            label: "Repasse realizado individual (mês)",
+            qtd: resumo?.qtd_realizado ?? 0,
+            unidade: "lançamento",
             valor: resumo?.realizado ?? 0,
-            icon: <CheckCheck size={15} />,
-            iconClass: "bg-amber-50 text-amber-700",
-            labelClass: "text-amber-700",
-            valorClass: "text-amber-700",
-            help: "Detalhado já baixado (repassado às contas pessoais dos sócios).",
-          },
-          {
-            key: "glob",
-            label: "Global na empresa (2.8.1)",
-            valor: globalMes?.totalCentro281 ?? 0,
-            icon: <Landmark size={15} />,
-            iconClass: "bg-emerald-50 text-emerald-700",
-            labelClass: "text-emerald-800",
+            icon: <Users size={15} />,
+            iconClass: "bg-emerald-50 text-emerald-600",
+            labelClass: "text-emerald-700",
             valorClass: "text-emerald-700",
-            help: "Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa neste mês — provisionado + a repassar + repassado. Deve bater com o detalhado.",
+            help: "Detalhado já baixado (repassado às contas pessoais dos sócios). Clique para filtrar a tabela.",
+            filtro: "realizado" as StatusDL | "",
           },
         ]).map((c) => (
-          <div
+          <button
             key={c.key}
+            type="button"
+            onClick={() => aplicarFiltroCard(c.filtro)}
             title={c.help}
-            className="rounded-xl border border-stone-200 bg-white shadow-sm px-3.5 py-2.5 flex items-center gap-3"
+            className="rounded-xl border border-stone-200 bg-white shadow-sm px-3.5 py-2.5 flex items-center gap-3 text-left transition-colors hover:border-stone-300 hover:bg-stone-50 cursor-pointer"
           >
             <span className={`h-8 w-8 shrink-0 rounded-full flex items-center justify-center ${c.iconClass}`}>
               {c.icon}
@@ -1012,12 +1083,43 @@ export function DistribuicaoPage() {
               <p className={`text-[10px] font-semibold uppercase tracking-wide truncate ${c.labelClass}`}>
                 {c.label}
               </p>
-              <p className={`text-sm font-bold tabular-nums whitespace-nowrap ${c.valorClass}`}>
-                {formatCurrency(c.valor)}
+              <p className="text-sm font-bold tabular-nums whitespace-nowrap text-stone-800">
+                {c.qtd}{" "}
+                <span className="font-normal text-stone-400">
+                  {c.unidade}{c.qtd === 1 ? "" : "s"} ·
+                </span>{" "}
+                <span className={c.valorClass}>{formatCurrency(c.valor)}</span>
               </p>
             </span>
-          </div>
+          </button>
         ))}
+
+        {/* Repasse realizado consolidado (19-ago) — 5º card; clique abre a
+            visualização detalhada que antes ficava fixada na tela. */}
+        <button
+          type="button"
+          onClick={() => setRepassesOpen(true)}
+          title="Repasses globais consolidados do mês (lançados no Financeiro pela consolidação). Clique para ver o detalhe — com Dar baixa e Desfazer."
+          className="rounded-xl border border-stone-200 bg-white shadow-sm px-3.5 py-2.5 flex items-center gap-3 text-left transition-colors hover:border-stone-300 hover:bg-stone-50 cursor-pointer"
+        >
+          <span className="h-8 w-8 shrink-0 rounded-full flex items-center justify-center bg-teal-50 text-teal-600">
+            <FileText size={15} />
+          </span>
+          <span className="leading-tight min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wide truncate text-teal-700">
+              Repasse realizado consolidado (mês)
+            </p>
+            <p className="text-sm font-bold tabular-nums whitespace-nowrap text-stone-800">
+              {repasses.length}{" "}
+              <span className="font-normal text-stone-400">
+                lançamento{repasses.length === 1 ? "" : "s"} ·
+              </span>{" "}
+              <span className="text-teal-700">
+                {formatCurrency(repasses.reduce((s, rep) => s + -Number(rep.valor), 0))}
+              </span>
+            </p>
+          </span>
+        </button>
       </div>
 
       {/* Divergência entre global manual e detalhado */}
@@ -1044,68 +1146,96 @@ export function DistribuicaoPage() {
         </div>
       )}
 
-      {/* Repasses consolidados do mês */}
-      {repasses.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Repasses consolidados do mês</CardTitle>
-            <HandCoins size={16} className="text-stone-400" />
-          </CardHeader>
-          <CardContent className="p-0">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-stone-50 border-b border-stone-100">
-                  {["Data", "Descrição", "Detalhados", "Valor", "Status", "Ações"].map((h) => (
-                    <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {repasses.map((rep) => (
-                  <tr key={rep.id} className="border-b border-stone-50">
-                    <td className="px-4 py-2.5 text-xs text-stone-500 whitespace-nowrap">{formatDate(rep.data)}</td>
-                    <td className="px-4 py-2.5 text-stone-700">{rep.descricao}</td>
-                    <td className="px-4 py-2.5 text-xs text-stone-500">{rep.qtd_detalhados} lançamento{rep.qtd_detalhados === 1 ? "" : "s"}</td>
-                    <td className="px-4 py-2.5 font-semibold text-red-600 whitespace-nowrap">{formatCurrency(rep.valor)}</td>
-                    <td className="px-4 py-2.5">
-                      <Badge variant={rep.status === "repassado" ? "success" : "danger"}>
-                        {STATUS_EMPRESA_LABEL[rep.status] ?? rep.status}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      {(rep.status === "a_pagar" || rep.status === "a_repassar") && (
-                        <div className="flex gap-2">
-                          <Button size="sm" variant="outline" onClick={() => handleConcluir(rep)}
-                            title="Marca global, transferência e detalhado como repassados/pagos de uma vez">
-                            <CheckCheck size={13} /> Dar baixa
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => handleDesfazer(rep)}
-                            title="Remove os lançamentos globais e libera o detalhado novamente">
-                            <Undo2 size={13} /> Desfazer
-                          </Button>
-                        </div>
-                      )}
-                    </td>
+      {/* Repasses consolidados do mês (19-ago) — saiu da tela fixa; agora abre
+          pelo card "Repasse realizado consolidado (mês)", com as mesmas
+          informações e ações de antes (idem Despesa Variável no Financeiro). */}
+      <Modal open={repassesOpen} onClose={() => setRepassesOpen(false)}
+        title="Repasses consolidados do mês" size="xl">
+        <div className="px-6 pt-4 flex items-center gap-3">
+          <span className="h-9 w-9 shrink-0 rounded-full flex items-center justify-center bg-teal-50 text-teal-600">
+            <HandCoins size={17} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-stone-800">
+              Competência {mesesSel.length ? mesesSel.map(mesHumano).join(", ") : "todas"}
+            </p>
+            <p className="text-xs text-stone-500">
+              Lançamentos globais criados no Financeiro pela consolidação do detalhado ({"“Consolidar repasse”"}).
+            </p>
+          </div>
+        </div>
+        <div className="p-4">
+          {repasses.length === 0 ? (
+            <p className="px-2 py-8 text-center text-sm text-stone-400">
+              Nenhum repasse consolidado no recorte. Marque o detalhado como {"“A repassar”"} e use
+              {" “Consolidar repasse”"} para criar o global no Financeiro.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-stone-50 border-b border-stone-100">
+                    {["Data", "Descrição", "Detalhados", "Valor", "Status", "Ações"].map((h) => (
+                      <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide">{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
+                </thead>
+                <tbody>
+                  {repasses.map((rep) => (
+                    <tr key={rep.id} className="border-b border-stone-50">
+                      <td className="px-4 py-2.5 text-xs text-stone-500 whitespace-nowrap">{formatDate(rep.data)}</td>
+                      <td className="px-4 py-2.5 text-stone-700">{rep.descricao}</td>
+                      <td className="px-4 py-2.5 text-xs text-stone-500">{rep.qtd_detalhados} lançamento{rep.qtd_detalhados === 1 ? "" : "s"}</td>
+                      <td className="px-4 py-2.5 font-semibold text-red-600 whitespace-nowrap">{formatCurrency(rep.valor)}</td>
+                      <td className="px-4 py-2.5">
+                        <Badge variant={rep.status === "repassado" ? "success" : "danger"}>
+                          {STATUS_EMPRESA_LABEL[rep.status] ?? rep.status}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {(rep.status === "a_pagar" || rep.status === "a_repassar") && (
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="outline" onClick={() => handleConcluir(rep)}
+                              title="Marca global, transferência e detalhado como repassados/pagos de uma vez">
+                              <CheckCheck size={13} /> Dar baixa
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => handleDesfazer(rep)}
+                              title="Remove os lançamentos globais e libera o detalhado novamente">
+                              <Undo2 size={13} /> Desfazer
+                            </Button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700 text-xs">
+                    <td colSpan={3} className="px-4 py-2.5 uppercase tracking-wide">Total</td>
+                    <td className="px-4 py-2.5 text-red-600 whitespace-nowrap">
+                      {formatCurrency(repasses.reduce((s, rep) => s + Number(rep.valor), 0))}
+                    </td>
+                    <td colSpan={2}></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      </Modal>
 
       {/* Tabela detalhada */}
       <Card>
         <CardHeader className="flex-col items-start gap-3 lg:flex-row lg:items-center lg:gap-2">
           <CardTitle>Detalhado por sócio</CardTitle>
           <div className="flex items-center gap-2 flex-wrap ml-auto">
-            <div className="relative" title="Busca por descrição ou observação">
+            <div className="relative" title="Busca por descrição, observação, sócio, classificação ou conta destino (sem diferenciar acento)">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar descrição…"
-                className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-52 focus:outline-none focus:ring-1 focus:ring-accent-400"
+                placeholder="Buscar descrição, sócio, conta…"
+                className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-56 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
             </div>
             <select value={filterSocio} onChange={(e) => setFilterSocio(e.target.value)}
@@ -1638,6 +1768,16 @@ export function DistribuicaoPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Tela de seleção de campos da exportação (19-ago — idem ao Financeiro) */}
+      <CamposExportDlModal
+        open={camposExportOpen}
+        onClose={() => setCamposExportOpen(false)}
+        totalLinhas={selectedIds.size > 0 ? selectedIds.size : rowsVisiveis.length}
+        escopo={selectedIds.size > 0 ? "Seleção manual" : "Recorte pelos filtros da tela"}
+        exportando={exportandoPdf ? "pdf" : exportandoXlsx ? "xlsx" : null}
+        onExportar={handleExport}
+      />
 
       {/* Painel flutuante das TAGs do dia (ajuste 27-jul — idem ao Financeiro) */}
       {tags.size > 0 && (

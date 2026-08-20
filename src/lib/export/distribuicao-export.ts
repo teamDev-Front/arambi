@@ -1,9 +1,12 @@
 // Exportação "espelho da tela" da Distribuição de Lucro em XLSX e PDF
 // (ajuste 27-jul — mesmas praticidades do Financeiro).
 //
+// 19-ago: ganhou a tela de seleção de campos ("Campos do relatório"), no mesmo
+// padrão do Financeiro (RF 31-jul de lá) — catálogo único de campos que
+// alimenta o modal, o PDF e o XLSX, com linha de filtros e subtotais opcionais.
+//
 // Roda 100% no client a partir das linhas já carregadas (o recorte filtrado da
-// tela). Colunas na ordem pedida: Data do Repasse, Sócio, Classificação,
-// Descrição, Conta Destino, Valor, Vencimento, Status.
+// tela).
 
 "use client";
 
@@ -14,36 +17,136 @@ import type { TransacaoSocioRich } from "@/lib/queries/distribuicao";
 import { STATUS_DL_LABEL } from "@/types";
 import { buildXlsx, xtext, xmoney, type XlsxValue } from "./xlsx";
 
-export interface DistribuicaoExportMeta {
-  titulo?: string;
-  /** Filtros humanizados aplicados (ex.: ["Sócio: Cláudio", "Status: Provisionado"]). */
-  filtros?: string[];
-}
-
+// ---------------------------------------------------------------------------
+// Modelo de linha "achatado" — fonte única para PDF e XLSX (mesmas colunas da
+// tela: Data do Repasse, Competência, Sócio, Classificação, Descrição, Conta
+// Destino, Vencimento, Valor, Status — mais os extras Repasse e Observação).
+// ---------------------------------------------------------------------------
 interface DlExportRow {
   dataRepasse: string;
+  competencia: string;
   socio: string;
   classificacao: string;
   descricao: string;
   contaDestino: string;
-  valorNum: number;
   vencimento: string;
+  valorNum: number;
+  valorStr: string;
   status: string;
+  repasse: string;     // "Consolidado" quando vinculado a repasse global
+  observacao: string;
+}
+
+export interface DistribuicaoExportMeta {
+  titulo?: string;
+  /** Linha curta sobre o recorte (ex.: "Seleção manual — 12 lançamentos"). */
+  escopo?: string;
+  /** Filtros humanizados aplicados (ex.: ["Sócio: Cláudio", "Status: Provisionado"]). */
+  filtros?: string[];
+  /**
+   * Campos escolhidos na tela de seleção (19-ago). Ausente = layout padrão.
+   * A ORDEM do relatório é sempre a do catálogo, não a de clique — assim dois
+   * relatórios com os mesmos campos saem idênticos.
+   */
+  campos?: CampoExportDl[];
+  /** Incluir a linha "Filtros aplicados" no cabeçalho. */
+  incluirFiltros?: boolean;
+  /** Incluir os subtotais por sócio e o total geral. */
+  incluirTotais?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Catálogo de campos exportáveis — fonte única do modal de seleção, do PDF e
+// do XLSX. Acrescentar um campo aqui o faz aparecer nos três lugares.
+// ---------------------------------------------------------------------------
+export type CampoExportDl =
+  | "dataRepasse" | "competencia" | "socio" | "classificacao" | "descricao"
+  | "contaDestino" | "vencimento" | "valor" | "status" | "repasse" | "observacao";
+
+export interface CampoExportDlDef {
+  key: CampoExportDl;
+  label: string;
+  /** Vem marcado por padrão (espelha as colunas da tela). */
+  padrao: boolean;
+  /** Largura relativa no PDF e no XLSX. */
+  larguraPdf: number;
+  larguraXlsx: number;
+  align: "left" | "right";
+  /** Máximo de linhas na célula do PDF. */
+  wrap: number;
+}
+
+export const CAMPOS_EXPORT_DL: CampoExportDlDef[] = [
+  { key: "dataRepasse",   label: "Data do Repasse", padrao: true,  larguraPdf: 62,  larguraXlsx: 15, align: "left",  wrap: 1 },
+  { key: "competencia",   label: "Competência",     padrao: false, larguraPdf: 52,  larguraXlsx: 12, align: "left",  wrap: 1 },
+  { key: "socio",         label: "Sócio",           padrao: true,  larguraPdf: 88,  larguraXlsx: 22, align: "left",  wrap: 2 },
+  { key: "classificacao", label: "Classificação",   padrao: true,  larguraPdf: 108, larguraXlsx: 30, align: "left",  wrap: 2 },
+  { key: "descricao",     label: "Descrição",       padrao: true,  larguraPdf: 170, larguraXlsx: 46, align: "left",  wrap: 3 },
+  { key: "contaDestino",  label: "Conta Destino",   padrao: true,  larguraPdf: 108, larguraXlsx: 28, align: "left",  wrap: 2 },
+  { key: "vencimento",    label: "Vencimento",      padrao: true,  larguraPdf: 56,  larguraXlsx: 13, align: "left",  wrap: 1 },
+  { key: "valor",         label: "Valor",           padrao: true,  larguraPdf: 68,  larguraXlsx: 16, align: "right", wrap: 1 },
+  { key: "status",        label: "Status",          padrao: true,  larguraPdf: 58,  larguraXlsx: 14, align: "left",  wrap: 1 },
+  { key: "repasse",       label: "Repasse",         padrao: false, larguraPdf: 56,  larguraXlsx: 13, align: "left",  wrap: 1 },
+  { key: "observacao",    label: "Observação",      padrao: false, larguraPdf: 100, larguraXlsx: 36, align: "left",  wrap: 3 },
+];
+
+export const CAMPOS_EXPORT_DL_PADRAO: CampoExportDl[] =
+  CAMPOS_EXPORT_DL.filter((c) => c.padrao).map((c) => c.key);
+
+/** Campos pedidos → definições, na ordem do catálogo. Vazio cai no padrão. */
+function resolverCampos(campos?: CampoExportDl[]): CampoExportDlDef[] {
+  if (!campos || campos.length === 0) {
+    return CAMPOS_EXPORT_DL.filter((c) => c.padrao);
+  }
+  const escolhidos = new Set(campos);
+  const sel = CAMPOS_EXPORT_DL.filter((c) => escolhidos.has(c.key));
+  return sel.length > 0 ? sel : CAMPOS_EXPORT_DL.filter((c) => c.padrao);
+}
+
+/** Valor da célula (o "valor" tem versão numérica e formatada). */
+function celula(r: DlExportRow, key: CampoExportDl): string {
+  return key === "valor" ? r.valorStr : r[key];
+}
+
+/** "2026-08" → "08/2026". */
+function mesHumano(m: string): string {
+  return m?.length === 7 ? `${m.slice(5)}/${m.slice(0, 4)}` : m || "";
 }
 
 function toRows(rows: TransacaoSocioRich[]): DlExportRow[] {
   return rows.map((r) => ({
     dataRepasse: r.data_vencimento ? formatDate(r.data_vencimento) : "",
+    competencia: mesHumano(r.mes_referencia),
     socio: r.socio?.apelido ?? r.socio?.nome_completo ?? "",
     classificacao: r.classificacao
       ? `${r.classificacao_pessoal} ${r.classificacao.nome}`
       : r.classificacao_pessoal,
     descricao: r.descricao ?? "",
     contaDestino: r.conta_bancaria_socio?.nome ?? r.conta_bancaria_socio_nome ?? "",
-    valorNum: Number(r.valor) || 0,
     vencimento: r.data_vencimento_despesa ? formatDate(r.data_vencimento_despesa) : "",
+    valorNum: Number(r.valor) || 0,
+    valorStr: formatCurrency(Number(r.valor) || 0),
     status: STATUS_DL_LABEL[r.status] ?? r.status,
+    repasse: r.repasse_id ? "Consolidado" : "",
+    observacao: r.observacao ?? "",
   }));
+}
+
+/** Subtotais por sócio (apenas sócios presentes) + total geral. */
+function calcularTotais(rows: DlExportRow[]): {
+  porSocio: { socio: string; total: number }[];
+  totalGeral: number;
+} {
+  const mapa = new Map<string, number>();
+  let totalGeral = 0;
+  for (const r of rows) {
+    const k = r.socio || "Sem sócio";
+    mapa.set(k, (mapa.get(k) ?? 0) + r.valorNum);
+    totalGeral += r.valorNum;
+  }
+  const porSocio = Array.from(mapa, ([socio, total]) => ({ socio, total }))
+    .sort((a, b) => a.socio.localeCompare(b.socio));
+  return { porSocio, totalGeral };
 }
 
 function baixar(bytes: Uint8Array, filename: string, mime: string): void {
@@ -67,50 +170,50 @@ function nomeArquivo(ext: string): string {
 }
 
 // ===========================================================================
-// XLSX — ordem pedida no ajuste 27-jul
+// XLSX
 // ===========================================================================
 export function exportDistribuicaoXlsx(
   rowsRich: TransacaoSocioRich[],
   meta: DistribuicaoExportMeta = {},
 ): void {
   const rows = toRows(rowsRich);
-  const total = rows.reduce((s, r) => s + r.valorNum, 0);
+  const { porSocio, totalGeral } = calcularTotais(rows);
+
+  // Campos escolhidos na tela de seleção (19-ago); sem escolha = padrão.
+  const cols = resolverCampos(meta.campos);
+  const incluirTotais = meta.incluirTotais !== false;
 
   const titleRows: string[] = [meta.titulo ?? "AramBI — Distribuição de Lucro (detalhado por sócio)"];
-  if (meta.filtros && meta.filtros.length) titleRows.push(`Filtros: ${meta.filtros.join(" · ")}`);
+  if (meta.escopo) titleRows.push(meta.escopo);
+  if (meta.incluirFiltros !== false && meta.filtros?.length) {
+    titleRows.push(`Filtros: ${meta.filtros.join(" · ")}`);
+  }
   titleRows.push(`Gerado em ${formatDate(new Date())} · ${rows.length} lançamento${rows.length === 1 ? "" : "s"}`);
 
-  const dataRows: XlsxValue[][] = rows.map((r) => [
-    xtext(r.dataRepasse),
-    xtext(r.socio),
-    xtext(r.classificacao),
-    xtext(r.descricao),
-    xtext(r.contaDestino),
-    xmoney(r.valorNum),
-    xtext(r.vencimento),
-    xtext(r.status),
-  ]);
+  const dataRows: XlsxValue[][] = rows.map((r) =>
+    cols.map((c) => (c.key === "valor" ? xmoney(r.valorNum) : xtext(celula(r, c.key)))),
+  );
 
-  dataRows.push([
-    xtext(""), xtext(""), xtext(""), xtext(""),
-    xtext("TOTAL", { bold: true }),
-    xmoney(total, { bold: true }),
-    xtext(""), xtext(""),
-  ]);
+  // Totais só fazem sentido se a coluna Valor estiver no relatório.
+  const temValor = cols.some((c) => c.key === "valor");
+  if (incluirTotais && temValor) {
+    const n = cols.length;
+    const pad = (q: number): XlsxValue[] => Array.from({ length: q }, () => xtext(""));
+    // Rótulo na penúltima coluna; com 1 coluna só, ele vira a linha inteira.
+    const rotulo = (texto: string, total: number): XlsxValue[] =>
+      n >= 2
+        ? [...pad(n - 2), xtext(texto, { bold: true }), xmoney(total, { bold: true })]
+        : [xmoney(total, { bold: true })];
+
+    dataRows.push(pad(n));
+    for (const s of porSocio) dataRows.push(rotulo(`Subtotal ${s.socio}`, s.total));
+    dataRows.push(rotulo("TOTAL GERAL", totalGeral));
+  }
 
   const bytes = buildXlsx({
     sheetName: "Distribuição de Lucro",
     titleRows,
-    columns: [
-      { header: "Data do Repasse", width: 15 },
-      { header: "Sócio", width: 22 },
-      { header: "Classificação", width: 30 },
-      { header: "Descrição", width: 46 },
-      { header: "Conta Destino", width: 28 },
-      { header: "Valor", width: 16 },
-      { header: "Vencimento", width: 13 },
-      { header: "Status", width: 14 },
-    ],
+    columns: cols.map((c) => ({ header: c.label, width: c.larguraXlsx })),
     rows: dataRows,
   });
 
@@ -128,23 +231,12 @@ const A4_LANDSCAPE = { w: 841.89, h: 595.28 };
 const MARGIN = { top: 40, bottom: 38, left: 32, right: 32 };
 
 interface ColDef {
-  key: keyof Omit<DlExportRow, "valorNum"> | "valorStr";
+  key: CampoExportDl;
   header: string;
   width: number;
   align: "left" | "right";
   wrap: number;
 }
-
-const COLS: ColDef[] = [
-  { key: "dataRepasse", header: "Data do Repasse", width: 74, align: "left", wrap: 1 },
-  { key: "socio", header: "Sócio", width: 96, align: "left", wrap: 2 },
-  { key: "classificacao", header: "Classificação", width: 120, align: "left", wrap: 2 },
-  { key: "descricao", header: "Descrição", width: 200, align: "left", wrap: 3 },
-  { key: "contaDestino", header: "Conta Destino", width: 120, align: "left", wrap: 2 },
-  { key: "valorStr", header: "Valor", width: 74, align: "right", wrap: 1 },
-  { key: "vencimento", header: "Vencimento", width: 58, align: "left", wrap: 1 },
-  { key: "status", header: "Status", width: 60, align: "left", wrap: 1 },
-];
 
 const C_INK = rgb(0.06, 0.12, 0.11);
 const C_MUTED = rgb(0.42, 0.40, 0.36);
@@ -215,7 +307,8 @@ export async function exportDistribuicaoPdf(
   meta: DistribuicaoExportMeta = {},
 ): Promise<void> {
   const rows = toRows(rowsRich);
-  const total = rows.reduce((s, r) => s + r.valorNum, 0);
+  const { porSocio, totalGeral } = calcularTotais(rows);
+  const incluirTotais = meta.incluirTotais !== false;
 
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -224,12 +317,35 @@ export async function exportDistribuicaoPdf(
 
   const contentLeft = MARGIN.left;
   const contentRight = A4_LANDSCAPE.w - MARGIN.right;
-  const tableWidth = COLS.reduce((s, c) => s + c.width, 0);
-  const extra = (contentRight - contentLeft) - tableWidth;
-  const cols = COLS.map((c) => ({ ...c }));
+  const disponivel = contentRight - contentLeft;
+
+  // Colunas escolhidas na tela de seleção (19-ago), na ordem do catálogo.
+  const cols: ColDef[] = resolverCampos(meta.campos).map((c) => ({
+    key: c.key,
+    header: c.label,
+    width: c.larguraPdf,
+    align: c.align,
+    wrap: c.wrap,
+  }));
+
+  // Ajuste de largura à página: sobra vai para a Descrição (ou para a maior
+  // coluna, se Descrição não foi escolhida); falta é rateada proporcionalmente.
+  // A falta era o defeito de alinhamento apontado em 19-ago: as colunas fixas
+  // somavam mais que a página e a tabela estourava a margem direita.
+  const tableWidth = cols.reduce((s, c) => s + c.width, 0);
+  const extra = disponivel - tableWidth;
   if (extra > 0) {
-    const desc = cols.find((c) => c.key === "descricao")!;
-    desc.width += extra;
+    const alvo = cols.find((c) => c.key === "descricao")
+      ?? cols.reduce((a, b) => (b.width > a.width ? b : a), cols[0]);
+    if (alvo) alvo.width += extra;
+  } else if (extra < 0) {
+    const fator = disponivel / tableWidth;
+    cols.forEach((c) => { c.width = Math.max(28, c.width * fator); });
+    // O arredondamento do mínimo pode reestourar; devolve a diferença à maior.
+    const sobra = disponivel - cols.reduce((s, c) => s + c.width, 0);
+    if (sobra !== 0 && cols.length > 0) {
+      cols.reduce((a, b) => (b.width > a.width ? b : a), cols[0]).width += sobra;
+    }
   }
 
   const FS = 7.5;
@@ -243,25 +359,39 @@ export async function exportDistribuicaoPdf(
 
   const colX = (i: number): number => contentLeft + cols.slice(0, i).reduce((s, c) => s + c.width, 0);
 
-  // Cabeçalho que quebra em até 2 linhas em vez de invadir a coluna vizinha
-  // (mesmo defeito corrigido no PDF do Financeiro em 17-ago-2026).
+  // Cabeçalho quebra em até 2 linhas; se um título não couber inteiro, a fonte
+  // do cabeçalho encolhe até caber (mesma solução do Financeiro, 17-ago).
   const HEAD_WRAP = 2;
+  const TAMANHOS_HEAD = [FS_HEAD, 7, 6.5, 6, 5.5];
+
+  const fsHead = (() => {
+    for (const size of TAMANHOS_HEAD) {
+      const cabe = cols.every((c) => {
+        const linhas = wrapLines(fontBold, c.header, size, c.width - 6, HEAD_WRAP);
+        return linhas.every((l) => !l.endsWith("…"));
+      });
+      if (cabe) return size;
+    }
+    return TAMANHOS_HEAD[TAMANHOS_HEAD.length - 1];
+  })();
+
+  const headLineH = Math.max(LINE_H * (fsHead / FS_HEAD), fsHead + 1.2);
 
   function linhasCabecalho(): string[][] {
-    return cols.map((c) => wrapLines(fontBold, c.header, FS_HEAD, c.width - 8, HEAD_WRAP));
+    return cols.map((c) => wrapLines(fontBold, c.header, fsHead, c.width - 6, HEAD_WRAP));
   }
 
   function drawCabecalhoTabela(): void {
     const linhas = linhasCabecalho();
     const nLinhas = Math.max(1, ...linhas.map((l) => l.length));
-    const headH = nLinhas * LINE_H + ROW_PAD * 2 - (LINE_H - FS_HEAD) - 2;
+    const headH = nLinhas * headLineH + ROW_PAD * 2 - 2;
     page.drawRectangle({ x: contentLeft, y: y - headH, width: contentRight - contentLeft, height: headH, color: C_HEADER_BG });
     cols.forEach((c, i) => {
       const x = colX(i);
       linhas[i].forEach((ln, li) => {
-        const tw = widthOf(fontBold, ln, FS_HEAD);
-        const tx = c.align === "right" ? x + c.width - 4 - tw : x + 4;
-        page.drawText(ln, { x: tx, y: y - ROW_PAD - FS_HEAD + 1 - li * LINE_H, size: FS_HEAD, font: fontBold, color: C_INK });
+        const tw = widthOf(fontBold, ln, fsHead);
+        const tx = c.align === "right" ? x + c.width - 3 - tw : x + 3;
+        page.drawText(ln, { x: tx, y: y - ROW_PAD - fsHead + 1 - li * headLineH, size: fsHead, font: fontBold, color: C_INK });
       });
     });
     y -= headH;
@@ -291,7 +421,10 @@ export async function exportDistribuicaoPdf(
       y -= 34;
 
       const linhasMeta: string[] = [];
-      if (meta.filtros && meta.filtros.length) linhasMeta.push(`Filtros aplicados: ${meta.filtros.join("  ·  ")}`);
+      if (meta.escopo) linhasMeta.push(meta.escopo);
+      if (meta.incluirFiltros !== false && meta.filtros && meta.filtros.length) {
+        linhasMeta.push(`Filtros aplicados: ${meta.filtros.join("  ·  ")}`);
+      }
       linhasMeta.push(`${rows.length} lançamento${rows.length === 1 ? "" : "s"}`);
       for (const lm of linhasMeta) {
         page.drawText(fitOneLine(font, lm, 8, contentRight - contentLeft), { x: contentLeft, y: y - 8, size: 8, font, color: C_MUTED });
@@ -310,7 +443,7 @@ export async function exportDistribuicaoPdf(
   let zebra = false;
   for (const r of rows) {
     const cellLines: string[][] = cols.map((c) => {
-      const raw = c.key === "valorStr" ? formatCurrency(r.valorNum) : r[c.key];
+      const raw = celula(r, c.key);
       return wrapLines(c.align === "right" ? fontBold : font, raw, FS, c.width - 8, c.wrap);
     });
     const nLines = Math.max(1, ...cellLines.map((l) => l.length));
@@ -329,7 +462,7 @@ export async function exportDistribuicaoPdf(
     cols.forEach((c, i) => {
       const x = colX(i);
       const lines = cellLines[i];
-      const isValor = c.key === "valorStr";
+      const isValor = c.key === "valor";
       const f = isValor ? fontBold : font;
       lines.forEach((ln, li) => {
         const ty = y - ROW_PAD - FS - li * LINE_H + 1;
@@ -343,16 +476,29 @@ export async function exportDistribuicaoPdf(
     page.drawLine({ start: { x: contentLeft, y }, end: { x: contentRight, y }, thickness: 0.3, color: C_LINE });
   }
 
-  // Total
-  if (y - 30 < MARGIN.bottom + 4) novaPagina(false);
-  y -= 10;
-  const boxX = contentRight - 220;
-  page.drawLine({ start: { x: boxX, y }, end: { x: contentRight, y }, thickness: 0.6, color: C_LINE });
-  y -= 4;
-  page.drawText("TOTAL DO RECORTE", { x: boxX, y: y - 9, size: 9.5, font: fontBold, color: C_INK });
-  const tg = formatCurrency(total);
-  const tgw = widthOf(fontBold, tg, 9.5);
-  page.drawText(tg, { x: contentRight - tgw, y: y - 9, size: 9.5, font: fontBold, color: total < 0 ? C_RED : C_INK });
+  // ---- Totais (subtotais por sócio + total geral) ----
+  if (incluirTotais) {
+    const totaisH = (porSocio.length + 1) * 13 + 14;
+    if (y - totaisH < MARGIN.bottom + 4) novaPagina(false);
+    y -= 8;
+    const boxX = contentRight - 260;
+    page.drawLine({ start: { x: boxX, y }, end: { x: contentRight, y }, thickness: 0.6, color: C_LINE });
+    y -= 13;
+    for (const s of porSocio) {
+      const lbl = fitOneLine(font, `Subtotal ${s.socio}`, 8.5, 170);
+      page.drawText(lbl, { x: boxX, y: y - 8, size: 8.5, font, color: C_MUTED });
+      const v = formatCurrency(s.total);
+      const vw = widthOf(font, v, 8.5);
+      page.drawText(v, { x: contentRight - vw, y: y - 8, size: 8.5, font, color: C_INK });
+      y -= 13;
+    }
+    page.drawLine({ start: { x: boxX, y: y - 1 }, end: { x: contentRight, y: y - 1 }, thickness: 0.4, color: C_LINE });
+    y -= 3;
+    page.drawText("TOTAL DO RECORTE", { x: boxX, y: y - 9, size: 9.5, font: fontBold, color: C_INK });
+    const tg = formatCurrency(totalGeral);
+    const tgw = widthOf(fontBold, tg, 9.5);
+    page.drawText(tg, { x: contentRight - tgw, y: y - 9, size: 9.5, font: fontBold, color: totalGeral < 0 ? C_RED : C_INK });
+  }
 
   const totalPages = pages.length;
   pages.forEach((pg, idx) => {
