@@ -39,7 +39,11 @@ interface DlExportRow {
 
 export interface DistribuicaoExportMeta {
   titulo?: string;
-  /** Linha curta sobre o recorte (ex.: "Seleção manual — 12 lançamentos"). */
+  /**
+   * Linha curta sobre o recorte (ex.: "Seleção manual — 12 lançamentos").
+   * RF 20-ago: não sai mais no arquivo — quem ainda a exibe é a tela de
+   * seleção de campos. Mantida para não quebrar quem já monta a meta.
+   */
   escopo?: string;
   /** Filtros humanizados aplicados (ex.: ["Sócio: Cláudio", "Status: Provisionado"]). */
   filtros?: string[];
@@ -53,6 +57,8 @@ export interface DistribuicaoExportMeta {
   incluirFiltros?: boolean;
   /** Incluir os subtotais por sócio e o total geral. */
   incluirTotais?: boolean;
+  /** Rodapé "Emitido por: Fulano | data às hora" (RF 20-ago). */
+  emitidoPor?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,11 +190,12 @@ export function exportDistribuicaoXlsx(
   const incluirTotais = meta.incluirTotais !== false;
 
   const titleRows: string[] = [meta.titulo ?? "AramBI — Distribuição de Lucro (detalhado por sócio)"];
-  if (meta.escopo) titleRows.push(meta.escopo);
+  // RF 20-ago: escopo, contagem e "Gerado em" saíram do cabeçalho; a
+  // identificação da emissão virou a linha "Emitido por".
   if (meta.incluirFiltros !== false && meta.filtros?.length) {
     titleRows.push(`Filtros: ${meta.filtros.join(" · ")}`);
   }
-  titleRows.push(`Gerado em ${formatDate(new Date())} · ${rows.length} lançamento${rows.length === 1 ? "" : "s"}`);
+  if (meta.emitidoPor) titleRows.push(meta.emitidoPor);
 
   const dataRows: XlsxValue[][] = rows.map((r) =>
     cols.map((c) => (c.key === "valor" ? xmoney(r.valorNum) : xtext(celula(r, c.key)))),
@@ -415,17 +422,14 @@ export async function exportDistribuicaoPdf(
       const titulo = safe(meta.titulo ?? "Distribuição de Lucro — Detalhado por Sócio");
       const tw = widthOf(fontBold, titulo, 11);
       page.drawText(titulo, { x: contentRight - tw, y: y - 12, size: 11, font: fontBold, color: C_INK });
-      const sub = `Gerado em ${formatDate(new Date())}`;
-      const sw = widthOf(font, sub, 8);
-      page.drawText(sub, { x: contentRight - sw, y: y - 23, size: 8, font, color: C_MUTED });
+      // RF 20-ago: o "Gerado em" saiu do cabeçalho — a emissão agora é o rodapé.
       y -= 34;
 
+      // RF 20-ago: ficou só a linha de filtros (escopo e contagem saíram).
       const linhasMeta: string[] = [];
-      if (meta.escopo) linhasMeta.push(meta.escopo);
       if (meta.incluirFiltros !== false && meta.filtros && meta.filtros.length) {
         linhasMeta.push(`Filtros aplicados: ${meta.filtros.join("  ·  ")}`);
       }
-      linhasMeta.push(`${rows.length} lançamento${rows.length === 1 ? "" : "s"}`);
       for (const lm of linhasMeta) {
         page.drawText(fitOneLine(font, lm, 8, contentRight - contentLeft), { x: contentLeft, y: y - 8, size: 8, font, color: C_MUTED });
         y -= 11;
@@ -503,6 +507,12 @@ export async function exportDistribuicaoPdf(
   const totalPages = pages.length;
   pages.forEach((pg, idx) => {
     pg.drawText("AramBI · Gestão Agro", { x: MARGIN.left, y: MARGIN.bottom - 16, size: 7, font, color: C_MUTED });
+    // RF 20-ago: quem emitiu + data e hora, ao centro do rodapé de toda página.
+    if (meta.emitidoPor) {
+      const em = safe(meta.emitidoPor);
+      const ew = widthOf(font, em, 7);
+      pg.drawText(em, { x: (contentLeft + contentRight) / 2 - ew / 2, y: MARGIN.bottom - 16, size: 7, font, color: C_MUTED });
+    }
     const pageTxt = `Página ${idx + 1} de ${totalPages}`;
     const pw = widthOf(font, pageTxt, 7);
     pg.drawText(pageTxt, { x: contentRight - pw, y: MARGIN.bottom - 16, size: 7, font, color: C_MUTED });

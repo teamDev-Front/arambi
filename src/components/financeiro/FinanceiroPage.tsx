@@ -13,6 +13,7 @@ import { BankLogo } from "@/components/ui/BankLogo";
 import { Pagination } from "@/components/ui/Pagination";
 import { RelatorioEscopoModal } from "@/components/financeiro/RelatorioEscopoModal";
 import { CamposExportModal, type CamposExportEscolha } from "@/components/financeiro/CamposExportModal";
+import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
 import { ResgateComposicaoModal } from "@/components/financeiro/ResgateComposicaoModal";
 import { ConferenciaSicrediModal } from "@/components/financeiro/ConferenciaSicrediModal";
 import { ehResgateAutomatico } from "@/lib/queries/resgates";
@@ -20,7 +21,7 @@ import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
   Plus, FileText, Search, Edit2, Trash2, Copy,
   TrendingUp, Loader2,
-  FileDown, FileSpreadsheet, CalendarRange,
+  FileDown, CalendarRange,
   ChevronUp, ChevronDown, Wallet, FilterX,
   AlertTriangle, CalendarClock, CalendarDays,
   Tag, X, ListChecks, BarChart3, Layers, Scale,
@@ -857,6 +858,8 @@ export function FinanceiroPage() {
         campos: escolha.campos,
         incluirFiltros: escolha.incluirFiltros,
         incluirTotais: escolha.incluirTotais,
+        // RF 20-ago: rodapé com quem emitiu, a data e a hora.
+        emitidoPor: linhaEmissao(await getNomeUsuarioAtual()),
       };
       if (capped) meta.aviso = `Exportação limitada às primeiras ${exportRows.length} de ${totalExport} linhas.`;
       if (formato === "pdf") await exportFinanceiroPdf(exportRows, meta);
@@ -1392,17 +1395,12 @@ export function FinanceiroPage() {
             title="Confere mês a mês se toda saída do Sicredi tem o resgate equivalente entrando do Invest">
             <Scale size={14} /> Conferência Sicredi
           </Button>
-          {/* RF 31-jul: os dois botões abrem a MESMA tela de seleção de campos;
-              o formato final é escolhido lá dentro. */}
+          {/* RF 20-ago: um único botão "Exportar". Os campos e o formato
+              (PDF ou XLSX) são escolhidos dentro do CamposExportModal. */}
           <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
-            loading={exportandoPdf} disabled={exportandoPdf || exportandoXlsx}
-            title="Escolhe os campos e exporta um PDF com os lançamentos selecionados ou filtrados">
-            <FileDown size={14} /> {selectedIds.size > 0 ? `Exportar PDF (${selectedIds.size})` : "Exportar PDF"}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
-            loading={exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
-            title="Escolhe os campos e exporta uma planilha XLSX com os lançamentos selecionados ou filtrados">
-            <FileSpreadsheet size={14} /> {selectedIds.size > 0 ? `Exportar XLSX (${selectedIds.size})` : "Exportar XLSX"}
+            loading={exportandoPdf || exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
+            title="Escolhe os campos e o formato (PDF ou XLSX) dos lançamentos selecionados ou filtrados">
+            <FileDown size={14} /> {selectedIds.size > 0 ? `Exportar (${selectedIds.size})` : "Exportar"}
           </Button>
           <Button variant="outline" size="sm" onClick={abrirEscopo}
             title="Gera o relatório (Capa/Contábil via PDFMonkey) a partir dos filtros ou da seleção">

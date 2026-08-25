@@ -12,7 +12,7 @@ import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import {
   Plus, Search, Edit2, Trash2, Loader2, HandCoins, CheckCheck,
   ArrowRightLeft, Undo2, CalendarCheck, CalendarDays, Users, Landmark, AlertTriangle, FilterX,
-  Copy, Tag, X, FileDown, FileSpreadsheet, FileText, RefreshCw,
+  Copy, Tag, X, FileDown, FileText, RefreshCw,
 } from "lucide-react";
 import { gerarPdfBloqueante } from "@/lib/pdfmonkey/frontend";
 import type { ReportScope } from "@/lib/pdfmonkey/types";
@@ -31,6 +31,7 @@ import {
 } from "@/lib/queries/desfazer";
 import { exportDistribuicaoPdf, exportDistribuicaoXlsx } from "@/lib/export/distribuicao-export";
 import { CamposExportDlModal, type CamposExportDlEscolha } from "./CamposExportDlModal";
+import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
 import {
   STATUS_DL_LABEL, STATUS_DL_COLOR,
   type StatusDL, type SocioRow, type ClassificacaoPessoalRow,
@@ -251,6 +252,23 @@ export function DistribuicaoPage() {
   const [resumo, setResumo] = useState<DlMensalResumoRow | null>(null);
   const [globalMes, setGlobalMes] = useState<GlobalEmpresaMes | null>(null);
   const [repasses, setRepasses] = useState<RepasseConsolidado[]>([]);
+  /**
+   * RF 20-ago: a coluna "Ações" do modal de repasses consolidados só aparece
+   * quando há algo a fazer. Com tudo já repassado (o caso comum) ela ficava
+   * como uma coluna vazia — foi isso que a Adri pediu para tirar. Os botões
+   * "Dar baixa" / "Desfazer" continuam disponíveis quando há repasse pendente.
+   */
+  const temAcoesRepasse = repasses.some((r) => r.status === "a_pagar" || r.status === "a_repassar");
+  /**
+   * Total de lançamentos DETALHADOS da competência (todos os status) — é o que
+   * a tabela mostra quando se clica no card "Global na empresa (2.8.1)", que
+   * não filtra status nenhum. Vem do mesmo resumo dos outros cards para as
+   * quatro contagens fecharem entre si (RF 20-ago).
+   */
+  const qtdDetalhadoMes =
+    Number(resumo?.qtd_provisionado ?? 0) +
+    Number(resumo?.qtd_a_pagar ?? 0) +
+    Number(resumo?.qtd_realizado ?? 0);
   const [loading, setLoading] = useState(true);
 
   // ---- lookups ----
@@ -663,6 +681,8 @@ export function DistribuicaoPage() {
       campos: escolha.campos,
       incluirFiltros: escolha.incluirFiltros,
       incluirTotais: escolha.incluirTotais,
+      // RF 20-ago: rodapé com quem emitiu, a data e a hora.
+      emitidoPor: linhaEmissao(await getNomeUsuarioAtual()),
     };
     const setBusy = formato === "pdf" ? setExportandoPdf : setExportandoXlsx;
     setBusy(true);
@@ -956,17 +976,12 @@ export function DistribuicaoPage() {
               onChange={setMesesSel}
             />
           </label>
-          {/* 19-ago: os dois botões abrem a MESMA tela de seleção de campos
-              (idem ao Financeiro); o formato final é escolhido lá dentro. */}
+          {/* RF 20-ago: um único botão "Exportar". Os campos e o formato
+              (PDF ou XLSX) são escolhidos dentro do CamposExportDlModal. */}
           <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
-            loading={exportandoPdf} disabled={exportandoPdf || exportandoXlsx}
-            title="Escolhe os campos e exporta um PDF com os lançamentos selecionados ou filtrados">
-            <FileDown size={14} /> {selectedIds.size > 0 ? `Exportar PDF (${selectedIds.size})` : "Exportar PDF"}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
-            loading={exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
-            title="Escolhe os campos e exporta uma planilha XLSX com os lançamentos selecionados ou filtrados">
-            <FileSpreadsheet size={14} /> {selectedIds.size > 0 ? `Exportar XLSX (${selectedIds.size})` : "Exportar XLSX"}
+            loading={exportandoPdf || exportandoXlsx} disabled={exportandoPdf || exportandoXlsx}
+            title="Escolhe os campos e o formato (PDF ou XLSX) dos lançamentos selecionados ou filtrados">
+            <FileDown size={14} /> {selectedIds.size > 0 ? `Exportar (${selectedIds.size})` : "Exportar"}
           </Button>
           <Button variant="outline" size="sm" onClick={abrirCapa}
             title="Gera a capa do repasse do sócio (PDFMonkey) — com opção de usar só os lançamentos tagueados">
@@ -1019,14 +1034,19 @@ export function DistribuicaoPage() {
           {
             key: "glob",
             label: "Global na empresa (2.8.1)",
-            qtd: globalMes?.qtdCentro281 ?? 0,
+            // RF 20-ago: a contagem tem que ser a do DETALHADO — é ele que o
+            // clique do card mostra na tabela (e os outros cards já contam
+            // assim). Antes vinham as poucas linhas GLOBAIS do 2.8.1 no
+            // Financeiro (provisionado + repasses consolidados), então o card
+            // dizia "5 lançamentos" e a tabela abria com 48.
+            qtd: qtdDetalhadoMes,
             unidade: "lançamento",
             valor: globalMes?.totalCentro281 ?? 0,
             icon: <Landmark size={15} />,
             iconClass: "bg-blue-50 text-blue-600",
             labelClass: "text-blue-700",
             valorClass: "text-blue-700",
-            help: "Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa neste mês — provisionado + a repassar + repassado. Deve bater com o detalhado. Clique para ver a tabela com todos os status.",
+            help: "Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa neste mês — provisionado + a repassar + repassado. Deve bater com o detalhado; a contagem é a dos lançamentos detalhados do mês. Clique para ver a tabela com todos os status.",
             filtro: "" as StatusDL | "",
           },
           {
@@ -1175,7 +1195,7 @@ export function DistribuicaoPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-stone-50 border-b border-stone-100">
-                    {["Data", "Descrição", "Detalhados", "Valor", "Status", "Ações"].map((h) => (
+                    {["Data", "Descrição", "Detalhados", "Valor", "Status", ...(temAcoesRepasse ? ["Ações"] : [])].map((h) => (
                       <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide">{h}</th>
                     ))}
                   </tr>
@@ -1192,6 +1212,7 @@ export function DistribuicaoPage() {
                           {STATUS_EMPRESA_LABEL[rep.status] ?? rep.status}
                         </Badge>
                       </td>
+                      {temAcoesRepasse && (
                       <td className="px-4 py-2.5">
                         {(rep.status === "a_pagar" || rep.status === "a_repassar") && (
                           <div className="flex gap-2">
@@ -1206,6 +1227,7 @@ export function DistribuicaoPage() {
                           </div>
                         )}
                       </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -1215,7 +1237,7 @@ export function DistribuicaoPage() {
                     <td className="px-4 py-2.5 text-red-600 whitespace-nowrap">
                       {formatCurrency(repasses.reduce((s, rep) => s + Number(rep.valor), 0))}
                     </td>
-                    <td colSpan={2}></td>
+                    <td colSpan={temAcoesRepasse ? 2 : 1}></td>
                   </tr>
                 </tfoot>
               </table>
