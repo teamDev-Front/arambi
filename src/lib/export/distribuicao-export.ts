@@ -410,20 +410,27 @@ export async function exportDistribuicaoPdf(
     y = A4_LANDSCAPE.h - MARGIN.top;
 
     if (primeira) {
+      // Bloco da logotipo (ajuste 04-set-2026): o timbre é alto (traz
+      // "AGROPECUÁRIA ARAMBURU" embaixo do A) e, com o recuo fixo de 34pt que
+      // valia até aqui, ele encostava na linha "Filtros aplicados". Agora o
+      // recuo é a altura real do timbre mais um respiro de 30pt, e os textos
+      // ao lado (AramBI / Gestão Agro / título) ficam centralizados nele —
+      // modelo do print enviado pela Adri, padronizado no Financeiro e na DL.
+      const LOGO_W = 34;
+      const logoH = logo ? (logo.height / logo.width) * LOGO_W : 34;
+      const meio = y - logoH / 2;
       let textX = contentLeft;
       if (logo) {
-        const lw = 30;
-        const lh = (logo.height / logo.width) * lw;
-        page.drawImage(logo, { x: contentLeft, y: y - lh + 2, width: lw, height: lh });
-        textX = contentLeft + lw + 10;
+        page.drawImage(logo, { x: contentLeft, y: y - logoH, width: LOGO_W, height: logoH });
+        textX = contentLeft + LOGO_W + 12;
       }
-      page.drawText("AramBI", { x: textX, y: y - 12, size: 14, font: fontBold, color: C_INK });
-      page.drawText("Gestão Agro", { x: textX, y: y - 22, size: 8, font, color: C_MUTED });
+      page.drawText("AramBI", { x: textX, y: meio + 1, size: 14, font: fontBold, color: C_INK });
+      page.drawText("Gestão Agro", { x: textX, y: meio - 10, size: 8, font, color: C_MUTED });
       const titulo = safe(meta.titulo ?? "Distribuição de Lucro — Detalhado por Sócio");
       const tw = widthOf(fontBold, titulo, 11);
-      page.drawText(titulo, { x: contentRight - tw, y: y - 12, size: 11, font: fontBold, color: C_INK });
+      page.drawText(titulo, { x: contentRight - tw, y: meio - 4, size: 11, font: fontBold, color: C_INK });
       // RF 20-ago: o "Gerado em" saiu do cabeçalho — a emissão agora é o rodapé.
-      y -= 34;
+      y -= logoH + 30;
 
       // RF 20-ago: ficou só a linha de filtros (escopo e contagem saíram).
       const linhasMeta: string[] = [];

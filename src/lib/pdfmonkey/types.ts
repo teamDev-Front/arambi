@@ -14,6 +14,18 @@ export interface CapaEmpresaItem {
   pgto?: string;
 }
 
+/**
+ * Caixa colorida do resumo por banco — contrato NOVO dos templates do
+ * Humberley (DOCUMENTACAO_JSON.md, 04-set-2026): o template itera sobre
+ * `totais_bancos[]`; o `label` vira o nome da caixa E escolhe cor + logo por
+ * palavra-chave (cora, sicredi, bradesco, brasil, nubank, inter, xp, safra).
+ * `valor` já vem formatado "R$ X.XXX,XX".
+ */
+export interface BancoTotalBox {
+  label: string;
+  valor: string;
+}
+
 /** Total movimentado em um banco no mês. O template PDFMonkey itera sobre `bancos[]`. */
 export interface BancoTotal {
   /** Apelido exibível (ex.: "Cora", "Sicredi MJU") */
@@ -34,6 +46,10 @@ export interface CapaEmpresaPayload {
   numero_mes: string;            // "7º"   (lote manual 4.3 ou auto)
   realizado_em: string;
   preparado_por: string;
+  /** "01/04 a 30/04/2026" — linha abaixo do badge dourado (template agendamento.html, 04-set). */
+  periodo: string;
+  /** Caixas coloridas do resumo por banco (template novo, 04-set). */
+  totais_bancos: BancoTotalBox[];
   /** Lista dinâmica de bancos com totais do mês — substituiu o par fixo Cora/Sicredi. */
   bancos: BancoTotal[];
   // Subtotais por banco (4.6). Campos PLANOS reemitidos p/ compatibilidade com o
@@ -100,6 +116,8 @@ export interface CapaSocioPayload {
 
   contas_socio: CapaSocioContaItem[];
 
+  /** Caixas coloridas do resumo por banco (template novo, 04-set). */
+  totais_bancos: BancoTotalBox[];
   /** Lista dinâmica de bancos com totais do mês — substituiu o par fixo Cora/Sicredi. */
   bancos: BancoTotal[];
   total_geral: string;

@@ -2,6 +2,7 @@
 // Roda no client (browser) usando @supabase/ssr createBrowserClient.
 
 import { createClient } from "@/lib/supabase/client";
+import { emLotes } from "./lotes";
 import { compararCodigo } from "./configuracoes";
 import { semCamposDeOrigem } from "./preservar-origem";
 import type {
@@ -177,16 +178,79 @@ export async function listarTransacoesParaExport(
     .order("created_at", { ascending: true });
 
   if (opts.transacaoIds && opts.transacaoIds.length > 0) {
-    q = q.in("id", opts.transacaoIds);
-  } else {
-    q = aplicarFiltros(q, opts.filtros ?? {});
+    // Seleção manual em LOTES (04-set): "Selecionar todos os registros do
+    // filtro" pode juntar milhares de ids — numa URL só o gateway recusa.
+    const ids = opts.transacaoIds.slice(0, cap);
+    const partes = await emLotes(ids, async (lote) => {
+      const { data, error } = await supabase
+        .from("transacoes_empresa")
+        .select(TRANS_SELECT)
+        .in("id", lote);
+      if (error) throw error;
+      return (data ?? []) as TransacaoEmpresaRich[];
+    });
+    const rows = partes.flat().sort((a, b) =>
+      a.data < b.data ? -1 : a.data > b.data ? 1
+        : a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0);
+    return { rows, total: opts.transacaoIds.length, capped: opts.transacaoIds.length > ids.length };
   }
+  q = aplicarFiltros(q, opts.filtros ?? {});
   q = q.range(0, cap - 1);
 
   const { data, count, error } = await q;
   if (error) throw error;
   const rows = (data ?? []) as TransacaoEmpresaRich[];
   return { rows, total: count ?? rows.length, capped: (count ?? 0) > rows.length };
+}
+
+// ----------------------------------------------------------------------------
+// "Selecionar todos os registros do filtro" (04-set-2026) — só id + valor de
+// TODAS as páginas do recorte atual, na mesma ordem da listagem. É o que
+// alimenta a seleção (checkboxes) e a autossoma sem carregar as linhas ricas.
+// ----------------------------------------------------------------------------
+export interface IdsValoresResult {
+  itens: { id: string; valor: number }[];
+  total: number;
+  capped: boolean;
+}
+
+export async function listarIdsValoresPorFiltro(
+  filtros: ListarTransacoesFiltros,
+  cap = 5000,
+  sortDir: "asc" | "desc" = "asc",
+): Promise<IdsValoresResult> {
+  const supabase = createClient();
+  const asc = sortDir === "asc";
+  let q = supabase
+    .from("transacoes_empresa")
+    .select("id, valor", { count: "exact" })
+    .order("data", { ascending: asc })
+    .order("created_at", { ascending: asc });
+  q = aplicarFiltros(q, filtros);
+  q = q.range(0, cap - 1);
+  const { data, count, error } = await q;
+  if (error) throw error;
+  const itens = ((data ?? []) as { id: string; valor: number }[])
+    .map((r) => ({ id: r.id, valor: Number(r.valor) || 0 }));
+  return { itens, total: count ?? itens.length, capped: (count ?? 0) > itens.length };
+}
+
+/**
+ * Status atual de cada id — snapshot do "Desfazer" das ações em massa quando
+ * a seleção passa da página carregada (04-set). Em lotes.
+ */
+export async function obterStatusPorIds(ids: string[]): Promise<Array<{ id: string; status: string }>> {
+  if (ids.length === 0) return [];
+  const supabase = createClient();
+  const partes = await emLotes(ids, async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_empresa")
+      .select("id, status")
+      .in("id", lote);
+    if (error) throw error;
+    return (data ?? []) as Array<{ id: string; status: string }>;
+  });
+  return partes.flat();
 }
 
 // ----------------------------------------------------------------------------
@@ -217,17 +281,6 @@ export async function resumirEscopoTransacoes(
       { count: "exact" },
     );
 
-  if (scope.transacaoIds && scope.transacaoIds.length) {
-    q = q.in("id", scope.transacaoIds);
-  } else if (scope.filtros) {
-    // Mesmo recorte da listagem/exportação (inclui os filtros novos de 23-jul).
-    q = aplicarFiltros(q, scope.filtros);
-  }
-
-  q = q.range(0, RESUMO_CAP - 1);
-  const { data, count, error } = await q;
-  if (error) throw error;
-
   type Row = {
     id: string;
     valor: number;
@@ -236,7 +289,37 @@ export async function resumirEscopoTransacoes(
     centro_custo: { codigo: string; nome: string } | null;
     conta_bancaria: { id: string; nome: string; apelido: string | null } | null;
   };
-  const rows = (data ?? []) as unknown as Row[];
+  let rows: Row[];
+  let count: number | null;
+
+  if (scope.transacaoIds && scope.transacaoIds.length) {
+    // Em lotes (04-set): a seleção pode ser "todos os registros do filtro".
+    const ids = scope.transacaoIds.slice(0, RESUMO_CAP);
+    const partes = await emLotes(ids, async (lote) => {
+      const { data, error } = await supabase
+        .from("transacoes_empresa")
+        .select(
+          `id, valor, status, conta_bancaria_id,
+           centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
+           conta_bancaria:contas_bancarias_empresa(id, nome, apelido)`,
+        )
+        .in("id", lote);
+      if (error) throw error;
+      return (data ?? []) as unknown as Row[];
+    });
+    rows = partes.flat();
+    count = scope.transacaoIds.length;
+  } else {
+    if (scope.filtros) {
+      // Mesmo recorte da listagem/exportação (inclui os filtros novos de 23-jul).
+      q = aplicarFiltros(q, scope.filtros);
+    }
+    q = q.range(0, RESUMO_CAP - 1);
+    const res = await q;
+    if (res.error) throw res.error;
+    rows = (res.data ?? []) as unknown as Row[];
+    count = res.count;
+  }
 
   let soma = 0;
   const contas = new Map<string, string>();
@@ -605,13 +688,18 @@ export async function criarTransacoesEmpresaLote(payloads: TransacaoEmpresaInser
 export async function atualizarStatusEmMassa(ids: string[], status: StatusAramburu): Promise<number> {
   if (ids.length === 0) return 0;
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("transacoes_empresa")
-    .update({ status })
-    .in("id", ids)
-    .select("id");
-  if (error) throw error;
-  const n = data?.length ?? 0;
+  // Em lotes de 150 ids (04-set): a seleção pode ser "todos os registros do
+  // filtro". Cada lote continua sendo um UPDATE único (atômico dentro dele).
+  const partes = await emLotes(ids, async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_empresa")
+      .update({ status })
+      .in("id", lote)
+      .select("id");
+    if (error) throw error;
+    return data?.length ?? 0;
+  });
+  const n = partes.reduce((s, x) => s + x, 0);
   if (n === 0) throw new PermissionOrNotFoundError("atualizar status em massa");
   return n;
 }
@@ -624,13 +712,17 @@ export async function atualizarStatusEmMassa(ids: string[], status: StatusArambu
 export async function deletarTransacoesEmpresaEmMassa(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("transacoes_empresa")
-    .delete()
-    .in("id", ids)
-    .select("id");
-  if (error) throw error;
-  const n = data?.length ?? 0;
+  // Em lotes (04-set) — ver atualizarStatusEmMassa.
+  const partes = await emLotes(ids, async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_empresa")
+      .delete()
+      .in("id", lote)
+      .select("id");
+    if (error) throw error;
+    return data?.length ?? 0;
+  });
+  const n = partes.reduce((s, x) => s + x, 0);
   if (n === 0) throw new PermissionOrNotFoundError("excluir lançamentos em massa");
   return n;
 }

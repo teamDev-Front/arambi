@@ -11,6 +11,7 @@ import { ComboBox } from "@/components/ui/ComboBox";
 import { StatusSelect } from "@/components/ui/StatusSelect";
 import { BankLogo } from "@/components/ui/BankLogo";
 import { Pagination } from "@/components/ui/Pagination";
+import { SelectAllHeader } from "@/components/ui/SelectAllHeader";
 import { RelatorioEscopoModal } from "@/components/financeiro/RelatorioEscopoModal";
 import { CamposExportModal, type CamposExportEscolha } from "@/components/financeiro/CamposExportModal";
 import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
@@ -30,6 +31,8 @@ import { formatCurrency, formatDate } from "@/lib/utils/format";
 import {
   listarTransacoesEmpresa,
   listarTransacoesParaExport,
+  listarIdsValoresPorFiltro,
+  obterStatusPorIds,
   criarTransacaoEmpresa,
   criarTransacoesEmpresaLote,
   atualizarTransacaoEmpresa,
@@ -95,6 +98,11 @@ import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 
 const PAGE_SIZE = 25;
+/**
+ * Teto de "Selecionar todos os registros do filtro" (04-set-2026) — o mesmo
+ * da exportação. Acima disso a seleção fica com os primeiros N e a tela avisa.
+ */
+const SELECAO_FILTRO_CAP = 5000;
 
 /**
  * Opções dos filtros Tipo de Despesa e Forma de Pagamento (RF 31-jul).
@@ -778,6 +786,39 @@ export function FinanceiroPage() {
        mostrarSoTagueados, tags]);
   const competenciaSugerida = filterCompetencias[0] || filterDataDe?.slice(0, 7) || new Date().toISOString().slice(0, 7);
 
+  /**
+   * "Selecionar todos os registros do filtro" (04-set-2026): marca DE UMA VEZ
+   * tudo que o filtro devolve, em todas as páginas — sem passar página por
+   * página. Convive com o checkbox do cabeçalho, que segue selecionando só a
+   * página (as duas opções que a Adri pediu para manter). Busca no banco só
+   * id + valor, na mesma ordem e com o mesmo recorte da listagem.
+   */
+  const [selecionandoTudo, setSelecionandoTudo] = useState(false);
+  const selecionarTodosDoFiltro = useCallback(async () => {
+    setSelecionandoTudo(true);
+    try {
+      const { itens, total: totalFiltro, capped } = await listarIdsValoresPorFiltro(filtrosAtuais, SELECAO_FILTRO_CAP, sortDir);
+      setSelectedIds(new Set(itens.map((i) => i.id)));
+      setSelectedValores(new Map(itens.map((i) => [i.id, i.valor])));
+      if (capped) {
+        toast.warning(
+          "Seleção limitada",
+          `O filtro devolve ${totalFiltro.toLocaleString("pt-BR")} lançamentos; foram selecionados os primeiros ${itens.length.toLocaleString("pt-BR")}. Refine o filtro para selecionar o restante.`,
+        );
+      } else {
+        toast.info(
+          "Todos os registros do filtro selecionados",
+          `${itens.length.toLocaleString("pt-BR")} lançamento${itens.length === 1 ? "" : "s"} de todas as páginas — as ações em massa, a exportação e o relatório usam essa seleção.`,
+        );
+      }
+    } catch (e: unknown) {
+      toast.error("Não foi possível selecionar todos os registros", (e as Error).message ?? String(e));
+    } finally {
+      setSelecionandoTudo(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtrosAtuais, sortDir]);
+
   function abrirEscopo() {
     setEscopoTipo(selectedIds.size > 0 ? "por_selecao" : "por_filtros");
     setEscopoOpen(true);
@@ -1232,9 +1273,14 @@ export function FinanceiroPage() {
     const ids = Array.from(selectedIds);
     const status = bulkStatus as StatusAramburu;
     // Status de cada linha ANTES da aplicação — é o que o "Desfazer" restaura.
-    const anteriores = rows
+    // Desde 04-set a seleção pode cobrir todas as páginas do filtro, então o
+    // snapshot vem do banco; se a consulta falhar, fica o da página (parcial).
+    const anterioresPagina = rows
       .filter((r) => selectedIds.has(r.id))
       .map((r) => ({ id: r.id, status: r.status as string }));
+    const anteriores = anterioresPagina.length === ids.length
+      ? anterioresPagina
+      : await obterStatusPorIds(ids).catch(() => anterioresPagina);
     const concluir = async (n: number) => {
       const resumo = `${n} lançamento${n === 1 ? "" : "s"} atualizado${n === 1 ? "" : "s"} para "${getStatusLabel(status)}".`;
       if (anteriores.length > 0) {
@@ -1280,9 +1326,16 @@ export function FinanceiroPage() {
     const alvo = n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`;
     if (!confirm(`Excluir ${alvo}? Você ainda terá 8 segundos para desfazer.`)) return;
     // Snapshots antes de apagar — o "Desfazer" reinsere com os mesmos ids.
-    const snapshots = rows.filter((r) => selectedIds.has(r.id));
+    // Desde 04-set a seleção pode cobrir todas as páginas do filtro: o que não
+    // está na página vem do banco (se falhar, o desfazer fica parcial).
+    const snapshotsPagina = rows.filter((r) => selectedIds.has(r.id));
     setBulkDeleteBusy(true);
     try {
+      const snapshots = snapshotsPagina.length === n
+        ? snapshotsPagina
+        : await listarTransacoesParaExport({ transacaoIds: Array.from(selectedIds), cap: SELECAO_FILTRO_CAP })
+            .then((r) => r.rows)
+            .catch(() => snapshotsPagina);
       const excluidos = await deletarTransacoesEmpresaEmMassa(Array.from(selectedIds));
       if (excluidos < n) {
         toast.warning("Exclusão parcial", `${excluidos} de ${n} lançamentos excluídos — os demais podem estar protegidos (permissão).`);
@@ -1899,6 +1952,15 @@ export function FinanceiroPage() {
               title="Abre a lista completa dos lançamentos selecionados, inclusive os que estão fora do filtro/página atual">
               <ListChecks size={13} /> Ver selecionados ({selectedIds.size})
             </Button>
+            {/* "Selecionar todos os registros do filtro" (04-set) — também
+                pelo menu da setinha no cabeçalho da tabela. */}
+            {total > selectedIds.size && (
+              <Button size="sm" variant="ghost" onClick={selecionarTodosDoFiltro}
+                loading={selecionandoTudo} disabled={selecionandoTudo || bulkBusy || bulkDeleteBusy}
+                title="Seleciona de uma vez TODOS os lançamentos que o filtro devolve, em todas as páginas">
+                Selecionar todos os {total.toLocaleString("pt-BR")} do filtro
+              </Button>
+            )}
             {/* Autossoma estilo Excel (RF 24-jul) — soma com sinal dos selecionados */}
             <span
               className="ml-auto inline-flex items-center gap-1.5 font-semibold text-stone-700 tabular-nums bg-white border border-accent-200 rounded-lg px-2.5 py-1"
@@ -1919,13 +1981,19 @@ export function FinanceiroPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-100">
-                  <th className="px-3 py-3 w-10">
-                    <input
-                      type="checkbox"
-                      aria-label="Selecionar todos da página"
-                      checked={allPageSelected}
-                      onChange={togglePageSelection}
-                      className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
+                  {/* Checkbox = todos desta página (como sempre); a setinha
+                      abre "todos os registros do filtro" (04-set-2026). */}
+                  <th className="px-3 py-3 w-14">
+                    <SelectAllHeader
+                      paginaSelecionada={allPageSelected}
+                      onTogglePagina={togglePageSelection}
+                      qtdPagina={rows.length}
+                      qtdFiltro={total}
+                      qtdSelecionados={selectedIds.size}
+                      onSelecionarFiltro={selecionarTodosDoFiltro}
+                      onLimpar={limparSelecao}
+                      carregando={selecionandoTudo}
+                      disabled={loading}
                     />
                   </th>
                   {/* Taguear TODOS os lançamentos da tela de uma vez (17-ago:

@@ -9,10 +9,10 @@
 
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "@/types";
+import { FORMA_PGTO_LABEL, type Database, type FormaPgto } from "@/types";
 import { formatDataCurta } from "@/lib/pdf/helpers";
 import type {
-  CapaEmpresaPayload, CapaSocioPayload,
+  BancoTotalBox, CapaEmpresaPayload, CapaSocioPayload,
   RelatorioContabilPayload, RelatorioSociosPayload,
   ReportScope,
 } from "./types";
@@ -97,10 +97,39 @@ export function mesReferenciaToHuman(mesRef: string): { mes: string; numero_mes:
   };
 }
 
+/** "2026-04" → "Abril" — badge dourado das capas (a documentação nova usa Title Case). */
+export function mesReferenciaToNome(mesRef: string): string {
+  const idx = parseInt(mesRef.split("-")[1], 10) - 1;
+  return NOMES_MES[idx] ?? "?";
+}
+
 export function mesReferenciaToFraseSocio(mesRef: string): string {
   const [yy, mm] = mesRef.split("-");
   const idx = parseInt(mm, 10) - 1;
   return `${NOMES_MES[idx]?.toLowerCase() ?? "?"}-${yy}`;
+}
+
+/**
+ * Linha "periodo" do cabeçalho da capa (template agendamento.html, 04-set):
+ * "01/04 a 30/04/2026". Sem recorte de datas, é o mês inteiro; com filtro de
+ * vencimento (De/Até), é o intervalo filtrado — o que faltar cai na borda do mês.
+ * A documentação avisa: se `periodo` faltar, a linha sai em branco.
+ */
+export function periodoLabel(mesRef: string, de?: string, ate?: string): string {
+  const [yy, mm] = mesRef.split("-").map(Number);
+  const ultimoDia = new Date(yy, mm, 0).getDate();
+  const ini = de || `${mesRef}-01`;
+  const fim = ate || `${mesRef}-${String(ultimoDia).padStart(2, "0")}`;
+  const a = formatDataCurta(ini);
+  const b = formatDataCurta(fim);
+  // Mesmo ano: "01/04 a 30/04/2026"; anos diferentes: "20/12/2025 a 10/01/2026".
+  return a.slice(6) === b.slice(6) ? `${a.slice(0, 5)} a ${b}` : `${a} a ${b}`;
+}
+
+/** Forma de pagamento legível ("pix" → "Pix"); "sem" sai vazio. */
+function pgtoLabel(forma: string | null | undefined): string {
+  if (!forma || forma === "sem") return "";
+  return FORMA_PGTO_LABEL[forma as FormaPgto] ?? forma;
 }
 
 // ----------------------------------------------------------------------------
@@ -172,7 +201,7 @@ export async function buildCapaEmpresa(
   supabase: SupabaseClient<Database>,
   args: BuildCapaEmpresaArgs,
 ): Promise<CapaEmpresaPayload> {
-  const { mes, numero_mes } = mesReferenciaToHuman(args.mesReferencia);
+  const { numero_mes } = mesReferenciaToHuman(args.mesReferencia);
   const escopado = !!args.scope && args.scope.scope_type !== "por_mes";
 
   const perfilEmpresa = await lerPerfilEmpresa(supabase);
@@ -208,79 +237,6 @@ export async function buildCapaEmpresa(
   const bancoSlug = (banco: string | null, nome: string) =>
     (banco ?? nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
 
-  // ---- Lista de bancos ----
-  // bancos[]    → lista dinâmica (escalável: Cora/Sicredi/Inter/… ) p/ o template iterar.
-  // bancosNum[] → mesmos totais em número, para derivar os subtotais por banco (4.6).
-  let bancos: { nome: string; nome_completo: string; slug: string; total: string }[];
-  let bancosNum: { nome: string; slug: string; total: number }[];
-  let total_geral: number;
-
-  if (escopado) {
-    // RF-FIN-09 (D-3): a capa lista SOMENTE as contas com movimento no recorte.
-    const acc = new Map<string, { nome: string; nome_completo: string; banco: string | null; ordem: number; total: number }>();
-    for (const t of txs) {
-      if (!t.conta_bancaria_id || !t.conta_bancaria) continue;
-      const a = acc.get(t.conta_bancaria_id) ?? {
-        nome: t.conta_bancaria.apelido ?? t.conta_bancaria.nome,
-        nome_completo: t.conta_bancaria.nome,
-        banco: t.conta_bancaria.banco,
-        ordem: t.conta_bancaria.ordem ?? 999,
-        total: 0,
-      };
-      a.total += Number(t.valor);
-      acc.set(t.conta_bancaria_id, a);
-    }
-    const lista = Array.from(acc.values()).sort((x, y) => x.ordem - y.ordem);
-    bancos = lista.map((c) => ({
-      nome: c.nome,
-      nome_completo: c.nome_completo,
-      slug: bancoSlug(c.banco, c.nome),
-      total: brl(Math.abs(c.total)),
-    }));
-    bancosNum = lista.map((c) => ({ nome: c.nome, slug: bancoSlug(c.banco, c.nome), total: Math.abs(c.total) }));
-    total_geral = lista.reduce((s, c) => s + Math.abs(c.total), 0);
-  } else {
-    // Mês inteiro: comportamento histórico (todas as contas ativas via view).
-    const [porBancoRes, contasRes] = await Promise.all([
-      supabase.from("v_saldo_por_banco_mensal").select("*").eq("mes_referencia", args.mesReferencia),
-      supabase.from("contas_bancarias_empresa").select("id, nome, apelido, banco, ordem, ativa").eq("ativa", true).order("ordem", { ascending: true, nullsFirst: false }),
-    ]);
-    const contasCadastradas = contasRes.data ?? [];
-    const totalPorContaId = new Map<string, number>();
-    for (const r of porBancoRes.data ?? []) {
-      if (!r.conta_bancaria_id) continue;
-      const v = Math.abs(Number(r.variacao_no_mes ?? 0));
-      totalPorContaId.set(r.conta_bancaria_id, (totalPorContaId.get(r.conta_bancaria_id) ?? 0) + v);
-    }
-    bancos = contasCadastradas.map((c) => ({
-      nome: c.apelido ?? c.nome,
-      nome_completo: c.nome,
-      slug: bancoSlug(c.banco, c.nome),
-      total: brl(totalPorContaId.get(c.id) ?? 0),
-    }));
-    bancosNum = contasCadastradas.map((c) => ({
-      nome: c.apelido ?? c.nome,
-      slug: bancoSlug(c.banco, c.nome),
-      total: totalPorContaId.get(c.id) ?? 0,
-    }));
-    total_geral = Array.from(totalPorContaId.values()).reduce((a, b) => a + b, 0);
-  }
-
-  // ---- Subtotais por banco (4.6) ----
-  // O template CAPAS (JSON aprovado) referencia campos PLANOS total_cora/total_sicredi
-  // e banco_principal/banco_secundario. A migração p/ bancos[] dinâmico deixou esses
-  // campos vazios → os subtotais sumiram (só o total geral aparecia). Reemitimos os
-  // campos planos derivados de bancosNum E mantemos a lista dinâmica + um array genérico.
-  const somaSlug = (needle: string) =>
-    bancosNum.filter((b) => b.slug.includes(needle)).reduce((s, b) => s + b.total, 0);
-  const nomePorSlug = (needle: string, fb: string) =>
-    bancosNum.find((b) => b.slug.includes(needle))?.nome ?? fb;
-  const total_cora = brl(somaSlug("cora"));
-  const total_sicredi = brl(somaSlug("sicredi"));
-  const banco_principal = (nomePorSlug("cora", bancosNum[0]?.nome ?? "CORA")).toUpperCase();
-  const banco_secundario = (nomePorSlug("sicredi", bancosNum[1]?.nome ?? "SICREDI")).toUpperCase();
-  const subtotais_bancos = bancosNum.map((b) => ({ nome: b.nome, slug: b.slug, total: brl(b.total) }));
-
   // ---- Despesas por tipo (fixa/variavel/eventual) do recorte ----
   type ListItem = { vencimento: string; valor: string; descricao: string; banco: string; pgto: string };
   const buckets: Record<"fixa" | "variavel" | "eventual", { items: ListItem[]; total: number }> = {
@@ -289,11 +245,22 @@ export async function buildCapaEmpresa(
     eventual: { items: [], total: 0 },
   };
 
+  // Totais por banco a partir das MESMAS linhas que entram nas tabelas.
+  //
+  // Regra de ouro do template novo (DOCUMENTACAO_JSON.md, 04-set-2026): "o
+  // template não calcula nada" e total_geral = soma das tabelas = soma das
+  // caixas de banco. Até aqui os totais por banco vinham de outra fonte (a
+  // variação mensal da conta, com entradas e tudo) e não batiam com as tabelas,
+  // que só têm despesas fixas/variáveis/eventuais. Agora é uma fonte só.
+  const porBanco = new Map<string, { nome: string; nome_completo: string; banco: string | null; ordem: number; total: number }>();
+
   for (const t of txs) {
     const tipo = t.tipo_despesa;
     if (tipo !== "fixa" && tipo !== "variavel" && tipo !== "eventual") continue;
     const valor = Math.abs(Number(t.valor));
+    if (valor === 0) continue; // o template esconde linha zerada; nem mandamos
     buckets[tipo].total += valor;
+    const bancoNome = t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? "—";
     buckets[tipo].items.push({
       vencimento: formatDataCurta(t.data),
       valor: brl(valor),
@@ -305,21 +272,67 @@ export async function buildCapaEmpresa(
         descricao: t.descricao,
         categoria: t.centro_custo?.nome ?? null,
       }),
-      banco: t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? "—",
-      pgto: t.forma_pgto,
+      banco: bancoNome,
+      // "Pix", "Boleto", "Cartão de Crédito"… (era o código cru "pix"/"boleto").
+      pgto: pgtoLabel(t.forma_pgto),
     });
+    const k = t.conta_bancaria_id ?? bancoNome;
+    const a = porBanco.get(k) ?? {
+      nome: bancoNome,
+      nome_completo: t.conta_bancaria?.nome ?? bancoNome,
+      banco: t.conta_bancaria?.banco ?? null,
+      ordem: t.conta_bancaria?.ordem ?? 999,
+      total: 0,
+    };
+    a.total += valor;
+    porBanco.set(k, a);
   }
+
+  // ---- Lista de bancos ----
+  // totais_bancos[] → caixas coloridas do template novo ({ label, valor }); o
+  //                   label leva o apelido da conta ("CORA", "SICREDI INVEST",
+  //                   "B. Brasil"…), que contém a palavra-chave da cor/logo.
+  // bancos[] / subtotais_bancos[] / total_cora… → campos do template antigo,
+  //                   mantidos para o PDFMonkey poder trocar de template sem
+  //                   o sistema quebrar (extras são ignorados pelo template).
+  const lista = Array.from(porBanco.values()).sort((x, y) => x.ordem - y.ordem || y.total - x.total);
+  const bancos = lista.map((c) => ({
+    nome: c.nome,
+    nome_completo: c.nome_completo,
+    slug: bancoSlug(c.banco, c.nome),
+    total: brl(c.total),
+  }));
+  const bancosNum = lista.map((c) => ({ nome: c.nome, slug: bancoSlug(c.banco, c.nome), total: c.total }));
+  const totais_bancos: BancoTotalBox[] = lista.map((c) => ({ label: c.nome, valor: brl(c.total) }));
+  const total_geral = buckets.fixa.total + buckets.variavel.total + buckets.eventual.total;
+
+  // ---- Subtotais por banco (4.6 — template antigo) ----
+  const somaSlug = (needle: string) =>
+    bancosNum.filter((b) => b.slug.includes(needle)).reduce((s, b) => s + b.total, 0);
+  const nomePorSlug = (needle: string, fb: string) =>
+    bancosNum.find((b) => b.slug.includes(needle))?.nome ?? fb;
+  const total_cora = brl(somaSlug("cora"));
+  const total_sicredi = brl(somaSlug("sicredi"));
+  const banco_principal = (nomePorSlug("cora", bancosNum[0]?.nome ?? "CORA")).toUpperCase();
+  const banco_secundario = (nomePorSlug("sicredi", bancosNum[1]?.nome ?? "SICREDI")).toUpperCase();
+  const subtotais_bancos = bancosNum.map((b) => ({ nome: b.nome, slug: b.slug, total: brl(b.total) }));
+
+  // Período do cabeçalho: mês inteiro, ou o intervalo de vencimento do filtro.
+  const filtrosScope = escopado ? args.scope?.filtros : undefined;
+  const periodo = periodoLabel(args.mesReferencia, filtrosScope?.data_de, filtrosScope?.data_ate);
 
   return {
     empresa: perfilEmpresa.nome,
     cnpj: perfilEmpresa.cnpj,
     fazenda: "FAZENDA ARAMBURU",
     // 4.3: mês de referência do lote — manual (ex.: "Julho") sobrescreve o automático.
-    mes_referencia: args.mesReferenciaLabel?.trim() || mes.split(" ")[0],
+    mes_referencia: args.mesReferenciaLabel?.trim() || mesReferenciaToNome(args.mesReferencia),
     // 4.3: número do lote — manual (ex.: "7º") sobrescreve o automático.
     numero_mes: args.numeroLote?.trim() || numero_mes,
     realizado_em: formatDataCurta(new Date().toISOString().slice(0, 10)),
     preparado_por: args.preparadoPor ?? "Adriane Estefany",
+    periodo,
+    totais_bancos,
     bancos,
     // 4.6: subtotais por banco — planos (template atual) + array dinâmico (futuro).
     banco_principal,
@@ -352,7 +365,7 @@ export async function buildCapaSocio(
   supabase: SupabaseClient<Database>,
   args: BuildCapaSocioArgs,
 ): Promise<CapaSocioPayload> {
-  const { mes, numero_mes } = mesReferenciaToHuman(args.mesReferencia);
+  const { numero_mes } = mesReferenciaToHuman(args.mesReferencia);
 
   const { data: socio } = await supabase
     .from("socios").select("*").eq("id", args.socioId).maybeSingle();
@@ -368,9 +381,11 @@ export async function buildCapaSocio(
   let lancamentosQuery = supabase
     .from("transacoes_socio")
     .select(`
-      data, classificacao_pessoal, descricao, valor, conta_bancaria_socio_id,
+      data, data_vencimento, data_vencimento_despesa,
+      classificacao_pessoal, descricao, valor, conta_bancaria_socio_id,
       conta_bancaria_socio_nome,
-      conta_bancaria:contas_bancarias_socio(id, banco, nome)
+      conta_bancaria:contas_bancarias_socio(id, banco, nome),
+      classificacao:classificacao_pessoal(nome)
     `)
     .eq("socio_id", args.socioId)
     .eq("mes_referencia", args.mesReferencia);
@@ -381,21 +396,25 @@ export async function buildCapaSocio(
 
   type LancamentoSocio = {
     data: string;
+    data_vencimento: string | null;
+    data_vencimento_despesa: string | null;
     classificacao_pessoal: string;
     descricao: string;
     valor: number;
     conta_bancaria_socio_id: string | null;
     conta_bancaria_socio_nome: string | null;
     conta_bancaria: { id: string; banco: string | null; nome: string } | null;
+    classificacao: { nome: string } | null;
   };
 
-  type BucketKey = "imovel" | "familia" | "renda" | "pessoais" | "fazenda";
+  type BucketKey = "imovel" | "familia" | "renda" | "pessoais" | "fazenda" | "contratos";
   const buckets: Record<BucketKey, { items: { vencimento: string; valor: string; descricao: string; banco: string }[]; total: number }> = {
-    imovel:   { items: [], total: 0 },
-    familia:  { items: [], total: 0 },
-    renda:    { items: [], total: 0 },
-    pessoais: { items: [], total: 0 },
-    fazenda:  { items: [], total: 0 },
+    imovel:    { items: [], total: 0 },
+    familia:   { items: [], total: 0 },
+    renda:     { items: [], total: 0 },
+    pessoais:  { items: [], total: 0 },
+    fazenda:   { items: [], total: 0 },
+    contratos: { items: [], total: 0 },
   };
   const toBucket: Record<string, BucketKey> = {
     "1.01": "imovel",   "1.1 - Imóvel": "imovel",
@@ -403,43 +422,85 @@ export async function buildCapaSocio(
     "1.03": "renda",    "1.3 - Renda Mensal/Qualidade de Vida": "renda",
     "1.04": "pessoais", "1.4 - Despesas Pessoais": "pessoais",
     "1.05": "fazenda",  "1.5 - Fazenda Aramburu": "fazenda",
+    "1.06": "contratos",
+  };
+  // Código fora do mapa (cadastro novo em Configurações): decide pelo NOME da
+  // classificação, para o lançamento não sumir da capa em silêncio.
+  const bucketPorNome = (nome: string | null | undefined): BucketKey | null => {
+    const n = (nome ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (!n) return null;
+    if (n.includes("imovel")) return "imovel";
+    if (n.includes("familia")) return "familia";
+    if (n.includes("renda") || n.includes("qualidade")) return "renda";
+    if (n.includes("pessoa")) return "pessoais";
+    if (n.includes("fazenda") || n.includes("aramburu")) return "fazenda";
+    if (n.includes("contrato") || n.includes("venda")) return "contratos";
+    return null;
   };
 
-  // Agrupa por conta bancária do sócio (não por substring "cora/sicredi" no nome)
+  // A coluna VENCIMENTO da capa é o vencimento da despesa (ou, na falta, a
+  // data do repasse) — não o 1º dia da competência, que é o que `data` guarda.
+  // Datas-puras passam por formatDataCurta (o toLocaleDateString de antes
+  // interpretava "2026-04-01" como UTC e recuava um dia no Brasil).
+  const dataCapa = (l: LancamentoSocio) => l.data_vencimento_despesa ?? l.data_vencimento ?? l.data;
+  const ordenados = ((lancamentos ?? []) as unknown as LancamentoSocio[])
+    .slice()
+    .sort((a, b) => (dataCapa(a) < dataCapa(b) ? -1 : dataCapa(a) > dataCapa(b) ? 1 : 0));
+
+  // Totais por banco a partir das MESMAS linhas das tabelas (regra de ouro do
+  // template novo: total_geral = soma das seções = soma das caixas de banco).
+  // Agrupa pela conta do sócio; lançamento sem conta cadastrada (só o nome da
+  // planilha) agrupa pelo nome — antes ele entrava na tabela mas ficava fora
+  // do total, e os dois números não fechavam.
+  const porBanco = new Map<string, { label: string; total: number }>();
   const totalPorContaId = new Map<string, number>();
-  for (const l of (lancamentos ?? []) as unknown as LancamentoSocio[]) {
-    const k = toBucket[l.classificacao_pessoal];
+  for (const l of ordenados) {
+    const k = toBucket[l.classificacao_pessoal] ?? bucketPorNome(l.classificacao?.nome);
     if (!k) continue;
     const valor = Math.abs(Number(l.valor));
+    if (valor === 0) continue; // o template esconde linha zerada; nem mandamos
     buckets[k].total += valor;
-    const banco = l.conta_bancaria?.banco ?? l.conta_bancaria_socio_nome ?? "—";
+    // Nome da conta ("Bradesco 3489 C/C 3154-2") — contém a palavra-chave que o
+    // template usa para cor e logo; só o banco ("Bradesco") juntaria duas contas.
+    const label = l.conta_bancaria?.nome ?? l.conta_bancaria_socio_nome ?? "—";
     buckets[k].items.push({
-      vencimento: new Date(l.data).toLocaleDateString("pt-BR"),
+      vencimento: formatDataCurta(dataCapa(l)),
       valor: brl(valor),
       descricao: l.descricao,
-      banco,
+      banco: label,
     });
     const cid = l.conta_bancaria?.id ?? l.conta_bancaria_socio_id;
     if (cid) totalPorContaId.set(cid, (totalPorContaId.get(cid) ?? 0) + valor);
+    const pk = cid ?? `nome:${label}`;
+    const acc = porBanco.get(pk) ?? { label, total: 0 };
+    acc.total += valor;
+    porBanco.set(pk, acc);
   }
 
-  // Lista de bancos do sócio (todas as contas ativas, mesmo sem movimento).
-  // A tabela contas_bancarias_socio não tem campo `apelido`, usa-se o nome curto.
+  // Caixas coloridas do template novo — só bancos com movimento, ordenadas
+  // pela ordem das contas do sócio (as sem cadastro vão ao fim).
+  const ordemConta = new Map((contas ?? []).map((c, i) => [c.id, c.ordem ?? i]));
+  const totais_bancos: BancoTotalBox[] = Array.from(porBanco.entries())
+    .sort(([ka, a], [kb, b]) => (ordemConta.get(ka) ?? 999) - (ordemConta.get(kb) ?? 999) || b.total - a.total)
+    .map(([, b]) => ({ label: b.label, valor: brl(b.total) }));
+
+  // Lista de bancos do sócio (todas as contas ativas, mesmo sem movimento) —
+  // campos do template antigo, mantidos para a troca de template ser segura.
   const bancos = (contas ?? []).map((c) => ({
     nome:           c.banco ?? c.nome ?? "—",
     nome_completo:  c.nome,
     slug:           (c.banco ?? c.nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, ""),
     total:          brl(totalPorContaId.get(c.id) ?? 0),
   }));
-  const total_geral = Array.from(totalPorContaId.values()).reduce((a, b) => a + b, 0);
+  const total_geral = (Object.keys(buckets) as BucketKey[]).reduce((s, k) => s + buckets[k].total, 0);
 
   return {
     nome_socio: socio.nome_completo,
     cpf_socio: "—",
     fazenda: "FAZENDA ARAMBURU",
-    mes_referencia: mes.split(" ")[0],
+    mes_referencia: mesReferenciaToNome(args.mesReferencia),
     numero_mes,
-    realizado_em: new Date().toLocaleDateString("pt-BR"),
+    realizado_em: formatDataCurta(new Date().toISOString().slice(0, 10)),
     preparado_por: args.preparadoPor ?? "Adriane Estefany",
     periodo: mesReferenciaToFraseSocio(args.mesReferencia),
     imovel: buckets.imovel.items,
@@ -453,8 +514,8 @@ export async function buildCapaSocio(
     fazenda_aramburu: buckets.fazenda.items,
     total_fazenda_aramburu: brl(buckets.fazenda.total),
     obs_fazenda: "",
-    contratos_venda: [],
-    total_contratos_venda: brl(0),
+    contratos_venda: buckets.contratos.items,
+    total_contratos_venda: brl(buckets.contratos.total),
     contas_socio: (contas ?? []).map((c) => ({
       banco: c.banco ?? "—",
       agencia: c.agencia ?? "—",
@@ -463,6 +524,7 @@ export async function buildCapaSocio(
         : c.nome,
       tipo: c.tipo ?? "Corrente",
     })),
+    totais_bancos,
     bancos,
     total_geral: brl(total_geral),
   };

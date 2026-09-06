@@ -17,6 +17,7 @@
  */
 
 import { createClient } from "@/lib/supabase/client";
+import { emLotes } from "./lotes";
 
 /** Tabelas cobertas pelo desfazer. */
 export type TabelaDesfazivel =
@@ -76,8 +77,11 @@ function tabela(nome: TabelaDesfazivel) {
 /** Desfaz uma CRIAÇÃO: apaga os ids recém-criados. */
 export async function desfazerCriacao(nome: TabelaDesfazivel, ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  const { error } = await tabela(nome).delete().in("id", ids);
-  if (error) throw new Error(error.message);
+  // Em lotes: a seleção pode vir de "todos os registros do filtro" (04-set).
+  await emLotes(ids, async (lote) => {
+    const { error } = await tabela(nome).delete().in("id", lote);
+    if (error) throw new Error(error.message);
+  });
 }
 
 /**
@@ -97,9 +101,13 @@ export async function desfazerEdicao(nome: TabelaDesfazivel, snapshot: Snapshot)
 /** Desfaz uma EXCLUSÃO: reinsere as linhas apagadas preservando o id. */
 export async function desfazerExclusao(nome: TabelaDesfazivel, linhas: Snapshot[]): Promise<void> {
   if (linhas.length === 0) return;
-  const { error } = await tabela(nome)
-    .insert(linhas.map((l) => limpar(comoLinha(l), false)) as never);
-  if (error) throw new Error(error.message);
+  // O INSERT vai no corpo (não na URL), mas lotes de 150 evitam um payload
+  // gigante numa exclusão em massa de "todos os registros do filtro".
+  await emLotes(linhas, async (lote) => {
+    const { error } = await tabela(nome)
+      .insert(lote.map((l) => limpar(comoLinha(l), false)) as never);
+    if (error) throw new Error(error.message);
+  });
 }
 
 /**
@@ -118,7 +126,9 @@ export async function desfazerStatusEmMassa(
     porStatus.set(a.status, lista);
   }
   for (const [status, ids] of porStatus) {
-    const { error } = await tabela(nome).update({ status } as never).in("id", ids);
-    if (error) throw new Error(error.message);
+    await emLotes(ids, async (lote) => {
+      const { error } = await tabela(nome).update({ status } as never).in("id", lote);
+      if (error) throw new Error(error.message);
+    });
   }
 }

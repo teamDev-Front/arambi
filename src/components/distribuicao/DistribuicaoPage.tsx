@@ -19,11 +19,15 @@ import type { ReportScope } from "@/lib/pdfmonkey/types";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { StatusSelect } from "@/components/ui/StatusSelect";
 import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
+import { MultiSelect } from "@/components/ui/MultiSelect";
+import { Pagination } from "@/components/ui/Pagination";
+import { SelectAllHeader } from "@/components/ui/SelectAllHeader";
 import {
   listarDetalhado, criarDetalhado, atualizarDetalhado, deletarDetalhado,
-  atualizarDetalhadoEmMassa, deletarDetalhadoEmMassa, obterResumoMeses, obterGlobalEmpresaMes,
+  atualizarDetalhadoEmMassa, deletarDetalhadoEmMassa, obterResumoMensal, obterGlobalEmpresaMes,
   listarRepassesDoMes, consolidarRepasse, desfazerRepasse, concluirRepasse, religarSyncDl,
-  listarSocios, listarClassificacoesPessoais, listarContasDoSocio, listarMesesDetalhado,
+  listarSocios, listarClassificacoesPessoais, listarContasDoSocio, listarContasAtivasSocios,
+  listarMesesDetalhado,
   type TransacaoSocioRich, type GlobalEmpresaMes, type RepasseConsolidado,
 } from "@/lib/queries/distribuicao";
 import {
@@ -83,6 +87,15 @@ const mesCorrente = () => {
 /** "2026-08" → "08/2026" (rótulo da competência na tabela). */
 const mesHumano = (m: string) => (m?.length === 7 ? `${m.slice(5)}/${m.slice(0, 4)}` : m || "—");
 
+/** Linhas por página do detalhado (04-set-2026) — o mesmo limite do Financeiro. */
+const PAGE_SIZE = 25;
+
+/** "2026-09" → "30/09" (último dia do mês, para os rótulos dos cards). */
+const ultimoDiaCurto = (mes: string) => {
+  const [y, m] = mes.split("-").map(Number);
+  return formatDate(new Date(y, m, 0)).slice(0, 5);
+};
+
 /** Minúsculas e sem acento — "Cláudio" e "claudio" se encontram na busca. */
 const normalizarBusca = (s: string) =>
   s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
@@ -140,11 +153,22 @@ function carregarTagsDL(): Map<string, TagSnapshot> {
 export function DistribuicaoPage() {
   const toast = useToast();
 
-  // ---- competência (KPIs / consolidação / repasses do mês) ----
+  // ---- competência (tabela / consolidação) ----
   // Competência multi-seleção (17-ago). Lista vazia = TODAS as competências —
   // "colocar a opção TODAS, idem do FINANCEIRO".
-  const [mesesSel, setMesesSel] = useState<string[]>([mesCorrente()]);
+  //
+  // 04-set-2026: ao abrir, o filtro vem como "Todas" (era o mês vigente) —
+  // padronização com o Financeiro. Os CARDS deixaram de seguir este seletor:
+  // mostram sempre o mês vigente (ver mesVigente abaixo).
+  const [mesesSel, setMesesSel] = useState<string[]>([]);
   const [meses, setMeses] = useState<string[]>([]);
+  /**
+   * Mês vigente — competência fixa dos cards-botão (04-set: "independentemente
+   * da competência selecionada no filtro, os atalhos devem apresentar as
+   * informações referentes ao mês vigente", idem aos cards do Financeiro).
+   */
+  const mesVigente = mesCorrente();
+  const ateDia = ultimoDiaCurto(mesVigente);
   /**
    * A CONSOLIDAÇÃO é sempre de um mês só: ela gera um lançamento global com
    * uma competência. Com "Todas" (ou várias) marcadas, o botão fica desligado
@@ -153,10 +177,15 @@ export function DistribuicaoPage() {
   const mesFoco = mesesSel.length === 1 ? mesesSel[0] : null;
 
   // ---- filtros da listagem (RF 23-jul: períodos em vez de mês) ----
-  const [filterSocio, setFilterSocio] = useState("");
-  const [filterClassif, setFilterClassif] = useState("");
-  const [filterStatus, setFilterStatus] = useState<StatusDL | "">("");
+  // Sócios, Classificações e Status com caixa de seleção múltipla (04-set —
+  // "idem ao financeiro"); lista vazia = todos. Conta Destino é filtro novo.
+  const [filterSocios, setFilterSocios] = useState<string[]>([]);
+  const [filterClassifs, setFilterClassifs] = useState<string[]>([]);
+  const [filterStatus, setFilterStatus] = useState<StatusDL[]>([]);
+  const [filterContas, setFilterContas] = useState<string[]>([]);
   const [search, setSearch] = useState("");
+  // Paginação do detalhado (04-set) — mesmo limite por página do Financeiro.
+  const [page, setPage] = useState(1);
   const [filterRepasseDe, setFilterRepasseDe] = useState("");
   const [filterRepasseAte, setFilterRepasseAte] = useState("");
   const [filterVencDe, setFilterVencDe] = useState("");
@@ -227,7 +256,7 @@ export function DistribuicaoPage() {
 
   // Há algum filtro aplicado? (visibilidade do "Limpar todos os filtros")
   const temFiltrosAtivos = Boolean(
-    search || filterSocio || filterClassif || filterStatus ||
+    search || filterSocios.length || filterClassifs.length || filterStatus.length || filterContas.length ||
     filterRepasseDe || filterRepasseAte || filterVencDe || filterVencAte ||
     filterValorMin || filterValorMax || mostrarSoTagueados,
   );
@@ -235,9 +264,10 @@ export function DistribuicaoPage() {
   // "Limpar todos os filtros" (RF 24-jul) — não mexe na competência do header.
   function limparTodosFiltros() {
     setSearch("");
-    setFilterSocio("");
-    setFilterClassif("");
-    setFilterStatus("");
+    setFilterSocios([]);
+    setFilterClassifs([]);
+    setFilterStatus([]);
+    setFilterContas([]);
     setFilterRepasseDe("");
     setFilterRepasseAte("");
     setFilterVencDe("");
@@ -245,20 +275,40 @@ export function DistribuicaoPage() {
     setFilterValorMin("");
     setFilterValorMax("");
     setMostrarSoTagueados(false);
+    setPage(1);
   }
 
   // ---- dados ----
   const [rows, setRows] = useState<TransacaoSocioRich[]>([]);
+  // Resumo / global / repasses do MÊS VIGENTE — alimentam os cards (04-set).
   const [resumo, setResumo] = useState<DlMensalResumoRow | null>(null);
   const [globalMes, setGlobalMes] = useState<GlobalEmpresaMes | null>(null);
   const [repasses, setRepasses] = useState<RepasseConsolidado[]>([]);
+  /**
+   * Resumo / global da competência EM FOCO (a única marcada no filtro; sem
+   * foco, o mês vigente). É o que a consolidação e a conferência do
+   * provisionado global usam — elas são de UM mês, e não seguem os cards.
+   */
+  const [foco, setFoco] = useState<{ mes: string; resumo: DlMensalResumoRow | null; global: GlobalEmpresaMes | null }>({
+    mes: mesVigente, resumo: null, global: null,
+  });
+  /**
+   * Modal "Repasses consolidados": o card mostra o mês vigente; dentro do
+   * modal dá para trocar o mês (para dar baixa / desfazer um repasse antigo,
+   * já que o filtro Competência da tela não comanda mais os cards).
+   */
+  const [repassesMesSel, setRepassesMesSel] = useState<string>(mesVigente);
+  const [repassesOutroMes, setRepassesOutroMes] = useState<RepasseConsolidado[]>([]);
+  const [repassesOutroLoading, setRepassesOutroLoading] = useState(false);
+  const [repassesTick, setRepassesTick] = useState(0);
+  const repassesModal = repassesMesSel === mesVigente ? repasses : repassesOutroMes;
   /**
    * RF 20-ago: a coluna "Ações" do modal de repasses consolidados só aparece
    * quando há algo a fazer. Com tudo já repassado (o caso comum) ela ficava
    * como uma coluna vazia — foi isso que a Adri pediu para tirar. Os botões
    * "Dar baixa" / "Desfazer" continuam disponíveis quando há repasse pendente.
    */
-  const temAcoesRepasse = repasses.some((r) => r.status === "a_pagar" || r.status === "a_repassar");
+  const temAcoesRepasse = repassesModal.some((r) => r.status === "a_pagar" || r.status === "a_repassar");
   /**
    * Total de lançamentos DETALHADOS da competência (todos os status) — é o que
    * a tabela mostra quando se clica no card "Global na empresa (2.8.1)", que
@@ -275,6 +325,20 @@ export function DistribuicaoPage() {
   const [socios, setSocios] = useState<SocioRow[]>([]);
   const [classifs, setClassifs] = useState<ClassificacaoPessoalRow[]>([]);
   const [contasSocio, setContasSocio] = useState<ContaBancariaSocioRow[]>([]);
+  // Todas as contas ativas dos sócios — filtro "Conta Destino" (04-set).
+  const [contasTodas, setContasTodas] = useState<ContaBancariaSocioRow[]>([]);
+  /**
+   * Contas oferecidas no filtro Conta Destino: com sócio(s) marcado(s), só as
+   * contas deles; sem sócio, todas as contas ativas (regra do docx 04-set).
+   */
+  const contasFiltraveis = useMemo(
+    () => (filterSocios.length ? contasTodas.filter((c) => filterSocios.includes(c.socio_id)) : contasTodas),
+    [contasTodas, filterSocios],
+  );
+  const nomeSocio = useCallback((id: string) => {
+    const s = socios.find((x) => x.id === id);
+    return s?.apelido ?? s?.nome_completo ?? "";
+  }, [socios]);
 
   // ---- seleção / ações em massa ----
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -311,11 +375,26 @@ export function DistribuicaoPage() {
 
   // ---- lookups (uma vez) ----
   useEffect(() => {
-    Promise.all([listarSocios(), listarClassificacoesPessoais(), listarMesesDetalhado()])
-      .then(([s, c, m]) => { setSocios(s); setClassifs(c); setMeses(m); })
+    Promise.all([listarSocios(), listarClassificacoesPessoais(), listarMesesDetalhado(), listarContasAtivasSocios()])
+      .then(([s, c, m, ct]) => { setSocios(s); setClassifs(c); setMeses(m); setContasTodas(ct); })
       .catch((e: unknown) => toast.error("Erro carregando cadastros", (e as Error).message ?? String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Repasses de OUTRO mês no modal (04-set) — só quando o modal está aberto
+  // num mês diferente do vigente; o vigente já vem com os cards.
+  useEffect(() => {
+    if (!repassesOpen || repassesMesSel === mesVigente) return;
+    let cancelado = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- liga o spinner antes da consulta
+    setRepassesOutroLoading(true);
+    listarRepassesDoMes(repassesMesSel)
+      .then((r) => { if (!cancelado) setRepassesOutroMes(r); })
+      .catch((e: unknown) => { if (!cancelado) toast.error("Erro carregando repasses", (e as Error).message ?? String(e)); })
+      .finally(() => { if (!cancelado) setRepassesOutroLoading(false); });
+    return () => { cancelado = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repassesOpen, repassesMesSel, mesVigente, repassesTick]);
 
   // contas do sócio selecionado no formulário
   useEffect(() => {
@@ -334,14 +413,18 @@ export function DistribuicaoPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [r, res, glob, reps] = await Promise.all([
+      // Cards = mês vigente, sempre (04-set). Consolidação/conferência = mês
+      // em foco (a única competência marcada) — quando é o próprio vigente,
+      // reaproveita as consultas dos cards em vez de repetir.
+      const alvo = mesFoco ?? mesVigente;
+      const [r, resV, globV, repsV, resA, globA] = await Promise.all([
         listarDetalhado({
-          // A LISTAGEM segue a COMPETÊNCIA do header (ajuste 28-jul: um único
-          // seletor comanda KPIs, repasses, consolidação E a tabela).
+          // A LISTAGEM segue a COMPETÊNCIA do header (ajuste 28-jul).
           mesReferencia: mesesSel,
-          socioId: filterSocio || undefined,
-          classificacao: filterClassif || undefined,
-          status: filterStatus || undefined,
+          socioId: filterSocios,
+          classificacao: filterClassifs,
+          status: filterStatus,
+          contaSocioId: filterContas,
           // A busca é aplicada no CLIENT (19-ago): a arte pede "Buscar
           // descrição, sócio, conta…", e sócio/classificação/conta são joins —
           // o ilike do servidor só alcançava descrição/observação.
@@ -352,21 +435,24 @@ export function DistribuicaoPage() {
           valorMin: filterValorMin ? Math.abs(Number(filterValorMin)) || undefined : undefined,
           valorMax: filterValorMax ? Math.abs(Number(filterValorMax)) || undefined : undefined,
         }),
-        obterResumoMeses(mesesSel),
-        obterGlobalEmpresaMes(mesesSel),
-        listarRepassesDoMes(mesesSel),
+        obterResumoMensal(mesVigente),
+        obterGlobalEmpresaMes(mesVigente),
+        listarRepassesDoMes(mesVigente),
+        alvo === mesVigente ? Promise.resolve(null) : obterResumoMensal(alvo),
+        alvo === mesVigente ? Promise.resolve(null) : obterGlobalEmpresaMes(alvo),
       ]);
       setRows(r);
-      setResumo(res);
-      setGlobalMes(glob);
-      setRepasses(reps);
+      setResumo(resV);
+      setGlobalMes(globV);
+      setRepasses(repsV);
+      setFoco({ mes: alvo, resumo: alvo === mesVigente ? resV : resA, global: alvo === mesVigente ? globV : globA });
     } catch (e: unknown) {
       toast.error("Erro carregando distribuição", (e as Error).message ?? String(e));
     } finally {
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mesesSel, filterSocio, filterClassif, filterStatus,
+  }, [mesesSel, mesFoco, mesVigente, filterSocios, filterClassifs, filterStatus, filterContas,
       filterRepasseDe, filterRepasseAte, filterVencDe, filterVencAte,
       filterValorMin, filterValorMax]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -379,9 +465,11 @@ export function DistribuicaoPage() {
     () => rows.filter((r) => r.status === "a_pagar" && !r.repasse_id && r.mes_referencia === mesFoco),
     [rows, mesFoco],
   );
-  // Total consolidável do MÊS (independe dos filtros de sócio/classificação da tela)
-  const totalConsolidavel = resumo?.a_pagar_sem_repasse ?? 0;
-  const qtdConsolidavel = resumo?.qtd_a_pagar_sem_repasse ?? 0;
+  // Total consolidável do MÊS EM FOCO (independe dos filtros de sócio/
+  // classificação da tela). Sem competência única marcada não há o que
+  // consolidar — e o botão não deve exibir o valor do mês vigente por engano.
+  const totalConsolidavel = mesFoco ? (foco.resumo?.a_pagar_sem_repasse ?? 0) : 0;
+  const qtdConsolidavel = mesFoco ? (foco.resumo?.qtd_a_pagar_sem_repasse ?? 0) : 0;
 
   const porSocioConsolidavel = useMemo(() => {
     const m = new Map<string, { nome: string; total: number; qtd: number }>();
@@ -423,6 +511,19 @@ export function DistribuicaoPage() {
   );
 
   /**
+   * Paginação (04-set-2026): o detalhado deixou de vir numa página só. O
+   * recorte inteiro continua no client (rowsVisiveis — é ele que a exportação,
+   * o total do rodapé e "selecionar todos do filtro" usam); a tabela mostra
+   * PAGE_SIZE linhas por vez, com a numeração de páginas do Financeiro.
+   */
+  const totalPages = Math.max(1, Math.ceil(rowsVisiveis.length / PAGE_SIZE));
+  const pageAtual = Math.min(page, totalPages);
+  const rowsPagina = useMemo(
+    () => rowsVisiveis.slice((pageAtual - 1) * PAGE_SIZE, pageAtual * PAGE_SIZE),
+    [rowsVisiveis, pageAtual],
+  );
+
+  /**
    * 17-ago: "permitir SELECIONAR (individual e todos) e TAG DO DIA (individual
    * e todos), mesmo após consolidados e repassados".
    *
@@ -432,9 +533,10 @@ export function DistribuicaoPage() {
    * dizem quantos pularam (mudar valor ou status de um lançamento já repassado
    * não atualizaria o global, e a Distribuição sairia do lugar).
    */
-  const selecionaveis = rowsVisiveis;
-  const allSelected = selecionaveis.length > 0 && selecionaveis.every((r) => selectedIds.has(r.id));
-  const allTagged = rowsVisiveis.length > 0 && rowsVisiveis.every((r) => tags.has(r.id));
+  // O checkbox do cabeçalho seleciona a PÁGINA (como no Financeiro); "todos
+  // os registros do filtro" é a segunda opção, pela setinha ao lado (04-set).
+  const allPageSelected = rowsPagina.length > 0 && rowsPagina.every((r) => selectedIds.has(r.id));
+  const allPageTagged = rowsPagina.length > 0 && rowsPagina.every((r) => tags.has(r.id));
   /** Selecionados que podem ser ALTERADOS (fora os já consolidados). */
   const selecionadosEditaveis = useMemo(
     () => rows.filter((r) => selectedIds.has(r.id) && !r.repasse_id),
@@ -469,12 +571,14 @@ export function DistribuicaoPage() {
     return null;
   }, [mesFoco, qtdConsolidavel]);
 
+  // Conferência do provisionado global × detalhado — do MÊS EM FOCO (a
+  // competência única marcada; sem ela, o mês vigente).
   const divergenciaProvisionado = useMemo(() => {
-    if (!resumo || !globalMes) return null;
-    if (!globalMes.temProvisionadoManual) return null;
-    const diff = Math.abs(globalMes.provisionadoGlobal - resumo.provisionado);
+    if (!foco.resumo || !foco.global) return null;
+    if (!foco.global.temProvisionadoManual) return null;
+    const diff = Math.abs(foco.global.provisionadoGlobal - foco.resumo.provisionado);
     return diff > 0.005 ? diff : null;
-  }, [resumo, globalMes]);
+  }, [foco]);
 
   // Religar a sincronização automática do Provisionado DL (migration 0052).
   // A etiqueta `dl_auto:` que amarra o SOMASE não é campo de formulário — sem
@@ -482,17 +586,11 @@ export function DistribuicaoPage() {
   // intervenção no banco.
   const [religando, setReligando] = useState(false);
   async function handleReligarSync() {
-    // A religação é de UM mês (a etiqueta dl_auto: é por competência).
-    if (!mesFoco) {
-      toast.warning(
-        "Escolha uma competência",
-        "Religar a sincronização vale para um mês de cada vez — deixe só uma competência marcada no filtro acima.",
-      );
-      return;
-    }
+    // A religação é de UM mês (a etiqueta dl_auto: é por competência) — o mês
+    // em foco, que é o mesmo da conferência que mostrou a divergência.
     setReligando(true);
     try {
-      const r = await religarSyncDl(mesFoco);
+      const r = await religarSyncDl(foco.mes);
       await fetchData();
       if (r.sincronizado) {
         toast.success(
@@ -513,22 +611,37 @@ export function DistribuicaoPage() {
   }
 
   // ---- seleção ----
-  const toggleAll = () => {
+  /** Selecionar/desmarcar todos DESTA PÁGINA (a "1ª caixinha" de sempre). */
+  const togglePageSelection = () => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (selecionaveis.every((r) => next.has(r.id))) selecionaveis.forEach((r) => next.delete(r.id));
-      else selecionaveis.forEach((r) => next.add(r.id));
+      if (rowsPagina.every((r) => next.has(r.id))) rowsPagina.forEach((r) => next.delete(r.id));
+      else rowsPagina.forEach((r) => next.add(r.id));
       return next;
     });
   };
 
-  /** Taguear/destaguear tudo que está na tela de uma vez (17-ago). */
-  const toggleAllTags = () => {
+  /**
+   * Selecionar TODOS os registros do filtro (04-set) — todas as páginas de
+   * uma vez. Na DL o recorte já está inteiro no client, então não há
+   * consulta: é só marcar rowsVisiveis.
+   */
+  const selecionarTodosDoFiltro = () => {
     if (rowsVisiveis.length === 0) return;
-    const todos = rowsVisiveis.every((r) => tags.has(r.id));
+    setSelectedIds(new Set(rowsVisiveis.map((r) => r.id)));
+    toast.info(
+      "Todos os registros do filtro selecionados",
+      `${rowsVisiveis.length} lançamento${rowsVisiveis.length === 1 ? "" : "s"} de todas as páginas — as ações em massa e a exportação usam essa seleção.`,
+    );
+  };
+
+  /** Taguear/destaguear tudo que está NA PÁGINA de uma vez (17-ago; página desde 04-set). */
+  const toggleAllTags = () => {
+    if (rowsPagina.length === 0) return;
+    const todos = rowsPagina.every((r) => tags.has(r.id));
     setTags((prev) => {
       const next = new Map(prev);
-      for (const r of rowsVisiveis) {
+      for (const r of rowsPagina) {
         if (todos) next.delete(r.id);
         else next.set(r.id, {
           id: r.id,
@@ -644,12 +757,12 @@ export function DistribuicaoPage() {
     const f: string[] = [];
     f.push(`Competência: ${mesesSel.length ? mesesSel.join(", ") : "todas"}`);
     if (search) f.push(`Busca: "${search}"`);
-    if (filterSocio) {
-      const s = socios.find((x) => x.id === filterSocio);
-      f.push(`Sócio: ${s?.apelido ?? s?.nome_completo ?? filterSocio}`);
+    if (filterSocios.length) f.push(`Sócio: ${filterSocios.map((id) => nomeSocio(id) || id).join(", ")}`);
+    if (filterClassifs.length) f.push(`Classificação: ${filterClassifs.join(", ")}`);
+    if (filterStatus.length) f.push(`Status: ${filterStatus.map((s) => STATUS_DL_LABEL[s]).join(", ")}`);
+    if (filterContas.length) {
+      f.push(`Conta destino: ${filterContas.map((id) => contasTodas.find((c) => c.id === id)?.nome ?? id).join(", ")}`);
     }
-    if (filterClassif) f.push(`Classificação: ${filterClassif}`);
-    if (filterStatus) f.push(`Status: ${STATUS_DL_LABEL[filterStatus]}`);
     if (filterRepasseDe || filterRepasseAte) {
       f.push(`Repasse: ${filterRepasseDe ? formatDate(filterRepasseDe) : "…"} a ${filterRepasseAte ? formatDate(filterRepasseAte) : "…"}`);
     }
@@ -707,7 +820,11 @@ export function DistribuicaoPage() {
    */
   function aplicarFiltroCard(status: StatusDL | "") {
     limparTodosFiltros();
-    setFilterStatus(status);
+    // Os cards são do mês vigente (04-set): a tabela abre nessa competência
+    // para o número do card bater com o que ela mostra (RF 20-ago).
+    setMesesSel([mesVigente]);
+    setFilterStatus(status ? [status] : []);
+    setPage(1);
   }
 
   // ---- capa do repasse do sócio (PDFMonkey — ajuste 29-jul) ----
@@ -718,7 +835,7 @@ export function DistribuicaoPage() {
       toast.warning("Nenhum sócio cadastrado", "Cadastre os sócios para gerar a capa do repasse.");
       return;
     }
-    setCapaSocioId(filterSocio || socios[0]?.id || "");
+    setCapaSocioId((filterSocios.length === 1 ? filterSocios[0] : "") || socios[0]?.id || "");
     setCapaSoTagueados(tags.size > 0);
     setCapaOpen(true);
   }
@@ -795,8 +912,8 @@ export function DistribuicaoPage() {
   function openNew() {
     setEditRow(null);
     setForm({
-      socio_id: filterSocio || "",
-      classificacao_pessoal: filterClassif || "",
+      socio_id: filterSocios.length === 1 ? filterSocios[0] : "",
+      classificacao_pessoal: filterClassifs.length === 1 ? filterClassifs[0] : "",
       descricao: "",
       conta_bancaria_socio_id: "",
       competencia: mesFoco ?? mesCorrente(),
@@ -938,6 +1055,7 @@ export function DistribuicaoPage() {
       await desfazerRepasse(rep.id);
       toast.success("Repasse desfeito");
       await fetchData();
+      setRepassesTick((t) => t + 1);
     } catch (e: unknown) {
       toast.error("Não foi possível desfazer", (e as Error).message ?? String(e));
     }
@@ -949,6 +1067,7 @@ export function DistribuicaoPage() {
       await concluirRepasse(rep.id);
       toast.success("Baixa registrada", "Repasse concluído — saldos do Cora e do Inter atualizados.");
       await fetchData();
+      setRepassesTick((t) => t + 1);
     } catch (e: unknown) {
       toast.error("Não foi possível concluir", (e as Error).message ?? String(e));
     }
@@ -967,13 +1086,13 @@ export function DistribuicaoPage() {
         <div className="flex items-center gap-2 flex-wrap">
           {/* Competência multi-seleção com "Todas" (17-ago) — idem ao Financeiro */}
           <label className="flex items-center gap-1.5 text-xs text-stone-500"
-            title="Competência da tela toda: KPIs, repasses consolidados e a tabela detalhada seguem o que estiver marcado aqui. Nenhuma marcada = todas as competências. A consolidação exige UMA competência só.">
+            title="Competência da tabela detalhada e da consolidação. Nenhuma marcada = todas as competências (padrão ao abrir, idem ao Financeiro). Os cards-botão mostram sempre o mês vigente, independentemente do que estiver marcado aqui. A consolidação exige UMA competência só.">
             Competência
             <CompetenciaMultiSelect
               className="w-40"
               options={meses}
               value={mesesSel}
-              onChange={setMesesSel}
+              onChange={(v) => { setMesesSel(v); setPage(1); }}
             />
           </label>
           {/* RF 20-ago: um único botão "Exportar". Os campos e o formato
@@ -1028,7 +1147,11 @@ export function DistribuicaoPage() {
       {/* KPIs do mês (19-ago) — ordem, cores e escrita da arte nova, todos
           funcionando como BOTÕES no padrão do Financeiro: os quatro primeiros
           filtram a tabela pelo status do card; o quinto abre os Repasses
-          consolidados do mês (idem card Despesa Variável do Financeiro). */}
+          consolidados do mês (idem card Despesa Variável do Financeiro).
+          04-set-2026: os cards mostram SEMPRE o mês vigente (não seguem mais o
+          filtro Competência) e os rótulos dizem o mês de referência — como os
+          cards "até 30/09" do Financeiro. "Global na empresa (2.8.1)" ficou
+          exatamente como estava (nome e filtro). */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
         {([
           {
@@ -1046,12 +1169,12 @@ export function DistribuicaoPage() {
             iconClass: "bg-blue-50 text-blue-600",
             labelClass: "text-blue-700",
             valorClass: "text-blue-700",
-            help: "Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa neste mês — provisionado + a repassar + repassado. Deve bater com o detalhado; a contagem é a dos lançamentos detalhados do mês. Clique para ver a tabela com todos os status.",
+            help: `Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa na competência ${mesHumano(mesVigente)} — provisionado + a repassar + repassado, independentemente do filtro Competência. Deve bater com o detalhado; a contagem é a dos lançamentos detalhados do mês. Clique para ver a tabela com todos os status.`,
             filtro: "" as StatusDL | "",
           },
           {
             key: "arep",
-            label: "A repassar (pronto p/ repasse)",
+            label: `A repassar até ${ateDia}`,
             qtd: resumo?.qtd_a_pagar ?? 0,
             unidade: "repasse",
             valor: resumo?.a_pagar ?? 0,
@@ -1059,12 +1182,12 @@ export function DistribuicaoPage() {
             iconClass: "bg-red-50 text-red-600",
             labelClass: "text-red-700",
             valorClass: "text-red-600",
-            help: "Soma do detalhado marcado como A repassar. A parte ainda não consolidada aparece no botão Consolidar. Clique para filtrar a tabela.",
+            help: `Soma do detalhado da competência ${mesHumano(mesVigente)} marcado como A repassar (independentemente do filtro Competência). A parte ainda não consolidada aparece no botão Consolidar. Clique para filtrar a tabela.`,
             filtro: "a_pagar" as StatusDL | "",
           },
           {
             key: "prov",
-            label: "Provisionado (mês)",
+            label: `Provisionado até ${ateDia}`,
             qtd: resumo?.qtd_provisionado ?? 0,
             unidade: "repasse",
             valor: resumo?.provisionado ?? 0,
@@ -1072,12 +1195,12 @@ export function DistribuicaoPage() {
             iconClass: "bg-amber-50 text-amber-600",
             labelClass: "text-amber-700",
             valorClass: "text-amber-600",
-            help: "Soma do detalhado com status Provisionado neste mês. É o que ainda falta conferir/marcar. Clique para filtrar a tabela.",
+            help: `Soma do detalhado da competência ${mesHumano(mesVigente)} com status Provisionado (independentemente do filtro Competência). É o que ainda falta conferir/marcar. Clique para filtrar a tabela.`,
             filtro: "provisionado" as StatusDL | "",
           },
           {
             key: "rep",
-            label: "Repasse realizado individual (mês)",
+            label: `Repasse realizado individual – ${mesHumano(mesVigente)}`,
             qtd: resumo?.qtd_realizado ?? 0,
             unidade: "lançamento",
             valor: resumo?.realizado ?? 0,
@@ -1085,7 +1208,7 @@ export function DistribuicaoPage() {
             iconClass: "bg-emerald-50 text-emerald-600",
             labelClass: "text-emerald-700",
             valorClass: "text-emerald-700",
-            help: "Detalhado já baixado (repassado às contas pessoais dos sócios). Clique para filtrar a tabela.",
+            help: `Detalhado da competência ${mesHumano(mesVigente)} já baixado (repassado às contas pessoais dos sócios), independentemente do filtro Competência. Clique para filtrar a tabela.`,
             filtro: "realizado" as StatusDL | "",
           },
         ]).map((c) => (
@@ -1118,8 +1241,8 @@ export function DistribuicaoPage() {
             visualização detalhada que antes ficava fixada na tela. */}
         <button
           type="button"
-          onClick={() => setRepassesOpen(true)}
-          title="Repasses globais consolidados do mês (lançados no Financeiro pela consolidação). Clique para ver o detalhe — com Dar baixa e Desfazer."
+          onClick={() => { setRepassesMesSel(mesVigente); setRepassesOpen(true); }}
+          title={`Repasses globais consolidados da competência ${mesHumano(mesVigente)} (lançados no Financeiro pela consolidação), independentemente do filtro Competência. Clique para ver o detalhe — com Dar baixa e Desfazer; dentro do modal dá para trocar o mês.`}
           className="rounded-xl border border-stone-200 bg-white shadow-sm px-3.5 py-2.5 flex items-center gap-3 text-left transition-colors hover:border-stone-300 hover:bg-stone-50 cursor-pointer"
         >
           <span className="h-8 w-8 shrink-0 rounded-full flex items-center justify-center bg-teal-50 text-teal-600">
@@ -1127,7 +1250,7 @@ export function DistribuicaoPage() {
           </span>
           <span className="leading-tight min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-wide truncate text-teal-700">
-              Repasse realizado consolidado (mês)
+              Repasse realizado consolidado – {mesHumano(mesVigente)}
             </p>
             <p className="text-sm font-bold tabular-nums whitespace-nowrap text-stone-800">
               {repasses.length}{" "}
@@ -1148,19 +1271,17 @@ export function DistribuicaoPage() {
           <AlertTriangle size={14} className="mt-0.5 shrink-0" />
           <div className="space-y-2">
             <span className="block">
-              O provisionado global no Financeiro ({formatCurrency(globalMes?.provisionadoGlobal ?? 0)}) difere
-              da soma do detalhado ({formatCurrency(resumo?.provisionado ?? 0)}) em {formatCurrency(divergenciaProvisionado)}.
+              Competência <b>{mesHumano(foco.mes)}</b>: o provisionado global no Financeiro ({formatCurrency(foco.global?.provisionadoGlobal ?? 0)}) difere
+              da soma do detalhado ({formatCurrency(foco.resumo?.provisionado ?? 0)}) em {formatCurrency(divergenciaProvisionado)}.
               A linha global deste mês está fora do controle automático, então ela não acompanha mais as mudanças do
               detalhado — nem quando você consolida um repasse. Clique em <b>Religar sincronização</b> para o sistema
               voltar a mantê-la; se preferir, ajuste ou exclua a linha no{" "}
               <Link href="/dashboard/financeiro" className="underline font-medium">Financeiro</Link>.
             </span>
             <Button size="sm" variant="outline" onClick={handleReligarSync}
-              loading={religando} disabled={religando || !mesFoco}
-              title={mesFoco
-                ? "Passa a linha provisionada do centro 2.8.1 deste mês para o controle automático e recalcula o global pela soma do detalhado"
-                : "Religar vale para um mês de cada vez — deixe só uma competência marcada no filtro acima"}>
-              <RefreshCw size={13} /> Religar sincronização
+              loading={religando} disabled={religando}
+              title={`Passa a linha provisionada do centro 2.8.1 de ${mesHumano(foco.mes)} para o controle automático e recalcula o global pela soma do detalhado`}>
+              <RefreshCw size={13} /> Religar sincronização ({mesHumano(foco.mes)})
             </Button>
           </div>
         </div>
@@ -1175,9 +1296,22 @@ export function DistribuicaoPage() {
           <span className="h-9 w-9 shrink-0 rounded-full flex items-center justify-center bg-teal-50 text-teal-600">
             <HandCoins size={17} />
           </span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-stone-800">
-              Competência {mesesSel.length ? mesesSel.map(mesHumano).join(", ") : "todas"}
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-stone-800 flex items-center gap-2 flex-wrap">
+              Competência
+              {/* O card é do mês vigente; aqui dá para ver outro mês (04-set). */}
+              <select
+                value={repassesMesSel}
+                onChange={(e) => setRepassesMesSel(e.target.value)}
+                className="h-7 rounded-lg border border-stone-200 px-2 text-xs font-medium bg-white"
+                title="Mês dos repasses consolidados exibidos abaixo"
+                aria-label="Competência dos repasses consolidados"
+              >
+                {(meses.includes(repassesMesSel) ? meses : [...meses, repassesMesSel]).slice().reverse().map((m) => (
+                  <option key={m} value={m}>{mesHumano(m)}</option>
+                ))}
+              </select>
+              {repassesOutroLoading && <Loader2 size={13} className="animate-spin text-stone-400" />}
             </p>
             <p className="text-xs text-stone-500">
               Lançamentos globais criados no Financeiro pela consolidação do detalhado ({"“Consolidar repasse”"}).
@@ -1185,10 +1319,12 @@ export function DistribuicaoPage() {
           </div>
         </div>
         <div className="p-4">
-          {repasses.length === 0 ? (
+          {repassesModal.length === 0 ? (
             <p className="px-2 py-8 text-center text-sm text-stone-400">
-              Nenhum repasse consolidado no recorte. Marque o detalhado como {"“A repassar”"} e use
-              {" “Consolidar repasse”"} para criar o global no Financeiro.
+              {repassesOutroLoading
+                ? "Carregando…"
+                : <>Nenhum repasse consolidado em {mesHumano(repassesMesSel)}. Marque o detalhado como {"“A repassar”"} e use
+                  {" “Consolidar repasse”"} para criar o global no Financeiro.</>}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -1201,7 +1337,7 @@ export function DistribuicaoPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {repasses.map((rep) => (
+                  {repassesModal.map((rep) => (
                     <tr key={rep.id} className="border-b border-stone-50">
                       <td className="px-4 py-2.5 text-xs text-stone-500 whitespace-nowrap">{formatDate(rep.data)}</td>
                       <td className="px-4 py-2.5 text-stone-700">{rep.descricao}</td>
@@ -1235,7 +1371,7 @@ export function DistribuicaoPage() {
                   <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700 text-xs">
                     <td colSpan={3} className="px-4 py-2.5 uppercase tracking-wide">Total</td>
                     <td className="px-4 py-2.5 text-red-600 whitespace-nowrap">
-                      {formatCurrency(repasses.reduce((s, rep) => s + Number(rep.valor), 0))}
+                      {formatCurrency(repassesModal.reduce((s, rep) => s + Number(rep.valor), 0))}
                     </td>
                     <td colSpan={temAcoesRepasse ? 2 : 1}></td>
                   </tr>
@@ -1255,41 +1391,80 @@ export function DistribuicaoPage() {
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
               <input
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 placeholder="Buscar descrição, sócio, conta…"
                 className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-56 focus:outline-none focus:ring-1 focus:ring-accent-400"
               />
             </div>
-            <select value={filterSocio} onChange={(e) => setFilterSocio(e.target.value)}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs">
-              <option value="">Todos os sócios</option>
-              {socios.map((s) => <option key={s.id} value={s.id}>{s.apelido ?? s.nome_completo}</option>)}
-            </select>
-            <select value={filterClassif} onChange={(e) => setFilterClassif(e.target.value)}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs">
-              <option value="">Todas as classificações</option>
-              {classifs.map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>)}
-            </select>
-            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as StatusDL | "")}
-              className="h-8 rounded-lg border border-stone-200 px-2 text-xs">
-              <option value="">Todos os status</option>
-              {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
-                <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
-            </select>
+            {/* Sócios / Classificações / Status com caixa de seleção múltipla
+                (04-set — "idem ao financeiro"). */}
+            <MultiSelect
+              className="w-40"
+              value={filterSocios}
+              onChange={(v) => {
+                setFilterSocios(v);
+                // Dependência Sócio ↔ Conta Destino (04-set): descarta contas
+                // que não pertencem mais aos sócios selecionados.
+                if (v.length) {
+                  const validas = new Set(contasTodas.filter((c) => v.includes(c.socio_id)).map((c) => c.id));
+                  setFilterContas((prev) => prev.filter((id) => validas.has(id)));
+                }
+                setPage(1);
+              }}
+              options={socios.map((s) => ({ value: s.id, label: s.apelido ?? s.nome_completo }))}
+              placeholder="Todos os sócios"
+              searchPlaceholder="Buscar sócio…"
+              emptyText="Nenhum sócio"
+              unitLabel="sócios"
+            />
+            <MultiSelect
+              className="w-48"
+              value={filterClassifs}
+              onChange={(v) => { setFilterClassifs(v); setPage(1); }}
+              options={classifs.map((c) => ({ value: c.codigo, label: `${c.codigo} – ${c.nome}` }))}
+              placeholder="Todas as classificações"
+              searchPlaceholder="Buscar classificação…"
+              emptyText="Nenhuma classificação"
+              unitLabel="classificações"
+            />
+            <MultiSelect
+              className="w-36"
+              value={filterStatus}
+              onChange={(v) => { setFilterStatus(v as StatusDL[]); setPage(1); }}
+              options={(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) => ({ value: s, label: STATUS_DL_LABEL[s] }))}
+              placeholder="Todos os status"
+              searchPlaceholder="Buscar status…"
+              unitLabel="status"
+            />
+            {/* Conta Destino (04-set): com sócio marcado, só as contas dele;
+                sem sócio, todas as contas ativas. */}
+            <MultiSelect
+              className="w-44"
+              value={filterContas}
+              onChange={(v) => { setFilterContas(v); setPage(1); }}
+              options={contasFiltraveis.map((c) => ({
+                value: c.id,
+                label: filterSocios.length === 1 ? c.nome : `${c.nome} · ${nomeSocio(c.socio_id)}`,
+              }))}
+              placeholder="Todas as contas"
+              searchPlaceholder="Buscar conta destino…"
+              emptyText="Nenhuma conta ativa"
+              unitLabel="contas"
+            />
             {/* Período pela DATA DO REPASSE (RF 23-jul — substitui a pesquisa por mês) */}
             <div className="flex items-center gap-1" title="Período pela Data do Repasse.">
               <span className="text-[10px] uppercase text-stone-400 font-medium">Repasse</span>
               <input type="date" value={filterRepasseDe} max={filterRepasseAte || undefined}
                 aria-label="Data do repasse de"
-                onChange={(e) => setFilterRepasseDe(e.target.value)}
+                onChange={(e) => { setFilterRepasseDe(e.target.value); setPage(1); }}
                 className="h-8 rounded-lg border border-stone-200 px-2 text-xs" />
               <span className="text-stone-400 text-xs">até</span>
               <input type="date" value={filterRepasseAte} min={filterRepasseDe || undefined}
                 aria-label="Data do repasse até"
-                onChange={(e) => setFilterRepasseAte(e.target.value)}
+                onChange={(e) => { setFilterRepasseAte(e.target.value); setPage(1); }}
                 className="h-8 rounded-lg border border-stone-200 px-2 text-xs" />
               {(filterRepasseDe || filterRepasseAte) && (
-                <button type="button" onClick={() => { setFilterRepasseDe(""); setFilterRepasseAte(""); }}
+                <button type="button" onClick={() => { setFilterRepasseDe(""); setFilterRepasseAte(""); setPage(1); }}
                   className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
                   title="Limpar período de repasse" aria-label="Limpar período de repasse">×</button>
               )}
@@ -1299,15 +1474,15 @@ export function DistribuicaoPage() {
               <span className="text-[10px] uppercase text-stone-400 font-medium">Venc.</span>
               <input type="date" value={filterVencDe} max={filterVencAte || undefined}
                 aria-label="Vencimento de"
-                onChange={(e) => setFilterVencDe(e.target.value)}
+                onChange={(e) => { setFilterVencDe(e.target.value); setPage(1); }}
                 className="h-8 rounded-lg border border-stone-200 px-2 text-xs" />
               <span className="text-stone-400 text-xs">até</span>
               <input type="date" value={filterVencAte} min={filterVencDe || undefined}
                 aria-label="Vencimento até"
-                onChange={(e) => setFilterVencAte(e.target.value)}
+                onChange={(e) => { setFilterVencAte(e.target.value); setPage(1); }}
                 className="h-8 rounded-lg border border-stone-200 px-2 text-xs" />
               {(filterVencDe || filterVencAte) && (
-                <button type="button" onClick={() => { setFilterVencDe(""); setFilterVencAte(""); }}
+                <button type="button" onClick={() => { setFilterVencDe(""); setFilterVencAte(""); setPage(1); }}
                   className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
                   title="Limpar período de vencimento" aria-label="Limpar período de vencimento">×</button>
               )}
@@ -1324,7 +1499,7 @@ export function DistribuicaoPage() {
                 value={filterValorMin}
                 aria-label="Valor mínimo"
                 onWheel={(e) => e.currentTarget.blur()}
-                onChange={(e) => setFilterValorMin(e.target.value)}
+                onChange={(e) => { setFilterValorMin(e.target.value); setPage(1); }}
                 className="h-8 w-20 rounded-lg border border-stone-200 px-2 text-xs"
               />
               <span className="text-stone-400 text-xs">até</span>
@@ -1337,11 +1512,11 @@ export function DistribuicaoPage() {
                 value={filterValorMax}
                 aria-label="Valor máximo"
                 onWheel={(e) => e.currentTarget.blur()}
-                onChange={(e) => setFilterValorMax(e.target.value)}
+                onChange={(e) => { setFilterValorMax(e.target.value); setPage(1); }}
                 className="h-8 w-20 rounded-lg border border-stone-200 px-2 text-xs"
               />
               {(filterValorMin || filterValorMax) && (
-                <button type="button" onClick={() => { setFilterValorMin(""); setFilterValorMax(""); }}
+                <button type="button" onClick={() => { setFilterValorMin(""); setFilterValorMax(""); setPage(1); }}
                   className="text-stone-400 hover:text-stone-600 px-1 text-sm leading-none"
                   title="Limpar filtro de valor" aria-label="Limpar filtro de valor">×</button>
               )}
@@ -1355,7 +1530,7 @@ export function DistribuicaoPage() {
                 <Tag size={12} fill="currentColor" /> Só tagueados
                 <button
                   type="button"
-                  onClick={() => setMostrarSoTagueados(false)}
+                  onClick={() => { setMostrarSoTagueados(false); setPage(1); }}
                   className="text-amber-400 hover:text-amber-700 cursor-pointer"
                   aria-label="Mostrar todos os lançamentos"
                   title="Voltar a mostrar todos"
@@ -1370,7 +1545,7 @@ export function DistribuicaoPage() {
                 type="button"
                 onClick={limparTodosFiltros}
                 className="h-8 px-2 rounded-lg text-xs font-medium text-stone-500 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                title="Remove todos os filtros da listagem de uma vez (competência, busca, sócio, classificação, status, períodos e valor)"
+                title="Remove todos os filtros da listagem de uma vez (busca, sócios, classificações, status, conta destino, períodos e valor)"
               >
                 <FilterX size={13} /> Limpar todos os filtros
               </button>
@@ -1431,6 +1606,15 @@ export function DistribuicaoPage() {
             >
               Soma: <span className="text-stone-800">{formatCurrency(somaSelecionados)}</span>
             </span>
+            {/* "Selecionar todos os registros do filtro" (04-set) — também
+                pelo menu da setinha no cabeçalho da tabela. */}
+            {rowsVisiveis.length > selectedIds.size && (
+              <Button size="sm" variant="ghost" onClick={selecionarTodosDoFiltro}
+                disabled={bulkBusy || bulkDeleteBusy}
+                title="Seleciona de uma vez TODOS os lançamentos que o filtro devolve, em todas as páginas">
+                Selecionar todos os {rowsVisiveis.length} do filtro
+              </Button>
+            )}
             <button onClick={() => setSelectedIds(new Set())} className="text-stone-400 hover:text-stone-600 underline">
               limpar seleção
             </button>
@@ -1442,25 +1626,35 @@ export function DistribuicaoPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-stone-50 border-b border-stone-100">
-                  <th className="px-3 py-3 w-10">
-                    <input type="checkbox" aria-label="Selecionar todos" checked={allSelected} onChange={toggleAll}
-                      className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500 cursor-pointer" />
+                  {/* Checkbox = todos desta página (como sempre); a setinha
+                      abre "todos os registros do filtro" (04-set-2026). */}
+                  <th className="px-3 py-3 w-14">
+                    <SelectAllHeader
+                      paginaSelecionada={allPageSelected}
+                      onTogglePagina={togglePageSelection}
+                      qtdPagina={rowsPagina.length}
+                      qtdFiltro={rowsVisiveis.length}
+                      qtdSelecionados={selectedIds.size}
+                      onSelecionarFiltro={selecionarTodosDoFiltro}
+                      onLimpar={() => setSelectedIds(new Set())}
+                      disabled={loading}
+                    />
                   </th>
-                  {/* Taguear TODOS os lançamentos da tela de uma vez (17-ago) */}
+                  {/* Taguear TODOS os lançamentos da página de uma vez (17-ago) */}
                   <th className="px-1 py-3 w-8">
                     <button
                       type="button"
                       onClick={toggleAllTags}
-                      disabled={rowsVisiveis.length === 0}
+                      disabled={rowsPagina.length === 0}
                       className={`p-1 rounded transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed mx-auto block ${
-                        allTagged ? "text-amber-500 hover:text-amber-600" : "text-amber-300 hover:text-amber-500"
+                        allPageTagged ? "text-amber-500 hover:text-amber-600" : "text-amber-300 hover:text-amber-500"
                       }`}
-                      title={allTagged
-                        ? "Remover a tag de todos os lançamentos da tela"
-                        : "Taguear todos os lançamentos da tela de uma vez (o 'pintar de amarelo' da planilha)"}
-                      aria-label={allTagged ? "Remover tag de todos" : "Taguear todos"}
+                      title={allPageTagged
+                        ? "Remover a tag de todos os lançamentos desta página"
+                        : "Taguear todos os lançamentos desta página de uma vez (o 'pintar de amarelo' da planilha)"}
+                      aria-label={allPageTagged ? "Remover tag de todos" : "Taguear todos"}
                     >
-                      <Tag size={13} fill={allTagged ? "currentColor" : "none"} />
+                      <Tag size={13} fill={allPageTagged ? "currentColor" : "none"} />
                     </button>
                   </th>
                   {["Data do Repasse","Competência","Sócio","Classificação","Descrição","Conta destino","Vencimento","Valor","Status","Repasse","Ações"].map((h) => (
@@ -1480,7 +1674,7 @@ export function DistribuicaoPage() {
                     — ou lance pelo Financeiro escolhendo {"“Saída detalhada”"} na conta 2.8.
                   </td></tr>
                 )}
-                {!loading && rowsVisiveis.map((r) => {
+                {!loading && rowsPagina.map((r) => {
                   const vinculado = !!r.repasse_id;
                   const selected = selectedIds.has(r.id);
                   const tagueado = tags.has(r.id);
@@ -1602,7 +1796,9 @@ export function DistribuicaoPage() {
               {!loading && rowsVisiveis.length > 0 && (
                 <tfoot>
                   <tr className="bg-stone-100 border-t-2 border-stone-200 font-semibold text-stone-700 text-xs">
-                    <td colSpan={9} className="px-4 py-2.5 uppercase tracking-wide">Total do recorte</td>
+                    <td colSpan={9} className="px-4 py-2.5 uppercase tracking-wide">
+                      Total do recorte ({rowsVisiveis.length} lançamento{rowsVisiveis.length === 1 ? "" : "s"}{totalPages > 1 ? ", todas as páginas" : ""})
+                    </td>
                     <td className="px-4 py-2.5">{formatCurrency(rowsVisiveis.reduce((s, r) => s + Number(r.valor), 0))}</td>
                     <td colSpan={3}></td>
                   </tr>
@@ -1610,16 +1806,20 @@ export function DistribuicaoPage() {
               )}
             </table>
           </div>
-          <div className="px-4 py-3 border-t border-stone-100 text-xs text-stone-400 flex items-center gap-3 flex-wrap">
-            <span>{loading ? "…" : `${rowsVisiveis.length} lançamento${rowsVisiveis.length === 1 ? "" : "s"} no recorte`}</span>
-            {selectedIds.size > 0 && (
-              <span className="inline-flex items-center gap-2 text-accent-600 font-medium">
-                {selectedIds.size} selecionado{selectedIds.size === 1 ? "" : "s"}
-                <span className="text-stone-500 tabular-nums" title="Soma dos selecionados">
-                  · Soma: {formatCurrency(somaSelecionados)}
+          {/* Rodapé com a numeração de páginas — mesmo padrão do Financeiro (04-set). */}
+          <div className="flex items-center justify-between px-4 py-3 border-t border-stone-100 gap-3 flex-wrap">
+            <div className="flex items-center gap-3 text-xs text-stone-400">
+              <span>{loading ? "…" : `${rowsVisiveis.length} lançamento${rowsVisiveis.length === 1 ? "" : "s"} no recorte`}</span>
+              {selectedIds.size > 0 && (
+                <span className="inline-flex items-center gap-2 text-accent-600 font-medium">
+                  {selectedIds.size} selecionado{selectedIds.size === 1 ? "" : "s"}
+                  <span className="text-stone-500 tabular-nums" title="Soma dos selecionados">
+                    · Soma: {formatCurrency(somaSelecionados)}
+                  </span>
                 </span>
-              </span>
-            )}
+              )}
+            </div>
+            <Pagination page={pageAtual} totalPages={totalPages} onPageChange={setPage} />
           </div>
         </CardContent>
       </Card>
@@ -1851,7 +2051,7 @@ export function DistribuicaoPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => setMostrarSoTagueados((v) => !v)}
+                  onClick={() => { setMostrarSoTagueados((v) => !v); setPage(1); }}
                   title="Filtra a tabela para mostrar apenas os lançamentos tagueados"
                 >
                   {mostrarSoTagueados ? "Mostrar todos" : "Ver só tagueados"}

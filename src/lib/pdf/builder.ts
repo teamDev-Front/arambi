@@ -111,8 +111,32 @@ export class PdfBuilder {
   }
 
   /**
+   * Maior prefixo de `text` que cabe em `maxWidth` (busca binária). Devolve ""
+   * quando nem o primeiro caractere cabe.
+   *
+   * Serve para "palavras" sem espaço maiores que a linha inteira — a chave Pix
+   * copia-e-cola (00020101021226…), uma URL, um hash. Até 04-set-2026 o wrap
+   * deixava a palavra estourar a margem direita e o texto sumia fora da
+   * página (apontamento da Adri no Termo de Transferência Bancária). Agora o
+   * excedente passa para a linha seguinte e continua, quantas linhas forem
+   * precisas, sempre dentro da largura útil.
+   */
+  private fitChars(text: string, maxWidth: number, size: number, font: PDFFont): string {
+    if (maxWidth <= 0 || !text) return "";
+    if (this.measure(text, size, font) <= maxWidth) return text;
+    let lo = 0, hi = text.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (this.measure(text.slice(0, mid), size, font) <= maxWidth) lo = mid;
+      else hi = mid - 1;
+    }
+    return text.slice(0, lo);
+  }
+
+  /**
    * Quebra texto puro em linhas que cabem em `width` pt, considerando uma fonte/size.
-   * Preserva quebras de linha explícitas (\n).
+   * Preserva quebras de linha explícitas (\n). Palavra maior que a linha é
+   * quebrada por caractere (ver fitChars).
    */
   private wrap(text: string, width: number, size: number, font: PDFFont): string[] {
     const lines: string[] = [];
@@ -125,10 +149,27 @@ export class PdfBuilder {
         const tentativa = linhaAtual ? `${linhaAtual} ${palavra}` : palavra;
         if (this.measure(tentativa, size, font) <= width) {
           linhaAtual = tentativa;
-        } else {
+          continue;
+        }
+        if (this.measure(palavra, size, font) <= width) {
           if (linhaAtual) lines.push(linhaAtual);
-          // se a palavra sozinha é maior que a width, deixa estourar
           linhaAtual = palavra;
+          continue;
+        }
+        // Palavra maior que a linha: preenche o que resta da linha atual e
+        // segue quebrando por caractere nas próximas, até a largura da linha.
+        let resto = palavra;
+        while (resto.length > 0) {
+          const prefixo = linhaAtual ? `${linhaAtual} ` : "";
+          const disponivel = width - this.measure(prefixo, size, font);
+          let pedaco = this.fitChars(resto, disponivel, size, font);
+          if (!pedaco) {
+            if (linhaAtual) { lines.push(linhaAtual); linhaAtual = ""; continue; }
+            pedaco = resto[0]; // largura menor que 1 caractere — não trava
+          }
+          linhaAtual = prefixo + pedaco;
+          resto = resto.slice(pedaco.length);
+          if (resto.length > 0) { lines.push(linhaAtual); linhaAtual = ""; }
         }
       }
       if (linhaAtual) lines.push(linhaAtual);
@@ -230,12 +271,40 @@ export class PdfBuilder {
 
     const tokenWidth = (t: Token): number => this.measure(t.text, size, this.font(t.bold ? "bold" : "regular"));
 
+    const fecharLinha = () => {
+      while (current.length && current[current.length - 1].isSpace) {
+        const popped = current.pop()!;
+        currentWidth -= tokenWidth(popped);
+      }
+      lines.push({ tokens: current, hasBreak: false });
+      current = []; currentWidth = 0;
+    };
+
     for (const tk of tokens) {
       if (tk.isBreak) {
         lines.push({ tokens: current, hasBreak: true });
         current = []; currentWidth = 0; continue;
       }
       const w = tokenWidth(tk);
+      if (!tk.isSpace && w > width) {
+        // Token sem espaço maior que a LINHA inteira (chave Pix, URL, hash —
+        // ajuste 04-set): preenche o que resta da linha atual e continua
+        // quebrando por caractere nas seguintes, sem ultrapassar a margem.
+        const f = this.font(tk.bold ? "bold" : "regular");
+        let resto = tk.text;
+        while (resto.length > 0) {
+          let pedaco = this.fitChars(resto, width - currentWidth, size, f);
+          if (!pedaco) {
+            if (current.length > 0) { fecharLinha(); continue; }
+            pedaco = resto[0];
+          }
+          const parte: Token = { ...tk, text: pedaco };
+          current.push(parte); currentWidth += tokenWidth(parte);
+          resto = resto.slice(pedaco.length);
+          if (resto.length > 0) fecharLinha();
+        }
+        continue;
+      }
       if (currentWidth + w > width && current.length > 0) {
         // se token atual é espaço, ignora; senão fecha linha aqui
         if (tk.isSpace) continue;

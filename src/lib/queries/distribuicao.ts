@@ -7,6 +7,7 @@
 
 import { createClient } from "@/lib/supabase/client";
 import { semCamposDeOrigem } from "./preservar-origem";
+import { emLotes } from "./lotes";
 import type {
   TransacaoSocioRow,
   TransacaoSocioInsert,
@@ -39,9 +40,13 @@ export interface ListarDetalhadoFiltros {
    * multi-seleção com checkbox); lista vazia = todas as competências.
    */
   mesReferencia?: string | string[];
-  socioId?: string;
-  classificacao?: string;        // "1.01".."1.06"
-  status?: StatusDL;
+  // Sócio, classificação e status viraram multi-seleção com checkbox em
+  // 04-set-2026 ("idem ao Financeiro"): 1 valor ou lista; lista vazia = todos.
+  socioId?: string | string[];
+  classificacao?: string | string[];   // "1.01".."1.06"
+  status?: StatusDL | StatusDL[];
+  /** Conta destino do sócio (contas_bancarias_socio.id) — filtro novo 04-set. */
+  contaSocioId?: string | string[];
   search?: string;               // descrição / observação
   // Períodos (23-jul): consulta pela Data do Repasse e/ou pelo Vencimento.
   repasseDe?: string;            // data_vencimento >= (Data do Repasse)
@@ -79,9 +84,16 @@ export async function listarDetalhado(
   } else if (filtros.mesReferencia) {
     q = q.eq("mes_referencia", filtros.mesReferencia);
   }
-  if (filtros.socioId)       q = q.eq("socio_id", filtros.socioId);
-  if (filtros.classificacao) q = q.eq("classificacao_pessoal", filtros.classificacao);
-  if (filtros.status)        q = q.eq("status", filtros.status);
+  // eq quando é 1 valor, in quando é lista (vazia = sem filtro) — 04-set.
+  const eqOuIn = (col: string, v: string | string[] | undefined) => {
+    if (!v) return;
+    if (Array.isArray(v)) { if (v.length > 0) q = q.in(col, v); }
+    else q = q.eq(col, v);
+  };
+  eqOuIn("socio_id", filtros.socioId);
+  eqOuIn("classificacao_pessoal", filtros.classificacao);
+  eqOuIn("status", filtros.status);
+  eqOuIn("conta_bancaria_socio_id", filtros.contaSocioId);
   if (filtros.repasseDe)     q = q.gte("data_vencimento", filtros.repasseDe);
   if (filtros.repasseAte)    q = q.lte("data_vencimento", filtros.repasseAte);
   if (filtros.vencimentoDe)  q = q.gte("data_vencimento_despesa", filtros.vencimentoDe);
@@ -146,14 +158,19 @@ export async function deletarDetalhado(id: string): Promise<void> {
 export async function deletarDetalhadoEmMassa(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("transacoes_socio")
-    .delete()
-    .in("id", ids)
-    .is("repasse_id", null)
-    .select("id");
-  if (error) throw error;
-  const n = data?.length ?? 0;
+  // Em lotes de 150 ids (04-set): com "Selecionar todos os registros do
+  // filtro" a lista pode ter centenas de ids — numa URL só o gateway recusa.
+  const partes = await emLotes(ids, async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_socio")
+      .delete()
+      .in("id", lote)
+      .is("repasse_id", null)
+      .select("id");
+    if (error) throw error;
+    return data?.length ?? 0;
+  });
+  const n = partes.reduce((s, x) => s + x, 0);
   if (n === 0) throw new PermissionOrNotFoundError("excluir lançamentos em massa");
   return n;
 }
@@ -166,13 +183,17 @@ export async function atualizarDetalhadoEmMassa(
 ): Promise<number> {
   if (ids.length === 0) return 0;
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("transacoes_socio")
-    .update(payload)
-    .in("id", ids)
-    .select("id");
-  if (error) throw error;
-  const n = data?.length ?? 0;
+  // Em lotes (04-set) — ver deletarDetalhadoEmMassa.
+  const partes = await emLotes(ids, async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_socio")
+      .update(payload)
+      .in("id", lote)
+      .select("id");
+    if (error) throw error;
+    return data?.length ?? 0;
+  });
+  const n = partes.reduce((s, x) => s + x, 0);
   if (n === 0) throw new PermissionOrNotFoundError("atualizar lançamentos em massa");
   return n;
 }
@@ -406,6 +427,23 @@ export async function listarClassificacoesPessoais(): Promise<ClassificacaoPesso
     .order("ordem");
   if (error) throw error;
   return (data ?? []) as ClassificacaoPessoalRow[];
+}
+
+/**
+ * Todas as contas ATIVAS de todos os sócios — alimenta o filtro "Conta Destino"
+ * da DL (04-set-2026). Com sócio(s) marcado(s) no filtro, a tela recorta esta
+ * lista pelos `socio_id` escolhidos; sem sócio, mostra todas.
+ */
+export async function listarContasAtivasSocios(): Promise<ContaBancariaSocioRow[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("contas_bancarias_socio")
+    .select("*")
+    .eq("ativa", true)
+    .order("ordem", { ascending: true, nullsFirst: false })
+    .order("nome");
+  if (error) throw error;
+  return (data ?? []) as ContaBancariaSocioRow[];
 }
 
 export async function listarContasDoSocio(socioId: string): Promise<ContaBancariaSocioRow[]> {
