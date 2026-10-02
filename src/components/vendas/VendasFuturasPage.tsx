@@ -145,10 +145,11 @@ export function VendasFuturasPage() {
   const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
 
   // ---- integração com o Financeiro (ajuste 27-jul) ----
-  // Gerar o "valor a receber" (empresa) ou a DL provisionada (sócio) e a
+  // Gerar o "valor a receber" (qualquer destino), a DL provisionada (sócio) e a
   // despesa da Taxa de Armazenagem no momento do cadastro — com opção de NÃO
   // gerar (caso o lançamento já exista no Financeiro, evitando duplicidade).
   const [gerarFinanceiro, setGerarFinanceiro] = useState(true);
+  const [gerarDL, setGerarDL] = useState(true);
   const [gerarTaxaDespesa, setGerarTaxaDespesa] = useState(true);
   const [dlClassif, setDlClassif] = useState("");
   const [recebBancoId, setRecebBancoId] = useState("");
@@ -301,6 +302,7 @@ export function VendasFuturasPage() {
     setSaldoEstoque(null);
     setEditTinhaBaixa(false);
     setGerarFinanceiro(true);
+    setGerarDL(true);
     setGerarTaxaDespesa(true);
     setDlClassif("");
     setRecebBancoId("");
@@ -339,9 +341,12 @@ export function VendasFuturasPage() {
 
   /**
    * Gera os lançamentos integrados no Financeiro após criar a venda:
-   *   • destino EMPRESA  → conta a receber (1.2.x, status A receber);
-   *   • destino SÓCIO    → DL detalhada provisionada (reflete no Financeiro
-   *     como Provisionado DL automaticamente, via trigger SOMASE);
+   *   • conta a receber (1.2.x, status A receber) — QUALQUER destino. Venda
+   *     destinada a sócio também é receita da empresa (01-out-2026: "deve
+   *     constar como receita no financeiro, idem aos demais"), como já era na
+   *     planilha;
+   *   • destino SÓCIO → além da receita, a DL detalhada provisionada (reflete
+   *     no Financeiro como Provisionado DL automaticamente, via trigger SOMASE);
    *   • taxa de armazenagem → despesa a pagar (2.4.5) SEMPRE no Financeiro,
    *     independentemente do destino do recebimento.
    * Falhas aqui NÃO desfazem a venda — avisam para lançar manualmente.
@@ -350,8 +355,10 @@ export function VendasFuturasPage() {
     const valorTotal = round2(valorTotalForm);
     const descricaoVenda = `Venda ${CULTURA_LABEL[form.cultura]} Safra ${form.safra.trim()}`;
     const nf = form.nota_fiscal.trim();
+    const socio = form.destino_empresa ? undefined : socios.find((s) => s.id === form.socio_destino_id);
+    const nomeSocio = socio?.apelido ?? socio?.nome_completo ?? "";
 
-    if (gerarFinanceiro && form.destino_empresa) {
+    if (gerarFinanceiro) {
       try {
         const alvo = centroReceitaVenda(form.cultura);
         if (!alvo) throw new Error('Plano de contas sem a conta 1.2 (Receita de Arrendamento) — cadastre em Configurações → Plano de Contas.');
@@ -377,7 +384,9 @@ export function VendasFuturasPage() {
           conta_bancaria_id: recebBancoId || bancoRecebPadrao || null,
           status: "a_receber",
           valor: valorTotal,
-          observacao: `Gerado automaticamente pela Venda Futura (${form.comprador.trim()}).`,
+          observacao: socio
+            ? `Gerado automaticamente pela Venda Futura (${form.comprador.trim()}) — recebimento destinado a ${nomeSocio}; o repasse está na Distribuição de Lucro.`
+            : `Gerado automaticamente pela Venda Futura (${form.comprador.trim()}).`,
           origem_planilha: `venda_auto:${vendaId}`,
           created_by: null,
         };
@@ -389,11 +398,10 @@ export function VendasFuturasPage() {
       }
     }
 
-    if (gerarFinanceiro && !form.destino_empresa && form.socio_destino_id) {
+    if (gerarDL && !form.destino_empresa && form.socio_destino_id) {
       try {
         const classif = dlClassif || dlClassifPadrao;
         if (!classif) throw new Error("Nenhuma classificação pessoal cadastrada para a DL.");
-        const socio = socios.find((s) => s.id === form.socio_destino_id);
         const payload: TransacaoSocioInsert = {
           data: `${form.data_pgto_prevista.slice(0, 7)}-01`,   // competência = mês do recebimento
           socio_id: form.socio_destino_id,
@@ -405,7 +413,7 @@ export function VendasFuturasPage() {
           data_vencimento: form.data_pgto_prevista,            // Data do Repasse prevista
           data_vencimento_despesa: null,
           status: "provisionado",
-          observacao: `Gerado automaticamente pela Venda Futura destinada ao sócio ${socio?.apelido ?? socio?.nome_completo ?? ""}.`,
+          observacao: `Gerado automaticamente pela Venda Futura destinada ao sócio ${nomeSocio}.`,
           origem_planilha: `venda_auto:${vendaId}`,
           created_by: null,
         };
@@ -1171,35 +1179,41 @@ export function VendasFuturasPage() {
                   className="h-4 w-4 mt-0.5 rounded border-stone-300 accent-accent-500"
                 />
                 <span>
-                  {form.destino_empresa ? (
-                    <>
-                      <span className="font-medium">Gerar a conta a receber no Financeiro</span>
-                      <span className="block text-xs text-stone-500">
-                        Cria {form.kg && form.preco_sc ? <b>{formatCurrency(valorTotalForm)}</b> : "o valor da venda"} como{" "}
-                        <b>A receber</b> (Receita de Arrendamento → Venda de {CULTURA_LABEL[form.cultura]}) com vencimento
-                        na data prevista do pagamento. Desmarque se o lançamento JÁ existe no Financeiro (evita duplicidade).
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="font-medium">Lançar como Distribuição de Lucro (DL) para o sócio</span>
-                      <span className="block text-xs text-stone-500">
-                        Cria {form.kg && form.preco_sc ? <b>{formatCurrency(valorTotalForm)}</b> : "o valor da venda"} no
-                        detalhado do sócio como <b>Provisionado</b> — o valor global <b>Provisionado DL</b> no Financeiro
-                        da Aramburu atualiza automaticamente. Desmarque se já foi lançado (evita duplicidade).
-                      </span>
-                    </>
-                  )}
+                  <span className="font-medium">Gerar a conta a receber no Financeiro</span>
+                  <span className="block text-xs text-stone-500">
+                    Cria {form.kg && form.preco_sc ? <b>{formatCurrency(valorTotalForm)}</b> : "o valor da venda"} como{" "}
+                    <b>A receber</b> (Receita de Arrendamento → Venda de {CULTURA_LABEL[form.cultura]}) com vencimento
+                    na data prevista do pagamento{!form.destino_empresa && " — venda destinada a sócio também é receita da empresa"}.
+                    Desmarque se o lançamento JÁ existe no Financeiro (evita duplicidade).
+                  </span>
                 </span>
               </label>
-              {gerarFinanceiro && form.destino_empresa && (
+              {gerarFinanceiro && (
                 <Select label="Banco do recebimento" value={recebBancoId || bancoRecebPadrao}
                   onChange={(e) => setRecebBancoId(e.target.value)}>
                   <option value="">—</option>
                   {bancosEmpresa.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
                 </Select>
               )}
-              {gerarFinanceiro && !form.destino_empresa && (
+              {!form.destino_empresa && (
+                <label className="flex items-start gap-2 cursor-pointer text-sm text-stone-700">
+                  <input
+                    type="checkbox"
+                    checked={gerarDL}
+                    onChange={(e) => setGerarDL(e.target.checked)}
+                    className="h-4 w-4 mt-0.5 rounded border-stone-300 accent-accent-500"
+                  />
+                  <span>
+                    <span className="font-medium">Lançar o repasse na Distribuição de Lucro (DL) do sócio</span>
+                    <span className="block text-xs text-stone-500">
+                      Cria {form.kg && form.preco_sc ? <b>{formatCurrency(valorTotalForm)}</b> : "o valor da venda"} no
+                      detalhado do sócio como <b>Provisionado</b> — o valor global <b>Provisionado DL</b> no Financeiro
+                      da Aramburu atualiza automaticamente. Desmarque se já foi lançado (evita duplicidade).
+                    </span>
+                  </span>
+                </label>
+              )}
+              {gerarDL && !form.destino_empresa && (
                 <Select label="Classificação da DL" value={dlClassif || dlClassifPadrao}
                   onChange={(e) => setDlClassif(e.target.value)}>
                   {classifsPessoais.map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>)}

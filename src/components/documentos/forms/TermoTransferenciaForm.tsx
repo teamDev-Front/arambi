@@ -49,6 +49,7 @@ function fromDados(d: DadosTermoTransferencia) {
     saldo_parcelas:            d.saldo_parcelas != null ? String(d.saldo_parcelas) : "",
     titulo_documento:          d.titulo_documento ?? "",
     destinatario_nome_paragrafo: d.destinatario_nome_paragrafo ?? "",
+    destinatario_documento_paragrafo: d.destinatario_documento_paragrafo ?? "",
     observacoes:               d.observacoes ?? "",
     template_fornecedor_id:    d.template_fornecedor_id ?? "",
   };
@@ -106,6 +107,7 @@ export function TermoTransferenciaForm({
     saldo_parcelas:            "",
     titulo_documento:          "",
     destinatario_nome_paragrafo: "",
+    destinatario_documento_paragrafo: "",
     observacoes:               "",
     template_fornecedor_id:    "",
   }, onDirtyChange, !!seed);
@@ -162,6 +164,9 @@ export function TermoTransferenciaForm({
         t.favorecido.trim().toLowerCase() !== t.destinatario.razao_social.trim().toLowerCase()
           ? t.favorecido
           : "",
+      // Os modelos citam no parágrafo o mesmo CNPJ/CPF do bloco — não herda o
+      // documento de outra empresa digitado antes de trocar de modelo.
+      destinatario_documento_paragrafo: "",
       // Termos com bloco extra (parcelas, retenções) chegam com as observações
       // do modelo — a operadora só atualiza os valores.
       observacoes: t.observacoes_exemplo ?? f.observacoes,
@@ -276,10 +281,11 @@ export function TermoTransferenciaForm({
       saldo_remanescente:  saldoNum > 0 ? saldoNum : undefined,
       saldo_parcelado:     saldoNum > 0 ? saldoParcelado : undefined,
       saldo_parcelas:      saldoNum > 0 && saldoParcelado && nParcelas >= 1 ? nParcelas : undefined,
-      titulo_documento:            form.titulo_documento.trim() || undefined,
-      destinatario_nome_paragrafo: form.destinatario_nome_paragrafo.trim() || undefined,
-      observacoes:                 form.observacoes.trim() || undefined,
-      template_fornecedor_id:      form.template_fornecedor_id || undefined,
+      titulo_documento:                 form.titulo_documento.trim() || undefined,
+      destinatario_nome_paragrafo:      form.destinatario_nome_paragrafo.trim() || undefined,
+      destinatario_documento_paragrafo: form.destinatario_documento_paragrafo.trim() || undefined,
+      observacoes:                      form.observacoes.trim() || undefined,
+      template_fornecedor_id:           form.template_fornecedor_id || undefined,
     };
   }
 
@@ -360,13 +366,27 @@ export function TermoTransferenciaForm({
       <FormSection title="Destinatário" columns={2}>
         <Input label="Razão social / Nome"  value={form.destinatario_razao_social} onChange={(e) => setForm({ ...form, destinatario_razao_social: e.target.value })} />
         <Input label="CNPJ ou CPF"          value={form.destinatario_documento}    onChange={(e) => setForm({ ...form, destinatario_documento: e.target.value })} />
-        <div className="sm:col-span-2">
+        {/* 1º parágrafo (ajuste 02-out) — NF emitida por uma empresa e paga na
+            conta de outra: o parágrafo cita quem emitiu a nota, com o CNPJ/CPF
+            dela; o bloco DESTINATÁRIO segue com os dados de quem recebe. */}
+        <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-lg border border-stone-200 bg-stone-50/60 p-3">
           <Input
-            label="Nome no 1º parágrafo (opcional — quando difere da razão social)"
+            label="Nome no 1º parágrafo (opcional)"
             value={form.destinatario_nome_paragrafo}
             onChange={(e) => setForm({ ...form, destinatario_nome_paragrafo: e.target.value })}
-            placeholder='Ex.: "Douravet Veterinária Ltda Epp – Central Veterinária"'
+            placeholder="Quando difere da razão social"
           />
+          <Input
+            label="CNPJ ou CPF no 1º parágrafo (opcional)"
+            value={form.destinatario_documento_paragrafo}
+            onChange={(e) => setForm({ ...form, destinatario_documento_paragrafo: e.target.value })}
+            placeholder="Quando difere do CNPJ/CPF acima"
+          />
+          <p className="sm:col-span-2 text-[11px] text-stone-500 -mt-1">
+            Use quando o 1º parágrafo deve citar outro nome — ex.: NF emitida por uma empresa e paga
+            na conta de outra. Aqui vão o nome e o CNPJ/CPF de quem emitiu a nota; acima, os dados de
+            quem recebe. Em branco, vale o destinatário. No PDF sai <b>CNPJ</b> ou <b>CPF</b> conforme o número.
+          </p>
         </div>
         <Input label="Banco"          value={form.destinatario_banco}   onChange={(e) => setForm({ ...form, destinatario_banco: e.target.value })} placeholder="Sicredi (748)" />
         <Input label="Agência"        value={form.destinatario_agencia} onChange={(e) => setForm({ ...form, destinatario_agencia: e.target.value })} />

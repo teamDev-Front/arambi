@@ -58,6 +58,24 @@ export function documentoLabel(tipo: PessoaTipo): "CPF" | "CNPJ" {
   return tipo === "pj" ? "CNPJ" : "CPF";
 }
 
+/**
+ * Tipo de pessoa pelo próprio número: 11 dígitos → CPF; 14 posições → CNPJ
+ * (aceita também o CNPJ alfanumérico da Receita: 12 letras/dígitos + 2 dígitos).
+ * null quando o número não fecha com nenhum dos dois.
+ */
+export function detectarTipoDocumento(valor: string): PessoaTipo | null {
+  const c = (valor ?? "").replace(/[^0-9a-z]/gi, "").toUpperCase();
+  if (/^\d{11}$/.test(c)) return "pf";
+  if (/^[0-9A-Z]{12}\d{2}$/.test(c)) return "pj";
+  return null;
+}
+
+/** Rótulo para campos que aceitam CNPJ ou CPF: o do número digitado, ou "CNPJ/CPF" se não der para saber. */
+export function rotuloDocumento(valor: string): "CPF" | "CNPJ" | "CNPJ/CPF" {
+  const tipo = detectarTipoDocumento(valor);
+  return tipo ? documentoLabel(tipo) : "CNPJ/CPF";
+}
+
 /** Formata CPF: 00000000000 → 000.000.000-00. Se incompleto, devolve original. */
 export function formatCPF(valor: string): string {
   const c = soDigitos(valor).slice(0, 11);

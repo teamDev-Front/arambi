@@ -148,7 +148,7 @@ export function TermoAutorizacaoForm({ onSubmit, onCancel, submitting, onDirtyCh
 
       <FormSection title="Beneficiário do pagamento" columns={2}>
         <Input  label="Nome completo"       value={form.beneficiario_nome}    onChange={(e) => setForm({ ...form, beneficiario_nome: e.target.value })} />
-        <Input  label="CPF"                 value={form.beneficiario_cpf}     onChange={(e) => setForm({ ...form, beneficiario_cpf: e.target.value })} />
+        <Input  label="CNPJ ou CPF"         value={form.beneficiario_cpf}     onChange={(e) => setForm({ ...form, beneficiario_cpf: e.target.value })} />
         <Input  label="Banco"               value={form.benef_banco}          onChange={(e) => setForm({ ...form, benef_banco: e.target.value })} placeholder="Cooperativa Sicredi Vanguarda PR/SP/RJ (748)" />
         <Input  label="Agência"             value={form.benef_agencia}        onChange={(e) => setForm({ ...form, benef_agencia: e.target.value })} />
         <Input  label="Conta"               value={form.benef_conta}          onChange={(e) => setForm({ ...form, benef_conta: e.target.value })} />

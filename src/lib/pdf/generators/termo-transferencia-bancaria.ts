@@ -3,8 +3,7 @@ import { loadTimbreLogo } from "../assets";
 import { formatDataCurta, formatMoeda, valorPorExtenso } from "../helpers";
 import { parseObservacoes } from "../obs-rich";
 import type { DadosTermoTransferencia } from "../types";
-
-const RE_CPF = /^\d{3}\.\d{3}\.\d{3}[-.]?\d{2}$/;
+import { rotuloDocumento } from "@/lib/utils/documento";
 
 export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia): Promise<Uint8Array> {
   // RF-07 — timbre (marca d'água) da Aramburu em todas as páginas.
@@ -24,9 +23,11 @@ export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia
     ? `. Este valor corresponde ${descricao}${nfFrag}.`
     : `. Este valor corresponde a ${descricao}${nfFrag}.`;
   // Nome por extenso do favorecido no parágrafo (pode diferir da razão social
-  // do bloco DESTINATÁRIO — padrão dos termos dos fornecedores).
+  // do bloco DESTINATÁRIO — padrão dos termos dos fornecedores). O CNPJ/CPF
+  // também pode diferir (ajuste 02-out): NF emitida pela empresa A e paga na
+  // conta da empresa B — o parágrafo cita a A; o bloco DESTINATÁRIO, a B.
   const favorecido = d.destinatario_nome_paragrafo?.trim() || d.destinatario_razao_social;
-  const tipoDocDest = RE_CPF.test(d.destinatario_documento.trim()) ? "CPF" : "CNPJ";
+  const docFavorecido = d.destinatario_documento_paragrafo?.trim() || d.destinatario_documento;
 
   pdf.rich([
     { text: "A " },
@@ -35,7 +36,7 @@ export async function gerarTermoTransferenciaBancaria(d: DadosTermoTransferencia
     { text: valorStr, bold: true },
     { text: ` para a ` },
     { text: favorecido, bold: true },
-    { text: `, inscrito no ${tipoDocDest} sob o nº ${d.destinatario_documento}, através de transferência bancária, no dia ` },
+    { text: `, inscrito no ${rotuloDocumento(docFavorecido)} sob o nº ${docFavorecido}, através de transferência bancária, no dia ` },
     // Data em NEGRITO (RF 24-jul) — destaque pedido pela Adri.
     { text: formatDataCurta(d.data_transferencia), bold: true },
     { text: corresponde },

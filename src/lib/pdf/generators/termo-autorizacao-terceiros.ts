@@ -1,6 +1,7 @@
 import { PdfBuilder } from "../builder";
 import { formatDataPorExtenso, formatMoeda, valorPorExtenso } from "../helpers";
 import type { DadosTermoAutorizacaoTerceiros } from "../types";
+import { rotuloDocumento } from "@/lib/utils/documento";
 
 export async function gerarTermoAutorizacaoTerceiros(d: DadosTermoAutorizacaoTerceiros): Promise<Uint8Array> {
   const pdf = await PdfBuilder.create();
@@ -53,9 +54,10 @@ export async function gerarTermoAutorizacaoTerceiros(d: DadosTermoAutorizacaoTer
   pdf.space(12);
 
   // ── DADOS DO BENEFICIÁRIO ──────────────────────────────────────────────────
+  // O beneficiário pode ser empresa (ajuste 02-out): rótulo CNPJ ou CPF pelo número.
   pdf.fields([
     { label: "Nome",       value: d.beneficiario_nome },
-    { label: "CPF",        value: d.beneficiario_cpf },
+    { label: rotuloDocumento(d.beneficiario_cpf), value: d.beneficiario_cpf },
     { label: "Banco",      value: d.beneficiario_dados_bancarios.banco },
     { label: "Agência",    value: d.beneficiario_dados_bancarios.agencia },
     { label: "Conta",      value: d.beneficiario_dados_bancarios.conta },

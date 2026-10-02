@@ -86,7 +86,7 @@ export interface DadosTermoAutorizacaoTerceiros {
   saldo_remanescente?: number;        // se aplicável
   // Beneficiário do pagamento (terceiro)
   beneficiario_nome: string;
-  beneficiario_cpf: string;
+  beneficiario_cpf: string;           // CPF ou CNPJ (nome histórico) — o PDF rotula pelo número
   beneficiario_dados_bancarios: Required<Pick<DadosBancarios, "banco" | "agencia" | "conta">> & {
     chave_pix?: string;
   };
@@ -125,6 +125,9 @@ export interface DadosTermoTransferencia {
   titulo_documento?: string;
   /** Nome por extenso do favorecido no 1º parágrafo, quando difere da razão social. */
   destinatario_nome_paragrafo?: string;
+  /** CNPJ/CPF citado no 1º parágrafo quando difere do destinatário — NF emitida por
+   *  uma empresa e paga na conta de outra (ajuste 02-out). Default: destinatario_documento. */
+  destinatario_documento_paragrafo?: string;
   /** Bloco de observações (markdown-lite: **negrito**, "- " bullet, "1. " numerada). */
   observacoes?: string;
   /** Id do template de fornecedor usado (reabre a edição com o modelo marcado). */

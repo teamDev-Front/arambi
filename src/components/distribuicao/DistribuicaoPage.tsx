@@ -24,7 +24,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { SelectAllHeader } from "@/components/ui/SelectAllHeader";
 import {
   listarDetalhado, criarDetalhado, atualizarDetalhado, deletarDetalhado,
-  atualizarDetalhadoEmMassa, deletarDetalhadoEmMassa, obterResumoMensal, obterGlobalEmpresaMes,
+  atualizarDetalhadoEmMassa, deletarDetalhadoEmMassa, obterResumoMensal, obterResumoMeses, obterGlobalEmpresaMes,
   listarRepassesDoMes, consolidarRepasse, desfazerRepasse, concluirRepasse, religarSyncDl,
   listarSocios, listarClassificacoesPessoais, listarContasDoSocio, listarContasAtivasSocios,
   listarMesesDetalhado,
@@ -159,7 +159,8 @@ export function DistribuicaoPage() {
   //
   // 04-set-2026: ao abrir, o filtro vem como "Todas" (era o mês vigente) —
   // padronização com o Financeiro. Os CARDS deixaram de seguir este seletor:
-  // mostram sempre o mês vigente (ver mesVigente abaixo).
+  // mostram sempre o mês vigente (ver mesVigente abaixo) — menos o Global
+  // (2.8.1), que continua seguindo a competência (item 4 do docx, 02-out).
   const [mesesSel, setMesesSel] = useState<string[]>([]);
   const [meses, setMeses] = useState<string[]>([]);
   /**
@@ -280,10 +281,18 @@ export function DistribuicaoPage() {
 
   // ---- dados ----
   const [rows, setRows] = useState<TransacaoSocioRich[]>([]);
-  // Resumo / global / repasses do MÊS VIGENTE — alimentam os cards (04-set).
+  // Resumo / repasses do MÊS VIGENTE — alimentam os cards datados (04-set).
   const [resumo, setResumo] = useState<DlMensalResumoRow | null>(null);
-  const [globalMes, setGlobalMes] = useState<GlobalEmpresaMes | null>(null);
   const [repasses, setRepasses] = useState<RepasseConsolidado[]>([]);
+  /**
+   * Card "Global na empresa (2.8.1)": segue a COMPETÊNCIA do filtro, como era
+   * antes de 04-set ("deve permanecer exatamente com a nomenclatura e o filtro
+   * utilizados atualmente" — cobrado pela Adri em 02-out). "Todas" = soma de
+   * todos os meses; um ou mais meses = soma deles.
+   */
+  const [cardGlobal, setCardGlobal] = useState<{ resumo: DlMensalResumoRow | null; global: GlobalEmpresaMes | null }>({
+    resumo: null, global: null,
+  });
   /**
    * Resumo / global da competência EM FOCO (a única marcada no filtro; sem
    * foco, o mês vigente). É o que a consolidação e a conferência do
@@ -310,15 +319,19 @@ export function DistribuicaoPage() {
    */
   const temAcoesRepasse = repassesModal.some((r) => r.status === "a_pagar" || r.status === "a_repassar");
   /**
-   * Total de lançamentos DETALHADOS da competência (todos os status) — é o que
-   * a tabela mostra quando se clica no card "Global na empresa (2.8.1)", que
-   * não filtra status nenhum. Vem do mesmo resumo dos outros cards para as
-   * quatro contagens fecharem entre si (RF 20-ago).
+   * Total de lançamentos DETALHADOS das competências do filtro (todos os
+   * status) — é o que a tabela mostra quando se clica no card "Global na
+   * empresa (2.8.1)", que não filtra status nenhum (RF 20-ago).
    */
-  const qtdDetalhadoMes =
-    Number(resumo?.qtd_provisionado ?? 0) +
-    Number(resumo?.qtd_a_pagar ?? 0) +
-    Number(resumo?.qtd_realizado ?? 0);
+  const qtdDetalhadoGlobal =
+    Number(cardGlobal.resumo?.qtd_provisionado ?? 0) +
+    Number(cardGlobal.resumo?.qtd_a_pagar ?? 0) +
+    Number(cardGlobal.resumo?.qtd_realizado ?? 0);
+  /** "na competência 09/2026", "em todas as competências"… — texto de ajuda do card Global. */
+  const competenciaGlobalTexto =
+    mesesSel.length === 0 ? "em todas as competências"
+    : mesesSel.length === 1 ? `na competência ${mesHumano(mesesSel[0])}`
+    : `nas competências ${[...mesesSel].sort().map(mesHumano).join(", ")}`;
   const [loading, setLoading] = useState(true);
 
   // ---- lookups ----
@@ -413,11 +426,15 @@ export function DistribuicaoPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      // Cards = mês vigente, sempre (04-set). Consolidação/conferência = mês
-      // em foco (a única competência marcada) — quando é o próprio vigente,
-      // reaproveita as consultas dos cards em vez de repetir.
+      // Cards = mês vigente (04-set), menos o Global (2.8.1), que segue o
+      // filtro Competência (02-out). Consolidação/conferência = mês em foco (a
+      // única competência marcada) — quando é o próprio vigente, reaproveita
+      // as consultas dos cards em vez de repetir.
       const alvo = mesFoco ?? mesVigente;
-      const [r, resV, globV, repsV, resA, globA] = await Promise.all([
+      // Com uma competência só, o Global é o próprio foco; com "Todas" ou
+      // várias, soma os meses marcados.
+      const globalSomaMeses = mesesSel.length !== 1;
+      const [r, resV, globV, repsV, resA, globA, resG, globG] = await Promise.all([
         listarDetalhado({
           // A LISTAGEM segue a COMPETÊNCIA do header (ajuste 28-jul).
           mesReferencia: mesesSel,
@@ -440,12 +457,16 @@ export function DistribuicaoPage() {
         listarRepassesDoMes(mesVigente),
         alvo === mesVigente ? Promise.resolve(null) : obterResumoMensal(alvo),
         alvo === mesVigente ? Promise.resolve(null) : obterGlobalEmpresaMes(alvo),
+        globalSomaMeses ? obterResumoMeses(mesesSel) : Promise.resolve(null),
+        globalSomaMeses ? obterGlobalEmpresaMes(mesesSel) : Promise.resolve(null),
       ]);
+      const resFoco = alvo === mesVigente ? resV : resA;
+      const globFoco = alvo === mesVigente ? globV : globA;
       setRows(r);
       setResumo(resV);
-      setGlobalMes(globV);
       setRepasses(repsV);
-      setFoco({ mes: alvo, resumo: alvo === mesVigente ? resV : resA, global: alvo === mesVigente ? globV : globA });
+      setFoco({ mes: alvo, resumo: resFoco, global: globFoco });
+      setCardGlobal(globalSomaMeses ? { resumo: resG, global: globG } : { resumo: resFoco, global: globFoco });
     } catch (e: unknown) {
       toast.error("Erro carregando distribuição", (e as Error).message ?? String(e));
     } finally {
@@ -818,11 +839,12 @@ export function DistribuicaoPage() {
    * "" = todos os status (card Global na empresa: provisionado + a repassar +
    * repassado).
    */
-  function aplicarFiltroCard(status: StatusDL | "") {
+  function aplicarFiltroCard(status: StatusDL | "", seguirCompetencia = false) {
     limparTodosFiltros();
-    // Os cards são do mês vigente (04-set): a tabela abre nessa competência
-    // para o número do card bater com o que ela mostra (RF 20-ago).
-    setMesesSel([mesVigente]);
+    // Os cards datados são do mês vigente (04-set): a tabela abre nessa
+    // competência para o número do card bater com o que ela mostra (RF 20-ago).
+    // O Global segue o filtro Competência — mantém o que estiver marcado.
+    if (!seguirCompetencia) setMesesSel([mesVigente]);
     setFilterStatus(status ? [status] : []);
     setPage(1);
   }
@@ -1150,8 +1172,10 @@ export function DistribuicaoPage() {
           consolidados do mês (idem card Despesa Variável do Financeiro).
           04-set-2026: os cards mostram SEMPRE o mês vigente (não seguem mais o
           filtro Competência) e os rótulos dizem o mês de referência — como os
-          cards "até 30/09" do Financeiro. "Global na empresa (2.8.1)" ficou
-          exatamente como estava (nome e filtro). */}
+          cards "até 30/09" do Financeiro. Exceção: "Global na empresa (2.8.1)"
+          fica exatamente como era (nome sem mês e filtro Competência) — a
+          regra da Adri é que só os rótulos com "até 30/09" ou "– 09/2026" são
+          fixos no vigente; os demais seguem a competência (02-out). */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
         {([
           {
@@ -1162,15 +1186,16 @@ export function DistribuicaoPage() {
             // assim). Antes vinham as poucas linhas GLOBAIS do 2.8.1 no
             // Financeiro (provisionado + repasses consolidados), então o card
             // dizia "5 lançamentos" e a tabela abria com 48.
-            qtd: qtdDetalhadoMes,
+            qtd: qtdDetalhadoGlobal,
             unidade: "lançamento",
-            valor: globalMes?.totalCentro281 ?? 0,
+            valor: cardGlobal.global?.totalCentro281 ?? 0,
             icon: <Landmark size={15} />,
             iconClass: "bg-blue-50 text-blue-600",
             labelClass: "text-blue-700",
             valorClass: "text-blue-700",
-            help: `Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa na competência ${mesHumano(mesVigente)} — provisionado + a repassar + repassado, independentemente do filtro Competência. Deve bater com o detalhado; a contagem é a dos lançamentos detalhados do mês. Clique para ver a tabela com todos os status.`,
+            help: `Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa ${competenciaGlobalTexto} — provisionado + a repassar + repassado. Segue o filtro Competência: com "Todas", soma todos os meses; com meses marcados, soma esses meses. Deve bater com o detalhado; a contagem é a dos lançamentos detalhados. Clique para ver a tabela com todos os status.`,
             filtro: "" as StatusDL | "",
+            seguirCompetencia: true,
           },
           {
             key: "arep",
@@ -1215,7 +1240,7 @@ export function DistribuicaoPage() {
           <button
             key={c.key}
             type="button"
-            onClick={() => aplicarFiltroCard(c.filtro)}
+            onClick={() => aplicarFiltroCard(c.filtro, c.seguirCompetencia)}
             title={c.help}
             className="rounded-xl border border-stone-200 bg-white shadow-sm px-3.5 py-2.5 flex items-center gap-3 text-left transition-colors hover:border-stone-300 hover:bg-stone-50 cursor-pointer"
           >
