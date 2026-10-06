@@ -825,7 +825,7 @@ export function FinanceiroPage() {
   }
 
   // ---- exportação espelho-da-tela (REL-01/02) ----
-  const montarMetaExport = useCallback((): FinanceiroExportMeta => {
+  const montarMetaExport = useCallback((qtdNoRecorte?: number): FinanceiroExportMeta => {
     const f: string[] = [];
     if (search) f.push(`Busca: "${search}"`);
     if (filterCompetencias.length) f.push(`Competência: ${filterCompetencias.join(", ")}`);
@@ -865,7 +865,12 @@ export function FinanceiroPage() {
     }
     if (filterSoNegativos) f.push('Apenas o lado que sai (valores negativos)');
     if (mostrarSoTagueados && tags.size > 0) {
-      f.push(`Apenas lançamentos tagueados (${tags.size})`);
+      // As tags do dia são cruzadas com os demais filtros da tela. "(5)" com só
+      // 3 linhas no relatório parecia lançamento perdido (out-2026): quando nem
+      // todas passam nos filtros, o cabeçalho diz quantas entraram.
+      f.push(qtdNoRecorte != null && qtdNoRecorte < tags.size
+        ? `Apenas lançamentos tagueados (${qtdNoRecorte} de ${tags.size})`
+        : `Apenas lançamentos tagueados (${tags.size})`);
     }
     const escopo = selectedIds.size > 0
       ? `Seleção manual — ${selectedIds.size} lançamento${selectedIds.size === 1 ? "" : "s"}`
@@ -895,7 +900,8 @@ export function FinanceiroPage() {
         return;
       }
       const meta = {
-        ...montarMetaExport(),
+        // Contagem só vale pelo recorte dos filtros; na seleção manual as linhas são as marcadas.
+        ...montarMetaExport(selectedIds.size > 0 ? undefined : exportRows.length),
         campos: escolha.campos,
         incluirFiltros: escolha.incluirFiltros,
         incluirTotais: escolha.incluirTotais,

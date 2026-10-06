@@ -46,9 +46,12 @@ interface Body {
   socios_overrides?: RelatorioSociosOverrides;
   /** Recorte (RF-FIN-09): aplica-se a capa_empresa e relatorio_contabil. */
   scope?: ReportScope;
-  /** CAPAS (4.3): número do lote informado manualmente — ex.: "7º". */
+  /**
+   * Selo dourado das capas — número informado manualmente (ex.: "7º"). Capa
+   * Empresa desde o 4.3; Capa Sócio desde out-2026 ("2º" = 2ª capa do mês).
+   */
   numero_lote?: string;
-  /** CAPAS (4.3): mês de referência do lote informado manualmente — ex.: "Julho". */
+  /** Selo dourado das capas — mês de referência informado manualmente (ex.: "Julho"). */
   mes_referencia_label?: string;
 }
 
@@ -106,6 +109,8 @@ export async function POST(req: NextRequest) {
         mesReferencia: body.mes_referencia,
         socioId: body.socio_id!,
         ids: idsScope,
+        numeroCapa: body.numero_lote,
+        mesReferenciaLabel: body.mes_referencia_label,
       });
     } else if (slug === "relatorio_contabil") {
       payload = await buildRelatorioContabil(supabase, { mesReferencia: body.mes_referencia, scope: body.scope });

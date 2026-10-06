@@ -21,6 +21,7 @@ import {
 } from "@/types";
 import { ContabilObservacoesModal } from "./ContabilObservacoesModal";
 import { SociosOverridesModal } from "./SociosOverridesModal";
+import { SeloCapaFields } from "./SeloCapaFields";
 
 const TEMPLATES: Array<{
   slug: PdfMonkeySlug;
@@ -61,6 +62,9 @@ export function RelatoriosPage() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
   const [socioId, setSocioId] = useState<string>("");
+  // Selo dourado da Capa do sócio (out-2026) — vazios = automático.
+  const [capaNumero, setCapaNumero] = useState("");
+  const [capaMesLabel, setCapaMesLabel] = useState("");
 
   const [modalSocioOpen, setModalSocioOpen] = useState(false);
   const [modalObsOpen, setModalObsOpen] = useState(false);
@@ -105,6 +109,8 @@ export function RelatoriosPage() {
     setSlugAtual(slug);
     if (tpl.precisaSocio) {
       setSocioId(socios[0]?.id ?? "");
+      setCapaNumero("");
+      setCapaMesLabel("");
       setModalSocioOpen(true);
       return;
     }
@@ -125,6 +131,8 @@ export function RelatoriosPage() {
       socio_id?: string;
       observacoes?: ContabilObservacao[];
       socios_overrides?: RelatorioSociosOverrides;
+      numero_lote?: string;
+      mes_referencia_label?: string;
     },
   ) {
     setGerando(slug);
@@ -135,6 +143,8 @@ export function RelatoriosPage() {
         socio_id:         extras?.socio_id,
         observacoes:      extras?.observacoes,
         socios_overrides: extras?.socios_overrides,
+        numero_lote:          extras?.numero_lote,
+        mes_referencia_label: extras?.mes_referencia_label,
       });
       if (res.status === "success" && res.download_url) {
         toast.success(`${PDFMONKEY_LABEL[slug]} gerado`, "Baixe pelo link na tabela abaixo.");
@@ -308,9 +318,22 @@ export function RelatoriosPage() {
             <option value="">Selecione…</option>
             {socios.map((s) => <option key={s.id} value={s.id}>{s.nome_completo}</option>)}
           </Select>
+          <SeloCapaFields
+            mesReferencia={mesRef}
+            numero={capaNumero}
+            onNumeroChange={setCapaNumero}
+            mes={capaMesLabel}
+            onMesChange={setCapaMesLabel}
+          />
           <div className="flex gap-3 justify-end pt-2">
             <Button variant="ghost" onClick={() => setModalSocioOpen(false)}>Cancelar</Button>
-            <Button onClick={() => slugAtual && socioId && gerar(slugAtual, { socio_id: socioId })} disabled={!socioId || gerando !== null} loading={gerando !== null}>
+            <Button
+              onClick={() => slugAtual && socioId && gerar(slugAtual, {
+                socio_id: socioId,
+                numero_lote: capaNumero.trim() || undefined,
+                mes_referencia_label: capaMesLabel.trim() || undefined,
+              })}
+              disabled={!socioId || gerando !== null} loading={gerando !== null}>
               <FileText size={13}/> Gerar
             </Button>
           </div>

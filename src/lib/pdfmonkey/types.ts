@@ -66,6 +66,16 @@ export interface CapaEmpresaPayload {
   total_variaveis: string;
   despesas_eventuais: CapaEmpresaItem[];
   total_eventuais: string;
+  /**
+   * Seção 10 do DOCUMENTACAO_JSON.md (out-2026): saídas de Distribuição de
+   * Lucro do recorte — a DL em si (2.8) e as pernas de saída do repasse
+   * consolidado (ex.: 2.9.3 "Transf. Entre Contas_Distribuição de Lucro").
+   */
+  distribuicao_lucro: CapaEmpresaItem[];
+  total_distribuicao_lucro: string;
+  /** Seção 10: resgates do Invest — só a SAÍDA da conta Invest (1.8 negativo). */
+  resgates: CapaEmpresaItem[];
+  total_resgates: string;
 }
 
 // ============================================================================
@@ -260,13 +270,21 @@ export interface RelatorioSociosOverrides {
 // Precedência: seleção manual (por_selecao) > filtros (por_filtros) > mês.
 export type ReportScopeType = "por_mes" | "por_filtros" | "por_selecao";
 
+// Espelha ListarTransacoesFiltros (queries/financeiro.ts): a capa tem que sair
+// com EXATAMENTE o recorte do relatório "Exportar PDF" da tela (out-2026 — sem
+// competência em lista, tipo, forma de pgto e "só negativos" a capa recebia
+// lançamentos que o relatório não lista, e o total geral não fechava).
 export interface ReportScopeFiltros {
-  mes_referencia?: string;          // "YYYY-MM"
+  mes_referencia?: string | string[]; // "YYYY-MM" — 1 ou várias (seletor multi desde 17-ago)
   search?: string;                  // descrição/fornecedor/ref
   status?: string | string[];       // status_aramburu (1 ou vários)
   conta_contabil_cod?: string | string[]; // "2.7" (1 ou várias — 23-jul)
   centro_custo_cod?: string[];      // multi-seleção
   conta_bancaria_id?: string | string[];  // 1 banco ou vários (23-jul)
+  tipo_despesa?: string | string[]; // fixa/variavel/eventual/periodica (RF 31-jul)
+  forma_pgto?: string | string[];   // RF 31-jul
+  /** "Apenas o lado que sai" (17-ago) — separa a saída do Invest do crédito no SICREDI. */
+  somente_negativos?: boolean;
   data_de?: string;                 // "YYYY-MM-DD" (vencimento)
   data_ate?: string;                // "YYYY-MM-DD"
   emissao_de?: string;              // "YYYY-MM-DD" (emissão — 23-jul)

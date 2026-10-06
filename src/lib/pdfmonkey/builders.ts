@@ -29,6 +29,7 @@ interface QueryFiltravel {
   in: (col: string, vals: readonly unknown[]) => QueryFiltravel;
   gte: (col: string, val: unknown) => QueryFiltravel;
   lte: (col: string, val: unknown) => QueryFiltravel;
+  lt: (col: string, val: unknown) => QueryFiltravel;
   or: (filtros: string) => QueryFiltravel;
 }
 
@@ -36,7 +37,9 @@ function aplicarEscopo<T>(query: T, scope: ReportScope | undefined, mesFallback:
   const q = query as unknown as QueryFiltravel;
 
   if (!scope || scope.scope_type === "por_mes") {
-    return q.eq("mes_referencia", scope?.filtros?.mes_referencia ?? mesFallback) as unknown as T;
+    const mes = scope?.filtros?.mes_referencia;
+    if (Array.isArray(mes) && mes.length > 0) return q.in("mes_referencia", mes) as unknown as T;
+    return q.eq("mes_referencia", (typeof mes === "string" && mes) || mesFallback) as unknown as T;
   }
   if (scope.scope_type === "por_selecao") {
     // Seleção manual: o conjunto é exatamente os ids marcados (vazio = nada).
@@ -54,11 +57,14 @@ function aplicarEscopo<T>(query: T, scope: ReportScope | undefined, mesFallback:
   // Recorte por ids (lançamentos tagueados — fix 28-jul). Lista vazia = recorte
   // vazio (uuid sentinela evita `in ()` inválido), igual à listagem da tela.
   if (f.ids) r = r.in("id", f.ids.length > 0 ? f.ids : ["00000000-0000-0000-0000-000000000000"]);
-  if (f.mes_referencia)            r = r.eq("mes_referencia", f.mes_referencia);
+  eqOuIn("mes_referencia", f.mes_referencia);
   eqOuIn("status", f.status);
   eqOuIn("conta_contabil_cod", f.conta_contabil_cod);
   if (f.centro_custo_cod?.length)  r = r.in("centro_custo_cod", f.centro_custo_cod);
   eqOuIn("conta_bancaria_id", f.conta_bancaria_id);
+  eqOuIn("tipo_despesa", f.tipo_despesa);
+  eqOuIn("forma_pgto", f.forma_pgto);
+  if (f.somente_negativos)         r = r.lt("valor", 0);
   if (f.data_de)                   r = r.gte("data", f.data_de);
   if (f.data_ate)                  r = r.lte("data", f.data_ate);
   if (f.emissao_de)                r = r.gte("data_emissao", f.emissao_de);
@@ -124,6 +130,18 @@ export function periodoLabel(mesRef: string, de?: string, ate?: string): string 
   const b = formatDataCurta(fim);
   // Mesmo ano: "01/04 a 30/04/2026"; anos diferentes: "20/12/2025 a 10/01/2026".
   return a.slice(6) === b.slice(6) ? `${a.slice(0, 5)} a ${b}` : `${a} a ${b}`;
+}
+
+/**
+ * Número do selo dourado digitado no modal da capa: "2", "2o" e "2°" viram
+ * "2º" (o "º" é chato de digitar); outro texto sai como veio. Vazio = undefined,
+ * e quem chama usa o automático (número do mês).
+ */
+function numeroSelo(digitado: string | undefined): string | undefined {
+  const t = digitado?.trim();
+  if (!t) return undefined;
+  const m = /^(\d{1,2})\s*[ºo°]?$/i.exec(t);
+  return m ? `${Number(m[1])}º` : t;
 }
 
 /** Forma de pagamento legível ("pix" → "Pix"); "sem" sai vazio. */
@@ -213,6 +231,7 @@ export async function buildCapaEmpresa(
     .from("transacoes_empresa")
     .select(`
       conta_bancaria_id, data, descricao, fornecedor_nome, valor, forma_pgto, tipo_despesa, ref, parcelas,
+      conta_contabil_cod, origem_planilha,
       conta_bancaria:contas_bancarias_empresa(apelido, nome, banco, ordem),
       centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(nome)
     `);
@@ -229,6 +248,8 @@ export async function buildCapaEmpresa(
     tipo_despesa: "fixa" | "variavel" | "eventual" | "periodica" | "sem";
     ref: string | null;
     parcelas: string | null;
+    conta_contabil_cod: string;
+    origem_planilha: string | null;
     conta_bancaria: { apelido: string | null; nome: string; banco: string | null; ordem: number | null } | null;
     centro_custo: { nome: string } | null;
   };
@@ -237,12 +258,35 @@ export async function buildCapaEmpresa(
   const bancoSlug = (banco: string | null, nome: string) =>
     (banco ?? nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
 
-  // ---- Despesas por tipo (fixa/variavel/eventual) do recorte ----
+  // ---- Seções da capa ----
+  // fixa/variavel/eventual → as três tabelas de despesas, como sempre. Sem um
+  // desses tipos, a linha ainda entra se for (seção 10 do DOCUMENTACAO_JSON,
+  // out-2026 — sem elas a capa fechava abaixo do relatório da tela):
+  //   • Distribuição de Lucro — conta 2.8, ou perna do repasse consolidado /
+  //     provisionado automático da DL (etiquetas dl_repasse:/dl_auto:), como a
+  //     2.9.3 "Transf. Entre Contas_Distribuição de Lucro" que sai da CORA;
+  //   • Resgate — conta 1.8.
+  // Nas duas, só o lado que SAI: o resgate tem o crédito na corrente SICREDI e
+  // a saída no Invest, e o repasse da DL tem a entrada 1.9.1 no INTER — somar
+  // as duas pernas zeraria o total.
+  type Secao = "fixa" | "variavel" | "eventual" | "dl" | "resgate";
+  const secaoDaCapa = (t: TransacaoComConta): Secao | null => {
+    const tipo = t.tipo_despesa;
+    if (tipo === "fixa" || tipo === "variavel" || tipo === "eventual") return tipo;
+    if (Number(t.valor) >= 0) return null;
+    const origem = t.origem_planilha ?? "";
+    if (t.conta_contabil_cod === "2.8" || origem.startsWith("dl_repasse:") || origem.startsWith("dl_auto:")) return "dl";
+    if (t.conta_contabil_cod === "1.8") return "resgate";
+    return null; // periódica / sem tipo: o template não tem seção para ela
+  };
+
   type ListItem = { vencimento: string; valor: string; descricao: string; banco: string; pgto: string };
-  const buckets: Record<"fixa" | "variavel" | "eventual", { items: ListItem[]; total: number }> = {
+  const buckets: Record<Secao, { items: ListItem[]; total: number }> = {
     fixa:     { items: [], total: 0 },
     variavel: { items: [], total: 0 },
     eventual: { items: [], total: 0 },
+    dl:       { items: [], total: 0 },
+    resgate:  { items: [], total: 0 },
   };
 
   // Totais por banco a partir das MESMAS linhas que entram nas tabelas.
@@ -251,26 +295,29 @@ export async function buildCapaEmpresa(
   // template não calcula nada" e total_geral = soma das tabelas = soma das
   // caixas de banco. Até aqui os totais por banco vinham de outra fonte (a
   // variação mensal da conta, com entradas e tudo) e não batiam com as tabelas,
-  // que só têm despesas fixas/variáveis/eventuais. Agora é uma fonte só.
+  // que só listam saídas. Agora é uma fonte só.
   const porBanco = new Map<string, { nome: string; nome_completo: string; banco: string | null; ordem: number; total: number }>();
 
   for (const t of txs) {
-    const tipo = t.tipo_despesa;
-    if (tipo !== "fixa" && tipo !== "variavel" && tipo !== "eventual") continue;
+    const secao = secaoDaCapa(t);
+    if (!secao) continue;
     const valor = Math.abs(Number(t.valor));
     if (valor === 0) continue; // o template esconde linha zerada; nem mandamos
-    buckets[tipo].total += valor;
+    buckets[secao].total += valor;
     const bancoNome = t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? "—";
-    buckets[tipo].items.push({
+    buckets[secao].items.push({
       vencimento: formatDataCurta(t.data),
       valor: brl(valor),
       // Descrição completa (4.4): fornecedor + NF + categoria + descrição + parcela.
+      // Em DL e Resgate o centro de custo fica de fora: o nome dele só repetiria
+      // a seção ("Distribuição de Lucros") ou confundiria ("Outras Despesas Não
+      // Classificadas" é o centro da transferência do repasse).
       descricao: montarDescricaoCapa({
         fornecedor_nome: t.fornecedor_nome,
         ref: t.ref,
         parcelas: t.parcelas,
         descricao: t.descricao,
-        categoria: t.centro_custo?.nome ?? null,
+        categoria: secao === "dl" || secao === "resgate" ? null : t.centro_custo?.nome ?? null,
       }),
       banco: bancoNome,
       // "Pix", "Boleto", "Cartão de Crédito"… (era o código cru "pix"/"boleto").
@@ -304,7 +351,10 @@ export async function buildCapaEmpresa(
   }));
   const bancosNum = lista.map((c) => ({ nome: c.nome, slug: bancoSlug(c.banco, c.nome), total: c.total }));
   const totais_bancos: BancoTotalBox[] = lista.map((c) => ({ label: c.nome, valor: brl(c.total) }));
-  const total_geral = buckets.fixa.total + buckets.variavel.total + buckets.eventual.total;
+  // Soma das cinco seções = soma das caixas de banco. Bate com o TOTAL GERAL do
+  // "Exportar PDF" da tela quando o recorte só tem saídas dessas seções —
+  // periódica e sem tipo (fora DL/Resgate) seguem fora: o template não tem seção.
+  const total_geral = (Object.keys(buckets) as Secao[]).reduce((s, k) => s + buckets[k].total, 0);
 
   // ---- Subtotais por banco (4.6 — template antigo) ----
   const somaSlug = (needle: string) =>
@@ -328,7 +378,7 @@ export async function buildCapaEmpresa(
     // 4.3: mês de referência do lote — manual (ex.: "Julho") sobrescreve o automático.
     mes_referencia: args.mesReferenciaLabel?.trim() || mesReferenciaToNome(args.mesReferencia),
     // 4.3: número do lote — manual (ex.: "7º") sobrescreve o automático.
-    numero_mes: args.numeroLote?.trim() || numero_mes,
+    numero_mes: numeroSelo(args.numeroLote) ?? numero_mes,
     realizado_em: formatDataCurta(new Date().toISOString().slice(0, 10)),
     preparado_por: args.preparadoPor ?? "Adriane Estefany",
     periodo,
@@ -347,6 +397,10 @@ export async function buildCapaEmpresa(
     total_variaveis: brl(buckets.variavel.total),
     despesas_eventuais: buckets.eventual.items,
     total_eventuais: brl(buckets.eventual.total),
+    distribuicao_lucro: buckets.dl.items,
+    total_distribuicao_lucro: brl(buckets.dl.total),
+    resgates: buckets.resgate.items,
+    total_resgates: brl(buckets.resgate.total),
   };
 }
 
@@ -359,6 +413,13 @@ export interface BuildCapaSocioArgs {
   preparadoPor?: string;
   /** Recorte por ids (lançamentos TAGUEADOS na tela DL — ajuste 29-jul). */
   ids?: string[];
+  /**
+   * Número da capa no mês, informado no modal (ex.: "2º") — out-2026. O selo
+   * dourado mostrava sempre o número do MÊS ("10º" em outubro); vazio mantém isso.
+   */
+  numeroCapa?: string;
+  /** Mês de referência do selo, informado no modal (ex.: "Outubro"). Vazio = automático. */
+  mesReferenciaLabel?: string;
 }
 
 export async function buildCapaSocio(
@@ -498,8 +559,10 @@ export async function buildCapaSocio(
     nome_socio: socio.nome_completo,
     cpf_socio: "—",
     fazenda: "FAZENDA ARAMBURU",
-    mes_referencia: mesReferenciaToNome(args.mesReferencia),
-    numero_mes,
+    // Selo dourado: o que a Adri informar no modal sobrescreve o automático —
+    // mesmo contrato da Capa Empresa (numero_lote / mes_referencia_label).
+    mes_referencia: args.mesReferenciaLabel?.trim() || mesReferenciaToNome(args.mesReferencia),
+    numero_mes: numeroSelo(args.numeroCapa) ?? numero_mes,
     realizado_em: formatDataCurta(new Date().toISOString().slice(0, 10)),
     preparado_por: args.preparadoPor ?? "Adriane Estefany",
     periodo: mesReferenciaToFraseSocio(args.mesReferencia),

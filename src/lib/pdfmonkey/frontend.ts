@@ -11,9 +11,9 @@ export interface GerarPdfArgs {
   socios_overrides?: RelatorioSociosOverrides; // só p/ relatorio_socios
   /** Recorte (RF-FIN-09): capa_empresa e relatorio_contabil respeitam filtros/seleção. */
   scope?: ReportScope;
-  /** CAPAS (4.3): número do lote informado manualmente — ex.: "7º" (só p/ capa_empresa). */
+  /** Selo dourado — número informado manualmente, ex.: "7º" (capa_empresa e capa_socio). */
   numero_lote?: string;
-  /** CAPAS (4.3): mês de referência do lote — ex.: "Julho" (só p/ capa_empresa). */
+  /** Selo dourado — mês de referência informado manualmente, ex.: "Julho" (capa_empresa e capa_socio). */
   mes_referencia_label?: string;
 }
 

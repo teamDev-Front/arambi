@@ -35,6 +35,7 @@ import {
 } from "@/lib/queries/desfazer";
 import { exportDistribuicaoPdf, exportDistribuicaoXlsx } from "@/lib/export/distribuicao-export";
 import { CamposExportDlModal, type CamposExportDlEscolha } from "./CamposExportDlModal";
+import { SeloCapaFields } from "@/components/relatorios/SeloCapaFields";
 import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
 import {
   STATUS_DL_LABEL, STATUS_DL_COLOR,
@@ -384,6 +385,9 @@ export function DistribuicaoPage() {
   const [capaOpen, setCapaOpen] = useState(false);
   const [capaSocioId, setCapaSocioId] = useState("");
   const [capaSoTagueados, setCapaSoTagueados] = useState(false);
+  // Selo dourado (out-2026): número da capa no mês + mês de referência; vazios = automático.
+  const [capaNumero, setCapaNumero] = useState("");
+  const [capaMesLabel, setCapaMesLabel] = useState("");
   const [capaGerando, setCapaGerando] = useState(false);
 
   // ---- lookups (uma vez) ----
@@ -774,7 +778,7 @@ export function DistribuicaoPage() {
   }
 
   // ---- exportação PDF/XLSX do recorte da tela (ajuste 27-jul) ----
-  function montarFiltrosExport(): string[] {
+  function montarFiltrosExport(qtdNoRecorte?: number): string[] {
     const f: string[] = [];
     f.push(`Competência: ${mesesSel.length ? mesesSel.join(", ") : "todas"}`);
     if (search) f.push(`Busca: "${search}"`);
@@ -793,7 +797,13 @@ export function DistribuicaoPage() {
     if (filterValorMin || filterValorMax) {
       f.push(`Valor: ${filterValorMin ? formatCurrency(Number(filterValorMin)) : "…"} a ${filterValorMax ? formatCurrency(Number(filterValorMax)) : "…"}`);
     }
-    if (mostrarSoTagueados && tags.size > 0) f.push(`Apenas lançamentos tagueados (${tags.size})`);
+    // Tags cruzadas com os demais filtros (idem ao Financeiro, out-2026): quando
+    // nem todas entram, o cabeçalho diz quantas — "(5)" com 3 linhas confundia.
+    if (mostrarSoTagueados && tags.size > 0) {
+      f.push(qtdNoRecorte != null && qtdNoRecorte < tags.size
+        ? `Apenas lançamentos tagueados (${qtdNoRecorte} de ${tags.size})`
+        : `Apenas lançamentos tagueados (${tags.size})`);
+    }
     return f;
   }
 
@@ -811,7 +821,7 @@ export function DistribuicaoPage() {
       escopo: selecionadas.length > 0
         ? `Seleção manual — ${selecionadas.length} lançamento${selecionadas.length === 1 ? "" : "s"}`
         : "Recorte pelos filtros da tela",
-      filtros: selecionadas.length > 0 ? [] : montarFiltrosExport(),
+      filtros: selecionadas.length > 0 ? [] : montarFiltrosExport(alvo.length),
       campos: escolha.campos,
       incluirFiltros: escolha.incluirFiltros,
       incluirTotais: escolha.incluirTotais,
@@ -859,6 +869,8 @@ export function DistribuicaoPage() {
     }
     setCapaSocioId((filterSocios.length === 1 ? filterSocios[0] : "") || socios[0]?.id || "");
     setCapaSoTagueados(tags.size > 0);
+    setCapaNumero("");
+    setCapaMesLabel("");
     setCapaOpen(true);
   }
 
@@ -874,6 +886,8 @@ export function DistribuicaoPage() {
         mes_referencia: mesFoco ?? mesCorrente(),
         socio_id: capaSocioId,
         scope,
+        numero_lote: capaNumero.trim() || undefined,
+        mes_referencia_label: capaMesLabel.trim() || undefined,
       });
       if (res.status === "success" && res.download_url) {
         toast.success("Capa do repasse gerada", "O PDF abriu em outra aba e fica no histórico da tela Relatórios.");
@@ -1989,6 +2003,14 @@ export function DistribuicaoPage() {
               <option key={s.id} value={s.id}>{s.apelido || s.nome_completo}</option>
             ))}
           </Select>
+
+          <SeloCapaFields
+            mesReferencia={mesFoco ?? mesCorrente()}
+            numero={capaNumero}
+            onNumeroChange={setCapaNumero}
+            mes={capaMesLabel}
+            onMesChange={setCapaMesLabel}
+          />
 
           <label className={`flex items-start gap-2 text-sm ${tags.size > 0 ? "text-stone-700 cursor-pointer" : "text-stone-400"}`}>
             <input

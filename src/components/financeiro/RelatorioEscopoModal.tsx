@@ -115,13 +115,21 @@ export function RelatorioEscopoModal({
     return {
       scope_type: "por_filtros",
       filtros: {
-        // só restringe por mês se a tela estava filtrada por mês
-        mes_referencia: typeof filtros.mesReferencia === "string" ? filtros.mesReferencia : undefined,
+        // Competência — 1 ou várias. O seletor da tela virou multi em 17-ago e o
+        // `typeof === "string"` que havia aqui passou a descartar a lista: a capa
+        // saía sem recorte de mês. Sem competência marcada = todos os meses.
+        mes_referencia: filtros.mesReferencia,
         search: filtros.search,
         status: filtros.status,            // 1 status ou lista (filtrosAtuais já manda undefined quando vazio)
         conta_contabil_cod: filtros.contaContabilCod,
         centro_custo_cod: Array.isArray(cc) ? cc : cc ? [cc] : undefined,
         conta_bancaria_id: filtros.contaBancariaId,
+        // Tipo, forma de pgto e "só o lado que sai" (out-2026): o "Exportar PDF"
+        // da tela já respeitava; a capa não — e o total geral dela não fechava
+        // com o do relatório (ex.: entrava o crédito do resgate no SICREDI).
+        tipo_despesa: filtros.tipoDespesa,
+        forma_pgto: filtros.formaPgto,
+        somente_negativos: filtros.somenteNegativos,
         data_de: filtros.dataDe,
         data_ate: filtros.dataAte,
         emissao_de: filtros.emissaoDe,
