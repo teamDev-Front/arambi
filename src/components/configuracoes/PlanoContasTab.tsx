@@ -19,6 +19,11 @@ import {
   derivarNivelParent,
   naturezaSugerida,
   validarCodigo,
+  motivoCodigoTravado,
+  validarTrocaCodigo,
+  deParaTrocaCodigo,
+  trocarCodigoClassificacao,
+  type UsoClassificacao,
 } from "@/lib/queries/configuracoes";
 import type { ClassificacaoFinanceiraRow, NaturezaConta } from "@/types";
 
@@ -72,6 +77,17 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
     });
   }, [rows, search, mostrarInativas, filtroNatureza]);
 
+  const { nivel: nivelForm, parent: parentForm } = derivarNivelParent(form.codigo.trim());
+
+  // Edição: o código pode mudar (RPC 0057), menos os que o sistema procura pelo número.
+  const editRow = editCodigo ? rows.find((r) => r.codigo === editCodigo) ?? null : null;
+  const travaCodigo = editRow ? motivoCodigoTravado(editRow) : null;
+  const codigoNovo = form.codigo.trim();
+  const trocandoCodigo = !!editRow && codigoNovo !== editRow.codigo;
+  const erroTroca = editRow && trocandoCodigo ? validarTrocaCodigo(editRow, codigoNovo, rows) : null;
+  const deParaTroca = editRow && trocandoCodigo && !erroTroca ? deParaTrocaCodigo(editRow.codigo, codigoNovo, rows) : [];
+  const mudaConta = !!editRow && editRow.nivel === 3 && deParaTroca.length > 0 && parentForm !== editRow.parent_codigo;
+
   function openNew() {
     setEditCodigo(null);
     setForm({ ...EMPTY });
@@ -84,8 +100,9 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
   }
 
   // Ao digitar o código (novo), sugere a natureza pela raiz (1=entrada, 2=saída).
+  // Na edição a natureza fica como está (a troca de código não muda de grupo).
   function onCodigoChange(v: string) {
-    setForm((f) => ({ ...f, codigo: v, natureza: v.trim() ? naturezaSugerida(v) : f.natureza }));
+    setForm((f) => ({ ...f, codigo: v, natureza: !editCodigo && v.trim() ? naturezaSugerida(v) : f.natureza }));
   }
 
   async function handleSave() {
@@ -97,11 +114,46 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
     const ordem = form.ordem.trim() === "" ? null : Number(form.ordem);
     if (ordem !== null && !Number.isFinite(ordem)) { toast.error("Ordem inválida", "Use um número ou deixe em branco."); return; }
 
+    // Troca de código: confere e confirma antes de mexer nos lançamentos.
+    if (editRow && trocandoCodigo) {
+      if (erroTroca) { toast.error("Código inválido", erroTroca); return; }
+      let uso: UsoClassificacao;
+      try {
+        uso = await contarUsoClassificacao(editRow.codigo);
+      } catch (e) {
+        toast.error("Não foi possível conferir o uso do código", (e as Error).message);
+        return;
+      }
+      const subcategorias = deParaTroca.slice(1).map((d) => `${d.de} → ${d.para}`).join(", ");
+      const ok = window.confirm(
+        `Trocar o código ${editRow.codigo} → ${codigoNovo}?\n\n` +
+        (subcategorias ? `Subcategorias renumeradas junto: ${subcategorias}.\n` : "") +
+        (uso.transacoes > 0
+          ? `${uso.transacoes} lançamento${uso.transacoes === 1 ? "" : "s"} passa${uso.transacoes === 1 ? "" : "m"} a usar o código novo` +
+            (mudaConta ? ` e a conta ${parentForm}.` : ".")
+          : "Nenhum lançamento usa este código."),
+      );
+      if (!ok) return;
+    }
+
     setSaving(true);
+    let trocou = false;
     try {
       if (editCodigo) {
-        await atualizarClassificacao(editCodigo, { nome: form.nome, natureza: form.natureza, ordem, ativo: form.ativo });
-        toast.success("Classificação atualizada");
+        let codigo = editCodigo;
+        let resumoTroca: string | null = null;
+        if (trocandoCodigo) {
+          const r = await trocarCodigoClassificacao(editCodigo, codigoNovo);
+          trocou = true;
+          codigo = codigoNovo;
+          // Se o resto falhar, a próxima tentativa já parte do código novo.
+          setEditCodigo(codigoNovo);
+          resumoTroca = r.codigos.map((d) => `${d.de} → ${d.para}`).join(", ") +
+            (r.lancamentos > 0 ? ` · ${r.lancamentos} lançamento${r.lancamentos === 1 ? "" : "s"} atualizado${r.lancamentos === 1 ? "" : "s"}` : "");
+        }
+        await atualizarClassificacao(codigo, { nome: form.nome, natureza: form.natureza, ordem, ativo: form.ativo });
+        if (resumoTroca) toast.success("Código alterado", resumoTroca);
+        else toast.success("Classificação atualizada");
       } else {
         await criarClassificacao({ codigo: form.codigo.trim(), nome: form.nome, natureza: form.natureza, ordem, ativo: form.ativo });
         toast.success("Classificação criada");
@@ -110,6 +162,8 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
       await fetchData();
     } catch (e) {
       toast.error("Não foi possível salvar", (e as Error).message);
+      // O código já mudou no banco: a lista precisa mostrar o novo.
+      if (trocou) await fetchData();
     } finally {
       setSaving(false);
     }
@@ -159,8 +213,6 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
       setBusyCodigo(null);
     }
   }
-
-  const { nivel: nivelForm, parent: parentForm } = derivarNivelParent(form.codigo.trim());
 
   return (
     <Card>
@@ -266,11 +318,11 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
               <Input
                 label="Código"
                 value={form.codigo}
-                disabled={!!editCodigo}
+                disabled={!!travaCodigo}
                 onChange={(e) => onCodigoChange(e.target.value)}
                 placeholder="ex.: 1.1.3"
               />
-              {!editCodigo && form.codigo.trim() && (
+              {((!editCodigo && form.codigo.trim()) || deParaTroca.length > 0) && (
                 <p className="text-[11px] text-stone-400 mt-1">
                   {TIPO_NIVEL[nivelForm] ?? `Nível ${nivelForm}`}
                   {parentForm ? ` · dentro de ${parentForm}` : " · raiz"}
@@ -298,10 +350,27 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
             </label>
           </div>
 
-          {editCodigo && (
-            <p className="text-[11px] text-stone-400">
-              O código não pode ser alterado (é referenciado pelos lançamentos). Para renomear o código, crie uma nova e inative esta.
-            </p>
+          {editRow && (
+            travaCodigo ? (
+              <p className="text-[11px] text-stone-400">{travaCodigo}</p>
+            ) : erroTroca ? (
+              <p className="text-[11px] text-red-600">{erroTroca}</p>
+            ) : deParaTroca.length > 0 ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 space-y-0.5">
+                <p>Ao salvar: {deParaTroca.map((d) => `${d.de} → ${d.para}`).join(" · ")}</p>
+                <p>
+                  {mudaConta
+                    ? `Os lançamentos deste centro de custo passam para a conta ${parentForm}.`
+                    : "Os lançamentos acompanham a troca automaticamente."}
+                </p>
+              </div>
+            ) : (
+              <p className="text-[11px] text-stone-400">
+                {editRow.nivel === 2
+                  ? "Ao trocar o código, as subcategorias são renumeradas junto e os lançamentos acompanham automaticamente."
+                  : "Ao trocar o código, os lançamentos acompanham automaticamente — inclusive se o centro de custo mudar de conta."}
+              </p>
+            )
           )}
 
           <div className="flex gap-3 justify-end pt-2">

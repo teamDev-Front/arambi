@@ -46,6 +46,76 @@ export function validarCodigo(codigo: string): string | null {
   return null;
 }
 
+/**
+ * Códigos que automações do banco e relatórios PDF procuram PELO NÚMERO — não
+ * mudam de código. Espelho de fn_classificacao_codigos_sistema() (migration 0057).
+ */
+export const CODIGOS_DO_SISTEMA: ReadonlySet<string> = new Set([
+  // automações do banco: resgate do Invest, DL, transferências da DL, saldo DV
+  "1.8", "1.8.1", "1.9", "1.9.1", "2.8", "2.8.1", "2.9", "2.9.3",
+  // relatórios PDF e telas de Vendas/Provisionamento
+  "1.2", "1.2.1", "1.2.2", "1.3", "1.6",
+  "2.1", "2.1.6", "2.2", "2.2.2", "2.3", "2.3.2", "2.4", "2.4.5",
+  "2.5", "2.6", "2.7", "2.7.2",
+]);
+
+/** Contas com automação pela CONTA: centro de custo não entra nem sai delas trocando o código. */
+const CONTAS_COM_AUTOMACAO = new Set(["1.8", "2.8"]);
+
+/** Por que o código desta classificação não pode mudar (null = pode). */
+export function motivoCodigoTravado(c: Pick<ClassificacaoFinanceiraRow, "codigo" | "nivel">): string | null {
+  if (c.nivel === 1) return "Os grupos raiz (1 Entradas e 2 Saídas) não mudam de código.";
+  if (CODIGOS_DO_SISTEMA.has(c.codigo)) {
+    return "Código usado pelas automações e relatórios do sistema — não pode ser alterado.";
+  }
+  const filho = [...CODIGOS_DO_SISTEMA].find((s) => s.startsWith(c.codigo + "."));
+  if (filho) return `Contém ${filho}, usado pelas automações e relatórios do sistema — não pode ser alterado.`;
+  return null;
+}
+
+/** Confere a troca de código antes de ir ao banco (a RPC confere tudo de novo). */
+export function validarTrocaCodigo(
+  atual: ClassificacaoFinanceiraRow,
+  novoCodigo: string,
+  todas: ClassificacaoFinanceiraRow[],
+): string | null {
+  const novo = novoCodigo.trim();
+  const trava = motivoCodigoTravado(atual);
+  if (trava) return trava;
+  const erroFormato = validarCodigo(novo);
+  if (erroFormato) return erroFormato;
+  const { nivel, parent } = derivarNivelParent(novo);
+  if (nivel !== atual.nivel) {
+    return atual.nivel === 2
+      ? "Precisa continuar como conta contábil (ex.: 1.11)."
+      : "Precisa continuar como centro de custo (ex.: 1.11.2).";
+  }
+  const raiz = atual.codigo.split(".")[0];
+  if (novo.split(".")[0] !== raiz) {
+    return `Precisa continuar começando por ${raiz} (${raiz === "1" ? "Entradas" : "Saídas"}). Para mudar de grupo, crie uma classificação nova.`;
+  }
+  if (todas.some((r) => r.codigo === novo)) return `O código ${novo} já existe.`;
+  if (parent && !todas.some((r) => r.codigo === parent)) return `A conta ${parent} não existe. Crie-a antes.`;
+  if (atual.nivel === 3 && parent !== atual.parent_codigo
+      && (CONTAS_COM_AUTOMACAO.has(atual.parent_codigo ?? "") || CONTAS_COM_AUTOMACAO.has(parent ?? ""))) {
+    return "Centro de custo não entra nem sai de 1.8 (Resgate) ou 2.8 (DL) trocando o código — essas contas têm automações.";
+  }
+  return null;
+}
+
+/** De-para que a troca aplica: o próprio código e as subcategorias (1.10.1 → 1.11.1). */
+export function deParaTrocaCodigo(
+  de: string,
+  para: string,
+  todas: ClassificacaoFinanceiraRow[],
+): { de: string; para: string }[] {
+  return todas
+    .map((r) => r.codigo)
+    .filter((c) => c === de || c.startsWith(de + "."))
+    .sort(compararCodigo)
+    .map((c) => ({ de: c, para: para + c.slice(de.length) }));
+}
+
 // ----------------------------------------------------------------------------
 // CRUD de classificações
 // ----------------------------------------------------------------------------
@@ -89,7 +159,7 @@ export async function criarClassificacao(p: ClassificacaoFormPayload): Promise<C
   return data as ClassificacaoFinanceiraRow;
 }
 
-/** Atualiza o cadastro. NÃO altera o código (é PK + alvo de FKs). */
+/** Atualiza o cadastro. O código muda por trocarCodigoClassificacao (PK + alvo de FKs). */
 export async function atualizarClassificacao(
   codigo: string,
   p: { nome: string; natureza: NaturezaConta; ordem: number | null; ativo: boolean },
@@ -104,6 +174,33 @@ export async function atualizarClassificacao(
   if (error) throw error;
   if (!data) throw new Error("Não foi possível atualizar — sua conta precisa ser administradora.");
   return data as ClassificacaoFinanceiraRow;
+}
+
+export interface ResultadoTrocaCodigo {
+  codigos: { de: string; para: string }[];
+  lancamentos: number;
+  lixeira: number;
+  mudou_conta: boolean;
+}
+
+/**
+ * Troca o código (RPC da migration 0057): subcategorias renumeradas junto,
+ * lançamentos e itens da Lixeira acompanham — tudo ou nada.
+ */
+export async function trocarCodigoClassificacao(de: string, para: string): Promise<ResultadoTrocaCodigo> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc("fn_classificacao_trocar_codigo" as never, {
+    p_de: de,
+    p_para: para,
+  } as never);
+  if (error) {
+    const e = error as { code?: string; message?: string };
+    if (e.code === "PGRST202" || /could not find the function/i.test(e.message ?? "")) {
+      throw new Error("Para trocar o código, a migration 0057 precisa estar aplicada no banco.");
+    }
+    throw new Error(e.message ?? "Não foi possível trocar o código.");
+  }
+  return data as unknown as ResultadoTrocaCodigo;
 }
 
 export async function setAtivoClassificacao(codigo: string, ativo: boolean): Promise<void> {
