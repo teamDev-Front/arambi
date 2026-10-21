@@ -3,7 +3,7 @@
 // Leitura) e módulos liberados. Em "Edição", cada módulo pode ficar só leitura.
 
 import { useMemo, useState } from "react";
-import { Crown, PencilLine, Eye, Lock, Mail, Link2, Check, Info } from "lucide-react";
+import { Crown, PencilLine, Eye, Lock, Mail, Check, Info, KeyRound, RefreshCw } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -14,6 +14,7 @@ import {
   GRUPOS_MODULO, MODULOS_CONCEDIVEIS, MODULOS_EXCLUSIVOS, type ModuloConcedivel,
 } from "@/lib/acessos/modulos";
 import type { MapaPermissoes, NivelModulo } from "@/lib/acessos/permissoes";
+import { REGRAS_SENHA, gerarSenhaProvisoria, senhaValida } from "@/lib/acessos/senha";
 import type { AcessoPayload, UsuarioAcesso } from "@/lib/acessos/tipos";
 
 type NivelForm = "super_admin" | "edicao" | "leitura";
@@ -45,12 +46,16 @@ interface FormState {
   setor: string;
   nivel: NivelForm;
   modulos: MapaPermissoes;
-  enviarEmail: boolean;
+  /** Só na criação: a pessoa entra com ela e cria a própria no 1º acesso. */
+  senhaProvisoria: string;
 }
 
 function estadoInicial(u: UsuarioAcesso | null): FormState {
   if (!u) {
-    return { nome: "", email: "", cargo: "", setor: "", nivel: "leitura", modulos: {}, enviarEmail: true };
+    return {
+      nome: "", email: "", cargo: "", setor: "", nivel: "leitura", modulos: {},
+      senhaProvisoria: gerarSenhaProvisoria(),
+    };
   }
   return {
     nome: u.nome,
@@ -59,7 +64,7 @@ function estadoInicial(u: UsuarioAcesso | null): FormState {
     setor: u.setor ?? "",
     nivel: u.superAdmin ? "super_admin" : u.nivel === "edicao" ? "edicao" : "leitura",
     modulos: u.permissoes,
-    enviarEmail: true,
+    senhaProvisoria: "",
   };
 }
 
@@ -93,8 +98,9 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
     nome: form.nome.trim().length < 3 ? "Informe o nome completo." : null,
     email: novo && !EMAIL_RE.test(form.email.trim()) ? "Informe um e-mail válido." : null,
     modulos: form.nivel !== "super_admin" && qtdModulos === 0 ? "Libere ao menos um módulo." : null,
+    senha: novo && !senhaValida(form.senhaProvisoria) ? "A senha provisória precisa ter 8+ caracteres, com letras e números." : null,
   };
-  const valido = !erros.nome && !erros.email && !erros.modulos;
+  const valido = !erros.nome && !erros.email && !erros.modulos && !erros.senha;
 
   function trocarNivel(nivel: NivelForm) {
     setForm((f) => {
@@ -148,7 +154,7 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
       setor: form.setor.trim() || null,
       superAdmin,
       permissoes,
-      enviarEmail: novo ? form.enviarEmail : undefined,
+      senhaProvisoria: novo ? form.senhaProvisoria : undefined,
     });
   }
 
@@ -348,24 +354,37 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
         </section>
 
         {novo && (
-          <section className="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.enviarEmail}
-                onChange={(e) => set("enviarEmail", e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-stone-300 accent-[#a67c20]"
-              />
-              <span className="text-sm">
-                <span className="flex items-center gap-1.5 font-medium text-stone-800">
-                  <Mail size={14} /> Enviar convite por e-mail
-                </span>
-                <span className="block text-xs leading-relaxed text-stone-500 mt-0.5">
-                  A pessoa recebe um link para criar a própria senha. Desmarcado (ou se o e-mail falhar), você
-                  recebe um <Link2 size={11} className="inline -mt-0.5" /> link de convite para enviar pelo WhatsApp.
-                </span>
-              </span>
-            </label>
+          <section className="space-y-3">
+            <TituloSecao numero={4} titulo="Senha provisória" />
+            <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="min-w-0 flex-1">
+                  <Input
+                    label="Senha para o primeiro acesso"
+                    value={form.senhaProvisoria}
+                    onChange={(e) => set("senhaProvisoria", e.target.value.trim())}
+                    className="font-mono tracking-wider"
+                    icon={<KeyRound size={14} />}
+                    maxLength={72}
+                    error={tentou ? erros.senha ?? undefined : undefined}
+                  />
+                </div>
+                <Button type="button" variant="outline" onClick={() => set("senhaProvisoria", gerarSenhaProvisoria())}>
+                  <RefreshCw size={14} /> Gerar outra
+                </Button>
+              </div>
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                {REGRAS_SENHA.map((r) => (
+                  <li key={r.id} className={cn("flex items-center gap-1 text-[11px]", r.ok(form.senhaProvisoria) ? "text-emerald-700" : "text-stone-400")}>
+                    <Check size={11} className={r.ok(form.senhaProvisoria) ? "" : "opacity-30"} /> {r.label}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-xs leading-relaxed text-stone-500">
+                Depois de criar, você recebe e-mail + senha para mandar à pessoa (WhatsApp). No primeiro acesso,
+                o sistema obriga a criar a própria senha — a provisória deixa de valer.
+              </p>
+            </div>
           </section>
         )}
       </div>
@@ -383,7 +402,7 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
         <div className="flex gap-2">
           <Button variant="ghost" onClick={guard.requestClose} disabled={salvando}>Cancelar</Button>
           <Button onClick={salvar} loading={salvando} disabled={salvando || (tentou && !valido)}>
-            {novo ? (form.enviarEmail ? "Criar e enviar convite" : "Criar e gerar link") : "Salvar alterações"}
+            {novo ? "Criar acesso" : "Salvar alterações"}
           </Button>
         </div>
       </div>

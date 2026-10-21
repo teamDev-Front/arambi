@@ -1,5 +1,5 @@
-// GET  /api/acessos  → lista de usuários com status, módulos e último acesso
-// POST /api/acessos  → cria o acesso e convida (e-mail e/ou link)
+// GET  /api/acessos  → usuários (status, módulos, último acesso) + pedidos de nova senha
+// POST /api/acessos  → cria o acesso com SENHA PROVISÓRIA (sem e-mail)
 // Só Super Admin. Escrita via service role (o RLS da 0058 não deixa o client
 // alterar papel/módulos).
 
@@ -8,12 +8,13 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { autorizarApi, registrarLog } from "@/lib/acessos/servidor";
 import {
-  COLUNAS_PERFIL, MSG_MIGRATION_PENDENTE, carregarUsuario, ehFalhaDeEnvio, ehMigrationPendente,
-  enviarConvite, gerarLink, mapaAuth, montarUsuario, traduzirErroEmail, type PerfilRow,
+  COLUNAS_PERFIL, MSG_MIGRATION_PENDENTE, carregarUsuario, ehMigrationPendente,
+  listarPedidosPendentes, mapaAuth, montarUsuario, traduzirErroSenha, type PerfilRow,
 } from "@/lib/acessos/gestao";
 import { NIVEL_GERAL_LABEL, nivelGeral, normalizarPermissoes, roleDasPermissoes } from "@/lib/acessos/permissoes";
 import { MODULO_POR_KEY, type ModuloKey } from "@/lib/acessos/modulos";
-import type { ListaAcessos, ResultadoConvite } from "@/lib/acessos/tipos";
+import { senhaValida } from "@/lib/acessos/senha";
+import type { ListaAcessos, ResultadoAcesso } from "@/lib/acessos/tipos";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +27,10 @@ const criarSchema = z.object({
   setor: textoOpcional,
   superAdmin: z.boolean(),
   permissoes: z.record(z.string(), z.enum(["leitura", "edicao"])).default({}),
-  enviarEmail: z.boolean().default(true),
+  senhaProvisoria: z.string().refine(senhaValida, "A senha provisória precisa ter 8+ caracteres, com letras e números."),
 });
+
+const pendente = () => NextResponse.json({ error: MSG_MIGRATION_PENDENTE, codigo: "migration_pendente" }, { status: 424 });
 
 export async function GET() {
   const auth = await autorizarApi({ superAdmin: true });
@@ -36,16 +39,16 @@ export async function GET() {
   const admin = createAdminClient();
   const { data, error } = await admin.from("users").select(COLUNAS_PERFIL).order("full_name");
   if (error) {
-    if (ehMigrationPendente(error)) {
-      return NextResponse.json({ error: MSG_MIGRATION_PENDENTE, codigo: "migration_pendente" }, { status: 424 });
-    }
+    if (ehMigrationPendente(error)) return pendente();
     return NextResponse.json({ error: `Falha ao carregar usuários: ${error.message}` }, { status: 500 });
   }
 
+  let pedidos;
   let authPorId;
   try {
-    authPorId = await mapaAuth(admin);
+    [pedidos, authPorId] = await Promise.all([listarPedidosPendentes(admin), mapaAuth(admin)]);
   } catch (e) {
+    if (ehMigrationPendente(e as { code?: string; message?: string })) return pendente();
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
@@ -53,6 +56,7 @@ export async function GET() {
   const nomes = new Map(perfis.map((p) => [p.id, p.full_name?.trim() || p.email]));
   const corpo: ListaAcessos = {
     usuarios: perfis.map((p) => montarUsuario(p, authPorId.get(p.id) ?? null, nomes)),
+    pedidos,
     meuId: auth.user.id,
   };
   return NextResponse.json(corpo);
@@ -73,15 +77,10 @@ export async function POST(req: NextRequest) {
   }
 
   const admin = createAdminClient();
-  const origin = req.nextUrl.origin;
-
-  // Já existe? (perfil = já está em auth.users também)
   const { data: existente, error: errExiste } = await admin
-    .from("users").select("id, ativo, bloqueado_em").eq("email", b.email).maybeSingle();
+    .from("users").select("id, trocar_senha").eq("email", b.email).maybeSingle();
   if (errExiste) {
-    if (ehMigrationPendente(errExiste)) {
-      return NextResponse.json({ error: MSG_MIGRATION_PENDENTE, codigo: "migration_pendente" }, { status: 424 });
-    }
+    if (ehMigrationPendente(errExiste)) return pendente();
     return NextResponse.json({ error: errExiste.message }, { status: 500 });
   }
   if (existente) {
@@ -91,28 +90,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 1) Cria em auth.users — por e-mail, ou só o link (WhatsApp).
-  const resultado: ResultadoConvite = { emailEnviado: false };
-  let userId: string | null = null;
-  if (b.enviarEmail) {
-    const conv = await enviarConvite(admin, origin, b.email, b.nome);
-    if (conv.ok) {
-      userId = conv.user.id;
-      resultado.emailEnviado = true;
-    } else if (ehFalhaDeEnvio(conv.erro)) {
-      resultado.avisoEmail = traduzirErroEmail(conv.erro);
-    } else {
-      return NextResponse.json({ error: `Não foi possível criar o acesso: ${conv.erro.message}` }, { status: 400 });
-    }
+  // 1) Usuário no Supabase Auth já confirmado e com a senha provisória — nenhum e-mail sai.
+  const { data: criado, error: errCriar } = await admin.auth.admin.createUser({
+    email: b.email,
+    password: b.senhaProvisoria,
+    email_confirm: true,
+    user_metadata: { full_name: b.nome },
+  });
+  if (errCriar || !criado?.user) {
+    const jaExiste = /already|registered|exists/i.test(errCriar?.message ?? "");
+    return NextResponse.json(
+      { error: jaExiste ? "Este e-mail já está cadastrado no Supabase Auth." : `Não foi possível criar o acesso: ${traduzirErroSenha(errCriar)}` },
+      { status: jaExiste ? 409 : 400 },
+    );
   }
-  if (!userId) {
-    const gl = await gerarLink(admin, origin, b.email, "invite", b.nome);
-    if (!gl.ok) return NextResponse.json({ error: `Não foi possível criar o acesso: ${gl.erro}` }, { status: 400 });
-    userId = gl.user.id;
-    resultado.link = gl.link;
-  }
+  const userId = criado.user.id;
 
-  // 2) Perfil: o gatilho criou inativo; grava nível/módulos e ativa.
+  // 2) Perfil: o gatilho criou inativo; grava nível/módulos, ativa e exige trocar a senha.
   const role = roleDasPermissoes(b.superAdmin, permissoes);
   const { error: errPerfil } = await admin.from("users").update({
     full_name: b.nome,
@@ -121,12 +115,15 @@ export async function POST(req: NextRequest) {
     role,
     permissoes,
     ativo: true,
+    trocar_senha: true,
     convidado_por: auth.user.id,
     convidado_em: new Date().toISOString(),
   }).eq("id", userId);
   if (errPerfil) {
+    // Sem perfil válido o usuário não serve para nada: desfaz a criação.
+    await admin.auth.admin.deleteUser(userId);
     return NextResponse.json({
-      error: ehMigrationPendente(errPerfil) ? MSG_MIGRATION_PENDENTE : `Usuário criado, mas falhou ao gravar o acesso: ${errPerfil.message}`,
+      error: ehMigrationPendente(errPerfil) ? MSG_MIGRATION_PENDENTE : `Falhou ao gravar o acesso: ${errPerfil.message}`,
     }, { status: 500 });
   }
 
@@ -134,16 +131,18 @@ export async function POST(req: NextRequest) {
   await registrarLog({
     tipo: "auth",
     acao: "ACESSO_CRIADO",
-    descricao: `Criou o acesso de ${b.nome} (${b.email}) — ${NIVEL_GERAL_LABEL[nivel]}${resultado.emailEnviado ? ", convite por e-mail" : ", link de convite"}`,
+    descricao: `Criou o acesso de ${b.nome} (${b.email}) — ${NIVEL_GERAL_LABEL[nivel]}, com senha provisória`,
     usuario: auth.acesso,
     metadados: {
       alvo_id: userId, alvo_email: b.email, nivel,
       modulos: Object.entries(permissoes).map(([k, v]) => `${MODULO_POR_KEY[k as ModuloKey].label} (${v})`),
-      email_enviado: resultado.emailEnviado,
     },
     req,
   });
 
-  resultado.usuario = (await carregarUsuario(admin, userId)) ?? undefined;
-  return NextResponse.json(resultado, { status: 201 });
+  const corpo: ResultadoAcesso = {
+    usuario: await carregarUsuario(admin, userId),
+    credenciais: { email: b.email, senha: b.senhaProvisoria },
+  };
+  return NextResponse.json(corpo, { status: 201 });
 }

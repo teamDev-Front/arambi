@@ -1,49 +1,47 @@
 // Gestão de usuários pelo servidor (service role) — usado só pelas rotas
 // /api/acessos/* e /api/auth/*. NÃO importar em client components.
 //
-// Convites: o Supabase cria o usuário em auth.users; o gatilho da 0058 cria o
-// perfil INATIVO e esta camada grava nível/módulos e ativa. Links de convite
-// copiados apontam para /definir-senha?token_hash=… (o token só é consumido no
-// clique, então o preview do WhatsApp não queima o link).
+// Sem e-mail (0059): o Super Admin cria o acesso com senha provisória e manda
+// para a pessoa; no 1º acesso ela cria a própria senha. "Esqueceu a senha" vira
+// pedido aprovado pelo Super Admin.
 
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import type { User } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { UserRow } from "@/types";
 import { normalizarPermissoes, nivelGeral } from "@/lib/acessos/permissoes";
-import type { StatusAcesso, UsuarioAcesso } from "@/lib/acessos/tipos";
+import type { PedidoSenha, StatusAcesso, UsuarioAcesso } from "@/lib/acessos/tipos";
 
 export type AdminClient = ReturnType<typeof createAdminClient>;
-export type TipoLink = "invite" | "recovery";
 
 export const COLUNAS_PERFIL =
-  "id, email, full_name, cargo, setor, role, ativo, permissoes, senha_definida_em, convidado_por, convidado_em, bloqueado_em, bloqueado_por, created_at";
+  "id, email, full_name, cargo, setor, role, ativo, permissoes, trocar_senha, senha_definida_em, convidado_por, convidado_em, bloqueado_em, bloqueado_por, created_at";
 
 export type PerfilRow = Pick<UserRow,
-  | "id" | "email" | "full_name" | "cargo" | "setor" | "role" | "ativo" | "permissoes"
+  | "id" | "email" | "full_name" | "cargo" | "setor" | "role" | "ativo" | "permissoes" | "trocar_senha"
   | "senha_definida_em" | "convidado_por" | "convidado_em" | "bloqueado_em" | "bloqueado_por" | "created_at">;
 
 export const MSG_MIGRATION_PENDENTE =
-  "A migration 0058 (Acessos) ainda não foi aplicada no banco. Aplique supabase/migrations/0058_acessos.sql no SQL Editor do Supabase.";
+  "Falta aplicar no banco a migration 0059_acessos_sem_email.sql (e a 0058, se ainda não aplicada). Rode no SQL Editor do Supabase.";
 
-/** Postgres 42703 / PostgREST PGRST204 — coluna da 0058 inexistente. */
+/** Coluna/tabela das migrations 0058/0059 inexistente. */
 export function ehMigrationPendente(err: { code?: string; message?: string } | null): boolean {
   if (!err) return false;
-  return err.code === "42703" || err.code === "PGRST204" || /column .* does not exist/i.test(err.message ?? "");
+  return ["42703", "42P01", "PGRST204", "PGRST205"].includes(err.code ?? "")
+    || /(column|relation|table) .* (does not exist|not find)/i.test(err.message ?? "");
 }
 
-export function urlDefinirSenha(origin: string): string {
-  return `${origin}/definir-senha`;
-}
+/** Pedido de nova senha vale por este prazo; depois expira. */
+export const PRAZO_PEDIDO_DIAS = 7;
 
-export function statusDe(p: Pick<PerfilRow, "ativo" | "senha_definida_em" | "bloqueado_em">): StatusAcesso {
+export function statusDe(p: Pick<PerfilRow, "ativo" | "trocar_senha" | "senha_definida_em" | "bloqueado_em">): StatusAcesso {
   if (!p.ativo) return p.bloqueado_em ? "bloqueado" : "sem_liberacao";
-  return p.senha_definida_em ? "ativo" : "convite_pendente";
+  if (p.trocar_senha) return p.senha_definida_em ? "senha_provisoria" : "primeiro_acesso";
+  return "ativo";
 }
 
 export function montarUsuario(
   p: PerfilRow,
-  auth: Pick<User, "last_sign_in_at" | "email_confirmed_at"> | null,
+  auth: Pick<User, "last_sign_in_at"> | null,
   nomes: Map<string, string>,
 ): UsuarioAcesso {
   const permissoes = p.role === "admin" ? {} : normalizarPermissoes(p.permissoes);
@@ -58,7 +56,6 @@ export function montarUsuario(
     nivel: nivelGeral({ role: p.role, permissoes }),
     permissoes,
     status: statusDe(p),
-    emailConfirmado: !!auth?.email_confirmed_at,
     ultimoAcesso: auth?.last_sign_in_at ?? null,
     senhaDefinidaEm: p.senha_definida_em,
     convidadoEm: p.convidado_em,
@@ -97,89 +94,88 @@ export async function carregarUsuario(admin: AdminClient, id: string): Promise<U
 }
 
 // ---------------------------------------------------------------------------
-// E-mails e links
+// Senhas
 // ---------------------------------------------------------------------------
 
-type ErroAuth = { message?: string; status?: number; code?: string };
-
-/** Falha de ENVIO (SMTP, limite) — o convite pode seguir por link. */
-export function ehFalhaDeEnvio(err: ErroAuth | null): boolean {
-  if (!err) return false;
-  const m = (err.message ?? "").toLowerCase();
-  return err.status === 429 || err.status === 500
-    || err.code === "over_email_send_rate_limit" || err.code === "email_address_not_authorized"
-    || m.includes("rate limit") || m.includes("sending") || m.includes("smtp") || m.includes("not authorized");
-}
-
-export function traduzirErroEmail(err: ErroAuth | null): string {
+export function traduzirErroSenha(err: { message?: string; code?: string } | null): string {
   const m = (err?.message ?? "").toLowerCase();
-  if (err?.status === 429 || err?.code === "over_email_send_rate_limit" || m.includes("rate limit")) {
-    return "O Supabase atingiu o limite de envio de e-mails por hora. Tente mais tarde ou envie o link de convite pelo WhatsApp.";
+  if (err?.code === "same_password" || m.includes("different from the old")) {
+    return "A nova senha precisa ser diferente da senha atual (ou da provisória).";
   }
-  return "O Supabase não conseguiu enviar o e-mail. O serviço de e-mail padrão só entrega para membros da equipe do projeto — configure um SMTP próprio no painel. Enquanto isso, envie o link de convite pelo WhatsApp.";
-}
-
-/**
- * Gera o link sem enviar e-mail. Invalida o link anterior do mesmo tipo.
- * invite = ainda não abriu o convite; recovery = já confirmou o e-mail.
- */
-export async function gerarLink(
-  admin: AdminClient,
-  origin: string,
-  email: string,
-  tipo: TipoLink,
-  nome?: string,
-): Promise<{ ok: true; link: string; user: User } | { ok: false; erro: string }> {
-  const { data, error } = tipo === "invite"
-    ? await admin.auth.admin.generateLink({
-        type: "invite", email,
-        options: { redirectTo: urlDefinirSenha(origin), data: nome ? { full_name: nome } : undefined },
-      })
-    : await admin.auth.admin.generateLink({
-        type: "recovery", email,
-        options: { redirectTo: urlDefinirSenha(origin) },
-      });
-  if (error || !data?.properties?.hashed_token) {
-    return { ok: false, erro: error?.message ?? "Falha ao gerar o link." };
+  if (err?.code === "weak_password" || m.includes("weak") || m.includes("pwned") || m.includes("at least")) {
+    return "O Supabase considerou a senha fraca. Escolha outra (mais longa, com letras e números).";
   }
-  const link = `${urlDefinirSenha(origin)}?token_hash=${encodeURIComponent(data.properties.hashed_token)}&type=${tipo}`;
-  return { ok: true, link, user: data.user };
+  return err?.message ?? "Não foi possível definir a senha.";
 }
 
-/** Convite por e-mail (template "Invite user" do Supabase). */
-export async function enviarConvite(
-  admin: AdminClient,
-  origin: string,
-  email: string,
-  nome: string,
-): Promise<{ ok: true; user: User } | { ok: false; erro: ErroAuth }> {
-  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
-    redirectTo: urlDefinirSenha(origin),
-    data: { full_name: nome },
-  });
-  if (error || !data?.user) return { ok: false, erro: error ?? { message: "Falha no convite." } };
-  return { ok: true, user: data.user };
-}
-
-/**
- * E-mail "redefinir senha" (template "Reset password") pelo fluxo implícito:
- * o link funciona em qualquer navegador/aparelho, não só no que pediu.
- */
-export async function enviarRedefinicao(
-  origin: string,
-  email: string,
-): Promise<{ ok: true } | { ok: false; erro: ErroAuth }> {
-  const sb = createSupabaseClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { auth: { flowType: "implicit", persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } },
-  );
-  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: urlDefinirSenha(origin) });
-  return error ? { ok: false, erro: error } : { ok: true };
+/** Troca a senha pela Admin API (sem e-mail). */
+export async function definirSenhaPeloAdmin(admin: AdminClient, id: string, senha: string): Promise<string | null> {
+  const { error } = await admin.auth.admin.updateUserById(id, { password: senha });
+  return error ? traduzirErroSenha(error) : null;
 }
 
 /** Bloqueio também no Supabase Auth (não renova sessão nem entra com senha). */
 export async function banirNoAuth(admin: AdminClient, id: string, banir: boolean): Promise<string | null> {
   const { error } = await admin.auth.admin.updateUserById(id, { ban_duration: banir ? "876000h" : "none" });
   return error ? error.message : null;
+}
+
+// ---------------------------------------------------------------------------
+// Pedidos de nova senha
+// ---------------------------------------------------------------------------
+
+/** "Chrome · Windows" a partir do user agent (só para reconhecer o aparelho). */
+export function descreverDispositivo(ua: string | null): string | null {
+  if (!ua) return null;
+  const nav = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Firefox\//.test(ua) ? "Firefox"
+    : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Navegador";
+  const so = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android"
+    : /Windows/.test(ua) ? "Windows" : /Mac OS X/.test(ua) ? "Mac" : /Linux/.test(ua) ? "Linux" : null;
+  return so ? `${nav} · ${so}` : nav;
+}
+
+/** Expira os pedidos vencidos e devolve os pendentes (mais antigos primeiro). */
+export async function listarPedidosPendentes(admin: AdminClient): Promise<PedidoSenha[]> {
+  const limite = new Date(Date.now() - PRAZO_PEDIDO_DIAS * 86_400_000).toISOString();
+  await admin.from("solicitacoes_senha")
+    .update({ status: "expirada", senha_cifrada: null, decidido_em: new Date().toISOString() })
+    .eq("status", "pendente")
+    .lt("criado_em", limite);
+
+  const { data, error } = await admin
+    .from("solicitacoes_senha")
+    .select("id, user_id, criado_em, ip, user_agent")
+    .eq("status", "pendente")
+    .order("criado_em", { ascending: true });
+  if (error) throw error;
+  if (!data?.length) return [];
+
+  const { data: perfis } = await admin.from("users").select("id, full_name, email").in("id", data.map((p) => p.user_id));
+  const porId = new Map((perfis ?? []).map((u) => [u.id, u]));
+  return data.map((p) => {
+    const u = porId.get(p.user_id);
+    return {
+      id: p.id,
+      usuarioId: p.user_id,
+      nome: u?.full_name?.trim() || u?.email || "—",
+      email: u?.email ?? "—",
+      criadoEm: p.criado_em,
+      ip: p.ip,
+      dispositivo: descreverDispositivo(p.user_agent),
+    };
+  });
+}
+
+/** Cancela pendências da pessoa (novo pedido, senha provisória gerada, exclusão). */
+export async function cancelarPedidosPendentes(admin: AdminClient, userId: string): Promise<void> {
+  await admin.from("solicitacoes_senha")
+    .update({ status: "cancelada", senha_cifrada: null, decidido_em: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("status", "pendente");
+}
+
+/** IP do pedido (cabeçalhos da Vercel) — só se for um IP válido para coluna inet. */
+export function ipDaRequisicao(req: Request): string | null {
+  const bruto = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip");
+  return bruto && /^[0-9a-f.:]+$/i.test(bruto) ? bruto : null;
 }

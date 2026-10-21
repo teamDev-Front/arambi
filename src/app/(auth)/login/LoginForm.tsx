@@ -1,8 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Leaf, Eye, EyeOff, ShieldAlert, MailCheck, ArrowLeft } from "lucide-react";
+import { Leaf, Eye, EyeOff, ShieldAlert, Clock, ArrowLeft, Check } from "lucide-react";
+import { cn } from "@/lib/utils/cn";
+import { REGRAS_SENHA, senhaValida } from "@/lib/acessos/senha";
 
 interface LoginFormProps {
   /** ?motivo= vindo das guardas (bloqueado | sessao). */
@@ -16,23 +18,18 @@ const MOTIVOS: Record<string, string> = {
   sessao: "Sua sessão terminou. Entre novamente.",
 };
 
+type Modo = "entrar" | "pedir" | "pedido-enviado";
+
 export function LoginForm({ motivo, next }: LoginFormProps) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [novaSenha, setNovaSenha] = useState("");
+  const [confirmacao, setConfirmacao] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [modo, setModo] = useState<"entrar" | "recuperar" | "recuperar-enviado">("entrar");
-
-  // Link de convite/redefinição que caiu na Site URL do Supabase (redirect
-  // não liberado no painel) chega aqui com os tokens no #hash: repassa.
-  useEffect(() => {
-    const hash = window.location.hash;
-    if (/access_token=|error_code=|type=(invite|recovery)/.test(hash)) {
-      window.location.replace(`/definir-senha${hash}`);
-    }
-  }, []);
+  const [modo, setModo] = useState<Modo>("entrar");
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -50,9 +47,7 @@ export function LoginForm({ motivo, next }: LoginFormProps) {
       return;
     }
 
-    // Quem entra com senha já aceitou o convite; registra o login na auditoria.
-    // (Bloqueado: o RLS recusa o insert e o proxy desconecta a seguir.)
-    await supabase.rpc("fn_marcar_senha_definida" as never);
+    // Auditoria do login. (Bloqueado: o RLS recusa o insert e o proxy desconecta a seguir.)
     const { data: perfil } = await supabase.from("users").select("full_name").eq("id", data.user.id).maybeSingle();
     await supabase.from("logs").insert({
       tipo: "auth",
@@ -63,34 +58,56 @@ export function LoginForm({ motivo, next }: LoginFormProps) {
       user_agent: navigator.userAgent.slice(0, 300),
     });
 
+    // Com senha provisória, o proxy leva para /definir-senha.
     router.push(next ?? "/dashboard");
     router.refresh();
   }
 
-  async function handleRecuperar(e: React.FormEvent) {
+  async function handlePedido(e: React.FormEvent) {
     e.preventDefault();
+    if (!senhaValida(novaSenha)) { setError("A nova senha ainda não atende aos requisitos."); return; }
+    if (novaSenha !== confirmacao) { setError("As senhas não conferem."); return; }
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/auth/recuperar-senha", {
+      const res = await fetch("/api/auth/solicitar-senha", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, senha: novaSenha }),
       });
-      if (!res.ok && res.status !== 202) {
+      if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? "Não foi possível enviar agora.");
+        throw new Error(j.error ?? "Não foi possível enviar o pedido agora.");
       }
-      setModo("recuperar-enviado");
+      setNovaSenha("");
+      setConfirmacao("");
+      setModo("pedido-enviado");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível enviar agora.");
+      setError(err instanceof Error ? err.message : "Não foi possível enviar o pedido agora.");
     } finally {
       setLoading(false);
     }
   }
 
+  function trocarModo(m: Modo) {
+    setModo(m);
+    setError(null);
+    setShowPw(false);
+  }
+
   const inputCls =
     "h-11 w-full rounded-xl border border-stone-200 bg-stone-50 px-4 text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#c49830] focus:border-transparent transition";
+
+  const olho = (
+    <button
+      type="button"
+      onClick={() => setShowPw(!showPw)}
+      className="absolute right-3 inset-y-0 flex items-center text-stone-400 hover:text-stone-600"
+      aria-label={showPw ? "Ocultar senha" : "Mostrar senha"}
+    >
+      {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+    </button>
+  );
 
   return (
     <div
@@ -134,19 +151,19 @@ export function LoginForm({ motivo, next }: LoginFormProps) {
             border: "1px solid rgba(255,255,255,0.6)",
           }}
         >
-          {modo === "recuperar-enviado" ? (
+          {modo === "pedido-enviado" ? (
             <div className="flex flex-col items-center text-center gap-3">
-              <span className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center">
-                <MailCheck size={22} className="text-emerald-600" />
+              <span className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center">
+                <Clock size={22} className="text-amber-600" />
               </span>
-              <h2 className="text-lg font-bold text-stone-800">Verifique seu e-mail</h2>
+              <h2 className="text-lg font-bold text-stone-800">Pedido enviado</h2>
               <p className="text-sm text-stone-600 leading-relaxed">
-                Se <b>{email}</b> tiver acesso ao AramBI, você vai receber um link para criar uma nova senha.
-                Confira também a caixa de spam.
+                Assim que o administrador aprovar, você já pode entrar com a <b>nova senha</b>.
+                Se tiver pressa, avise o administrador.
               </p>
               <button
                 type="button"
-                onClick={() => { setModo("entrar"); setPassword(""); }}
+                onClick={() => trocarModo("entrar")}
                 className="mt-2 text-sm font-medium text-[#a67c20] hover:underline"
               >
                 Voltar para o login
@@ -160,7 +177,7 @@ export function LoginForm({ motivo, next }: LoginFormProps) {
               <p className="text-sm text-stone-500 mb-6">
                 {modo === "entrar"
                   ? "Acesse o painel de gestão"
-                  : "Informe seu e-mail e enviaremos um link para criar uma nova senha."}
+                  : "Escolha uma nova senha. Ela passa a valer quando o administrador aprovar o pedido."}
               </p>
 
               {modo === "entrar" && motivo && MOTIVOS[motivo] && !error && (
@@ -176,7 +193,7 @@ export function LoginForm({ motivo, next }: LoginFormProps) {
                 </div>
               )}
 
-              <form onSubmit={modo === "entrar" ? handleLogin : handleRecuperar} className="flex flex-col gap-4">
+              <form onSubmit={modo === "entrar" ? handleLogin : handlePedido} className="flex flex-col gap-4">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-sm font-medium text-stone-700">E-mail</label>
                   <input
@@ -190,7 +207,7 @@ export function LoginForm({ motivo, next }: LoginFormProps) {
                   />
                 </div>
 
-                {modo === "entrar" && (
+                {modo === "entrar" ? (
                   <>
                     <div className="flex flex-col gap-1.5">
                       <label className="text-sm font-medium text-stone-700">Senha</label>
@@ -204,24 +221,56 @@ export function LoginForm({ motivo, next }: LoginFormProps) {
                           placeholder="••••••••"
                           className={`${inputCls} pr-11`}
                         />
-                        <button
-                          type="button"
-                          onClick={() => setShowPw(!showPw)}
-                          className="absolute right-3 inset-y-0 flex items-center text-stone-400 hover:text-stone-600"
-                        >
-                          {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
+                        {olho}
                       </div>
                     </div>
 
                     <div className="flex justify-end">
                       <button
                         type="button"
-                        onClick={() => { setModo("recuperar"); setError(null); }}
+                        onClick={() => trocarModo("pedir")}
                         className="text-xs text-[#a67c20] hover:underline"
                       >
                         Esqueceu sua senha?
                       </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-sm font-medium text-stone-700">Nova senha</label>
+                      <div className="relative">
+                        <input
+                          type={showPw ? "text" : "password"}
+                          value={novaSenha}
+                          onChange={(e) => setNovaSenha(e.target.value)}
+                          required
+                          autoComplete="new-password"
+                          className={`${inputCls} pr-11`}
+                        />
+                        {olho}
+                      </div>
+                      <ul className="mt-1 grid grid-cols-3 gap-1">
+                        {REGRAS_SENHA.map((r) => (
+                          <li key={r.id} className={cn("flex items-center gap-1 text-[11px]", r.ok(novaSenha) ? "text-emerald-700" : "text-stone-400")}>
+                            <Check size={11} className={r.ok(novaSenha) ? "opacity-100" : "opacity-30"} /> {r.label}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-sm font-medium text-stone-700">Confirmar nova senha</label>
+                      <input
+                        type={showPw ? "text" : "password"}
+                        value={confirmacao}
+                        onChange={(e) => setConfirmacao(e.target.value)}
+                        required
+                        autoComplete="new-password"
+                        className={inputCls}
+                      />
+                      {confirmacao.length > 0 && confirmacao !== novaSenha && (
+                        <p className="text-xs text-red-600">As senhas não conferem.</p>
+                      )}
                     </div>
                   </>
                 )}
@@ -247,13 +296,13 @@ export function LoginForm({ motivo, next }: LoginFormProps) {
                   )}
                   {modo === "entrar"
                     ? (loading ? "Entrando..." : "Entrar")
-                    : (loading ? "Enviando..." : "Enviar link")}
+                    : (loading ? "Enviando..." : "Enviar pedido ao administrador")}
                 </button>
 
-                {modo === "recuperar" && (
+                {modo === "pedir" && (
                   <button
                     type="button"
-                    onClick={() => { setModo("entrar"); setError(null); }}
+                    onClick={() => trocarModo("entrar")}
                     className="inline-flex items-center justify-center gap-1.5 text-xs text-stone-500 hover:text-[#a67c20]"
                   >
                     <ArrowLeft size={12} /> Voltar para o login

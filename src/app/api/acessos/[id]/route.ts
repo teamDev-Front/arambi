@@ -1,5 +1,5 @@
 // PATCH  /api/acessos/[id] → altera dados, nível e módulos
-// DELETE /api/acessos/[id] → cancela convite pendente (apaga o usuário)
+// DELETE /api/acessos/[id] → exclui acesso que nunca foi usado (apaga o usuário)
 // Só Super Admin. Ninguém rebaixa nem apaga a si mesmo; o banco (0058)
 // recusa deixar o sistema sem Super Admin ativo.
 
@@ -7,7 +7,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { autorizarApi, registrarLog } from "@/lib/acessos/servidor";
-import { carregarUsuario, ehMigrationPendente, MSG_MIGRATION_PENDENTE } from "@/lib/acessos/gestao";
+import { cancelarPedidosPendentes, carregarUsuario, ehMigrationPendente, MSG_MIGRATION_PENDENTE } from "@/lib/acessos/gestao";
 import {
   NIVEL_GERAL_LABEL, nivelGeral, normalizarPermissoes, roleDasPermissoes, type MapaPermissoes,
 } from "@/lib/acessos/permissoes";
@@ -124,28 +124,29 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: ehMigrationPendente(error) ? MSG_MIGRATION_PENDENTE : error.message }, { status: 500 });
   }
   if (!alvo) return NextResponse.json({ error: "Usuário não encontrado." }, { status: 404 });
-  // Só convite que ainda não virou conta; quem já usou o sistema é BLOQUEADO
-  // (preserva o histórico de quem lançou o quê).
+  // Só acesso que nunca foi usado (a pessoa não chegou a criar a senha); quem
+  // já usou o sistema é BLOQUEADO — preserva o histórico de quem lançou o quê.
   if (alvo.senha_definida_em) {
     return NextResponse.json(
-      { error: "Este usuário já ativou a conta. Use Bloquear para tirar o acesso (o histórico fica preservado)." },
+      { error: "Esta pessoa já usou o sistema. Use Bloquear para tirar o acesso (o histórico fica preservado)." },
       { status: 409 },
     );
   }
+  await cancelarPedidosPendentes(admin, id);
 
   const { error: errDel } = await admin.auth.admin.deleteUser(id);
   if (errDel) {
     const ultimoAdmin = /Super Admin/i.test(errDel.message);
     return NextResponse.json(
-      { error: ultimoAdmin ? "O sistema ficaria sem nenhum Super Admin ativo." : `Falha ao cancelar o convite: ${errDel.message}` },
+      { error: ultimoAdmin ? "O sistema ficaria sem nenhum Super Admin ativo." : `Falha ao excluir o acesso: ${errDel.message}` },
       { status: ultimoAdmin ? 409 : 500 },
     );
   }
 
   await registrarLog({
     tipo: "auth",
-    acao: "CONVITE_CANCELADO",
-    descricao: `Cancelou o convite de ${alvo.full_name ?? alvo.email} (${alvo.email})`,
+    acao: "ACESSO_EXCLUIDO",
+    descricao: `Excluiu o acesso (nunca usado) de ${alvo.full_name ?? alvo.email} (${alvo.email})`,
     usuario: auth.acesso,
     metadados: { alvo_id: id, alvo_email: alvo.email },
     req,

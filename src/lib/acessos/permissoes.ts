@@ -24,6 +24,8 @@ export interface AcessoUsuario {
   role: UserRole;
   ativo: boolean;
   permissoes: MapaPermissoes;
+  /** Entrou com senha provisória: só libera o sistema depois de criar a própria (0059). */
+  trocarSenha: boolean;
 }
 
 export const NIVEL_GERAL_LABEL: Record<NivelGeral, string> = {
@@ -83,6 +85,7 @@ export function rotaInicial(a: AcessoUsuario | null | undefined): string {
 export type VereditoRota =
   | { ok: true }
   | { ok: false; motivo: "bloqueado" }
+  | { ok: false; motivo: "trocar_senha" }
   | { ok: false; motivo: "sem_permissao"; destino: string };
 
 /** Decide se o usuário pode abrir a URL — usado pelo proxy. */
@@ -90,6 +93,7 @@ export function verificarRota(a: AcessoUsuario | null, pathname: string): Veredi
   const rota = classificarRota(pathname);
   if (rota.tipo === "fora") return { ok: true };
   if (!a || !a.ativo) return { ok: false, motivo: "bloqueado" };
+  if (a.trocarSenha) return { ok: false, motivo: "trocar_senha" };
   if (rota.tipo === "livre") return { ok: true };
   if (rota.tipo === "desconhecida") {
     return a.role === "admin" ? { ok: true } : { ok: false, motivo: "sem_permissao", destino: "/dashboard/sem-acesso" };

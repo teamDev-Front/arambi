@@ -85,6 +85,8 @@ export type UserRow = {
   convidado_em: string | null;
   bloqueado_em: string | null;
   bloqueado_por: string | null;
+  /** Senha provisória: precisa criar a própria no próximo acesso (0059). */
+  trocar_senha: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -92,7 +94,22 @@ export type UserRow = {
 /** Colunas da 0058 com default no banco (opcionais no insert). */
 type UserColunas0058 =
   | "cargo" | "setor" | "permissoes" | "ativo" | "senha_definida_em"
-  | "convidado_por" | "convidado_em" | "bloqueado_em" | "bloqueado_por";
+  | "convidado_por" | "convidado_em" | "bloqueado_em" | "bloqueado_por" | "trocar_senha";
+
+/** Pedido de nova senha (tela de login → aprovação na tela Acessos, 0059). */
+export type SolicitacaoSenhaRow = {
+  id: string;
+  user_id: string;
+  /** AES-GCM (src/lib/acessos/cifra.ts); NULL depois de decidido. */
+  senha_cifrada: string | null;
+  status: "pendente" | "aprovada" | "recusada" | "cancelada" | "expirada";
+  ip: string | null;
+  user_agent: string | null;
+  criado_em: string;
+  decidido_em: string | null;
+  decidido_por: string | null;
+  motivo: string | null;
+};
 
 export type LogRow = {
   id: string;
@@ -949,6 +966,12 @@ export interface Database {
         Row: UserRow;
         Insert: Omit<UserRow, "created_at" | "updated_at" | UserColunas0058> & Partial<Pick<UserRow, UserColunas0058>>;
         Update: Partial<Omit<UserRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      solicitacoes_senha: {
+        Row: SolicitacaoSenhaRow;
+        Insert: Pick<SolicitacaoSenhaRow, "user_id"> & Partial<Omit<SolicitacaoSenhaRow, "id" | "user_id">>;
+        Update: Partial<Omit<SolicitacaoSenhaRow, "id">>;
         Relationships: EmptyRels;
       };
       logs: {

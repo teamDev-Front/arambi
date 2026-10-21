@@ -81,7 +81,8 @@ const navItems: NavEntry[] = [
   link("configuracoes", Settings),
 ];
 
-export function Sidebar() {
+/** Contadores ao lado do item (ex.: pedidos de nova senha em Acessos). */
+export function Sidebar({ badges = {} }: { badges?: Partial<Record<ModuloKey, number>> }) {
   const pathname = usePathname();
   const { podeVer } = usePermissoes();
   const [collapsed, setCollapsed] = useState(false);
@@ -109,20 +110,31 @@ export function Sidebar() {
         : "text-stone-300 hover:bg-white/6 hover:text-white"
     );
 
-  const renderLink = ({ label, href, icon: Icon }: NavLink, child = false) => {
+  const renderLink = ({ label, href, icon: Icon, modulo }: NavLink, child = false) => {
     const active = isActive(href);
+    const badge = badges[modulo] ?? 0;
     return (
       <Link
         key={href}
         href={href}
-        title={collapsed ? label : undefined}
-        className={linkClasses(active, child)}
+        title={collapsed ? (badge ? `${label} (${badge})` : label) : undefined}
+        className={cn(linkClasses(active, child), "relative")}
       >
         <Icon
           size={child ? 16 : 18}
           className={cn("shrink-0 transition-colors", active ? "text-white" : "text-stone-400 group-hover:text-stone-200")}
         />
-        {!collapsed && <span>{label}</span>}
+        {!collapsed && <span className="flex-1">{label}</span>}
+        {badge > 0 && (
+          <span
+            className={cn(
+              "flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white",
+              collapsed && "absolute right-1 top-1 h-4 min-w-4 px-1 text-[9px]",
+            )}
+          >
+            {badge > 9 ? "9+" : badge}
+          </span>
+        )}
       </Link>
     );
   };

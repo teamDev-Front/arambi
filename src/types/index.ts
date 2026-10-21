@@ -19,6 +19,7 @@ export type {
   SafraDepositoStatus,
   PdfMonkeySlug,
   UserRow,
+  SolicitacaoSenhaRow,
   LogRow,
   ClassificacaoFinanceiraRow,
   StatusConfigRow,

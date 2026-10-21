@@ -16,12 +16,7 @@ import { cn } from "@/lib/utils/cn";
 import { GRUPOS_MODULO, MODULOS, MODULOS_EXCLUSIVOS } from "@/lib/acessos/modulos";
 import { NIVEL_GERAL_LABEL } from "@/lib/acessos/permissoes";
 import { usePermissoes } from "@/components/acessos/PermissoesProvider";
-
-const REGRAS = [
-  { label: "8+ caracteres", ok: (s: string) => s.length >= 8 },
-  { label: "uma letra", ok: (s: string) => /[a-zA-Z]/.test(s) },
-  { label: "um número", ok: (s: string) => /\d/.test(s) },
-];
+import { REGRAS_SENHA, senhaValida } from "@/lib/acessos/senha";
 
 export function MeuPerfilPage() {
   const toast = useToast();
@@ -35,7 +30,7 @@ export function MeuPerfilPage() {
   const [salvandoSenha, setSalvandoSenha] = useState(false);
 
   const liberados = useMemo(() => MODULOS.filter((m) => !m.exclusivoSuperAdmin && podeVer(m.key)), [podeVer]);
-  const senhaOk = REGRAS.every((r) => r.ok(senha)) && senha === confirmacao;
+  const senhaOk = senhaValida(senha) && senha === confirmacao;
 
   if (!acesso) return null;
 
@@ -129,8 +124,8 @@ export function MeuPerfilPage() {
                 error={confirmacao && senha !== confirmacao ? "As senhas não conferem." : undefined}
               />
               <ul className="flex flex-wrap gap-x-3 gap-y-1">
-                {REGRAS.map((r) => (
-                  <li key={r.label} className={cn("flex items-center gap-1 text-[11px]", r.ok(senha) ? "text-emerald-700" : "text-stone-400")}>
+                {REGRAS_SENHA.map((r) => (
+                  <li key={r.id} className={cn("flex items-center gap-1 text-[11px]", r.ok(senha) ? "text-emerald-700" : "text-stone-400")}>
                     <Check size={11} className={r.ok(senha) ? "" : "opacity-30"} /> {r.label}
                   </li>
                 ))}

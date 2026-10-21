@@ -40,16 +40,21 @@ export async function proxy(request: NextRequest) {
 
   const isAuthRoute = pathname.startsWith("/login");
   const isDashRoute = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
+  // Primeiro acesso / senha provisória (0059).
+  const isDefinirSenha = pathname === "/definir-senha";
 
   if (!user && isDashRoute) {
     const next = pathname === "/dashboard" ? "" : `?next=${encodeURIComponent(pathname + request.nextUrl.search)}`;
     return redirecionar(`/login${next}`);
   }
+  if (!user && isDefinirSenha) {
+    return redirecionar("/login");
+  }
   if (user && isAuthRoute) {
     return redirecionar("/dashboard");
   }
 
-  if (user && isDashRoute) {
+  if (user && (isDashRoute || isDefinirSenha)) {
     let acesso;
     try {
       acesso = await carregarAcesso(supabase, user.id);
@@ -59,12 +64,18 @@ export async function proxy(request: NextRequest) {
       console.error("[proxy]", (e as Error).message);
       return supabaseResponse;
     }
-    const veredito = verificarRota(acesso, pathname);
+    if (isDefinirSenha) {
+      // Só faz sentido com senha provisória; quem já tem a própria segue para o sistema.
+      if (acesso?.ativo && !acesso.trocarSenha) return redirecionar("/dashboard");
+      if (acesso?.ativo) return supabaseResponse;
+    }
+    const veredito = verificarRota(acesso, isDefinirSenha ? "/dashboard" : pathname);
     if (!veredito.ok) {
       if (veredito.motivo === "bloqueado") {
         await supabase.auth.signOut({ scope: "local" });
         return redirecionar("/login?motivo=bloqueado");
       }
+      if (veredito.motivo === "trocar_senha") return redirecionar("/definir-senha");
       return redirecionar(veredito.destino);
     }
   }

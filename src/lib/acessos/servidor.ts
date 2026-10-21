@@ -44,6 +44,8 @@ async function exigirSessaoAtiva(): Promise<AcessoUsuario> {
   const s = await obterSessaoAcesso();
   if (!s) redirect("/login");
   if (!s.acesso || !s.acesso.ativo) redirect("/auth/sair?motivo=bloqueado");
+  // Senha provisória: nada abre antes de a pessoa criar a própria (0059).
+  if (s.acesso.trocarSenha) redirect("/definir-senha");
   return s.acesso;
 }
 
@@ -93,6 +95,7 @@ export async function autorizarApi(regra: RegraApi = {}): Promise<AutorizacaoApi
   if (!s) return negar(401, "Não autenticado.");
   const { user, acesso, supabase } = s;
   if (!acesso || !acesso.ativo) return negar(403, "Acesso bloqueado. Fale com o administrador.");
+  if (acesso.trocarSenha) return negar(403, "Crie a sua nova senha antes de continuar.");
   if (regra.superAdmin && !ehSuperAdmin(acesso)) return negar(403, "Apenas o Super Admin pode fazer isso.");
   if (regra.modulos?.length) {
     const nivel = regra.nivel ?? "leitura";

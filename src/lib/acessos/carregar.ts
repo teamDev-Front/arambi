@@ -1,9 +1,10 @@
 // Carrega o perfil de acesso de um usuário a partir de qualquer client
 // Supabase (proxy, server components, route handlers).
 //
-// Funciona com OU sem a migration 0058 aplicada: sem as colunas novas, cai no
-// modelo antigo (admin = tudo; editor = todos os módulos em edição; viewer e
-// socio = todos em leitura) — o deploy do código pode vir antes do SQL.
+// Funciona em degraus, conforme as migrations aplicadas: 0059 (senha
+// provisória) → 0058 (módulos e níveis) → modelo antigo (admin = tudo;
+// editor = todos os módulos em edição; viewer e socio = todos em leitura).
+// Assim o deploy do código pode vir antes do SQL.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { UserRole } from "@/types";
@@ -21,10 +22,14 @@ type LinhaPerfil = {
   setor?: string | null;
   ativo?: boolean | null;
   permissoes?: unknown;
+  trocar_senha?: boolean | null;
 };
 
-const COLUNAS_0058 = "id, email, full_name, role, cargo, setor, ativo, permissoes";
-const COLUNAS_LEGADO = "id, email, full_name, role";
+const DEGRAUS: { colunas: string; legado: boolean }[] = [
+  { colunas: "id, email, full_name, role, cargo, setor, ativo, permissoes, trocar_senha", legado: false },
+  { colunas: "id, email, full_name, role, cargo, setor, ativo, permissoes", legado: false },
+  { colunas: "id, email, full_name, role", legado: true },
+];
 
 /** Postgres 42703 (coluna inexistente) / PostgREST PGRST204. */
 function faltaColuna(err: { code?: string; message?: string } | null): boolean {
@@ -49,6 +54,7 @@ export function paraAcesso(linha: LinhaPerfil, legado = false): AcessoUsuario {
     role: linha.role,
     ativo: legado ? true : linha.ativo === true,
     permissoes,
+    trocarSenha: linha.trocar_senha === true,
   };
 }
 
@@ -63,10 +69,10 @@ export async function carregarAcesso(
   supabase: SupabaseClient<any, any, any>,
   userId: string,
 ): Promise<AcessoUsuario | null> {
-  const r = await supabase.from("users").select(COLUNAS_0058).eq("id", userId).maybeSingle();
-  if (!r.error) return r.data ? paraAcesso(r.data as LinhaPerfil) : null;
-  if (!faltaColuna(r.error)) throw new Error(`Falha ao carregar o perfil de acesso: ${r.error.message}`);
-  const legado = await supabase.from("users").select(COLUNAS_LEGADO).eq("id", userId).maybeSingle();
-  if (legado.error) throw new Error(`Falha ao carregar o perfil de acesso: ${legado.error.message}`);
-  return legado.data ? paraAcesso(legado.data as LinhaPerfil, true) : null;
+  for (const degrau of DEGRAUS) {
+    const r = await supabase.from("users").select(degrau.colunas).eq("id", userId).maybeSingle();
+    if (!r.error) return r.data ? paraAcesso(r.data as unknown as LinhaPerfil, degrau.legado) : null;
+    if (!faltaColuna(r.error)) throw new Error(`Falha ao carregar o perfil de acesso: ${r.error.message}`);
+  }
+  return null;
 }
