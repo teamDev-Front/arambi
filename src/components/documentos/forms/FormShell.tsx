@@ -1,6 +1,7 @@
 "use client";
 import { type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { FileText, Save } from "lucide-react";
 
 interface FormShellProps {
@@ -21,10 +22,12 @@ export function FormShell({
   submitLabel = "Gerar PDF", disabled,
   onSecondary, secondaryLabel = "Salvar sem gerar PDF", secondarySubmitting,
 }: FormShellProps) {
+  // Leitura: sem gerar/salvar — nem pelo botão, nem pelo Enter.
+  const { podeEditar } = useModulo("documentos");
   const busy = submitting || !!secondarySubmitting;
   return (
     <form
-      onSubmit={(e) => { e.preventDefault(); if (!disabled) onSubmit(); }}
+      onSubmit={(e) => { e.preventDefault(); if (!disabled && podeEditar) onSubmit(); }}
       className="flex flex-col"
     >
       <div className="p-6 space-y-5 max-h-[calc(85vh-140px)] overflow-y-auto">
@@ -34,7 +37,7 @@ export function FormShell({
         <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
           Cancelar
         </Button>
-        {onSecondary && (
+        {onSecondary && podeEditar && (
           <Button
             type="button"
             variant="outline"
@@ -46,9 +49,11 @@ export function FormShell({
             <Save size={14} /> {secondaryLabel}
           </Button>
         )}
-        <Button type="submit" disabled={disabled || busy} loading={submitting}>
-          <FileText size={14} /> {submitLabel}
-        </Button>
+        {podeEditar && (
+          <Button type="submit" disabled={disabled || busy} loading={submitting}>
+            <FileText size={14} /> {submitLabel}
+          </Button>
+        )}
       </div>
     </form>
   );

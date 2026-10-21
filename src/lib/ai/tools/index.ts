@@ -10,6 +10,7 @@ import { OBRA_TOOLS } from "./obra";
 import { SAFRA_TOOLS } from "./safra";
 import { VENDAS_TOOLS } from "./vendas";
 import type { ToolContext, ToolDefinition, ToolExecutionResult } from "./types";
+import type { ModuloKey } from "@/lib/acessos/modulos";
 
 export type { ToolContext, ToolDefinition, ToolExecutionResult } from "./types";
 export { publicSchema } from "./types";
@@ -53,8 +54,39 @@ const TOOLS_POR_AGENTE: Record<string, ToolDefinition[]> = {
   "adv-ambiental":   unirTools(COMMON_TOOLS),
 };
 
-export function toolsParaAgente(agenteId: string): ToolDefinition[] {
-  return TOOLS_POR_AGENTE[agenteId] ?? [];
+/**
+ * Módulo que libera cada tool (tela Acessos, 0058): as tools rodam com o admin
+ * client, então o recorte por módulo é feito aqui — a IA só consulta o que a
+ * pessoa enxerga. Tools fora do mapa (COMMON: sócios, bancos, plano de contas)
+ * valem para todos.
+ */
+const MODULO_POR_TOOL = new Map<string, ModuloKey>([
+  ...FINANCEIRO_TOOLS.map((t) => [t.name, "financeiro"] as const),
+  ...FISCAL_TOOLS.map((t) => [t.name, "financeiro"] as const),
+  ...OBRA_TOOLS.map((t) => [t.name, "financeiro"] as const),
+  ...ESTOQUE_TOOLS.map((t) => [t.name, "estoque"] as const),
+  ...SAFRA_TOOLS.map((t) => [t.name, "estoque"] as const),
+  ...VENDAS_TOOLS.map((t) => [t.name, "vendas"] as const),
+]);
+
+/** Tools do agente; com `podeVer`, só as dos módulos liberados para o usuário. */
+export function toolsParaAgente(agenteId: string, podeVer?: (m: ModuloKey) => boolean): ToolDefinition[] {
+  const todas = TOOLS_POR_AGENTE[agenteId] ?? [];
+  if (!podeVer) return todas;
+  return todas.filter((t) => {
+    const modulo = MODULO_POR_TOOL.get(t.name);
+    return !modulo || podeVer(modulo);
+  });
+}
+
+/** Módulos cujas tools o agente teria, mas o usuário não vê (para avisar a IA). */
+export function modulosBloqueadosDoAgente(agenteId: string, podeVer: (m: ModuloKey) => boolean): ModuloKey[] {
+  const fora = new Set<ModuloKey>();
+  for (const t of TOOLS_POR_AGENTE[agenteId] ?? []) {
+    const modulo = MODULO_POR_TOOL.get(t.name);
+    if (modulo && !podeVer(modulo)) fora.add(modulo);
+  }
+  return Array.from(fora);
 }
 
 /**

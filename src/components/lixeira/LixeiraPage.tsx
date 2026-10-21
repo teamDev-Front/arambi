@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/ui/Toast";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import {
   Trash2, Undo2, Search, Loader2, AlertTriangle, Eye, ShieldQuestion,
 } from "lucide-react";
@@ -36,6 +37,8 @@ function quando(iso: string): string {
  */
 export function LixeiraPage() {
   const toast = useToast();
+  // Leitura: lista e vê os campos; restaurar e apagar de vez exigem edição.
+  const { podeEditar } = useModulo("lixeira");
   const [itens, setItens] = useState<LixeiraItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [indisponivel, setIndisponivel] = useState(false);
@@ -68,10 +71,12 @@ export function LixeiraPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // Expurga o que passou dos 30 dias ao abrir a tela: a lixeira só precisa
-  // estar limpa quando alguém a olha — dispensa agendador.
+  // estar limpa quando alguém a olha — dispensa agendador. Só quem edita
+  // expurga; a view já esconde o que expirou.
   useEffect(() => {
+    if (!podeEditar) return;
     expurgarLixeira().catch(() => undefined);
-  }, []);
+  }, [podeEditar]);
 
   const porTabela = useMemo(() => {
     const m = new Map<string, number>();
@@ -80,6 +85,7 @@ export function LixeiraPage() {
   }, [itens]);
 
   async function restaurar(item: LixeiraItem) {
+    if (!podeEditar) return;
     setOcupado(item.id);
     try {
       await restaurarDaLixeira(item.id);
@@ -97,6 +103,7 @@ export function LixeiraPage() {
   }
 
   async function descartar(item: LixeiraItem) {
+    if (!podeEditar) return;
     if (!confirm(
       `Apagar DEFINITIVAMENTE este item da lixeira?\n\n${item.resumo ?? ""}\n\n` +
       `Depois disso não há como recuperá-lo. Sem fazer nada, ele sairia sozinho em ${item.dias_restantes} dia(s).`
@@ -225,16 +232,18 @@ export function LixeiraPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            loading={ocupado === i.id}
-                            disabled={ocupado !== null}
-                            onClick={() => restaurar(i)}
-                            title="Devolve o lançamento ao módulo de origem, exatamente como estava"
-                          >
-                            <Undo2 size={13} /> Restaurar
-                          </Button>
+                          {podeEditar && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              loading={ocupado === i.id}
+                              disabled={ocupado !== null}
+                              onClick={() => restaurar(i)}
+                              title="Devolve o lançamento ao módulo de origem, exatamente como estava"
+                            >
+                              <Undo2 size={13} /> Restaurar
+                            </Button>
+                          )}
                           <button
                             onClick={() => setVerItem(i)}
                             className="p-1.5 rounded hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition"
@@ -242,14 +251,16 @@ export function LixeiraPage() {
                           >
                             <Eye size={14} />
                           </button>
-                          <button
-                            onClick={() => descartar(i)}
-                            disabled={ocupado !== null}
-                            className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition disabled:opacity-40"
-                            title="Apagar definitivamente agora (não dá para recuperar depois)"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {podeEditar && (
+                            <button
+                              onClick={() => descartar(i)}
+                              disabled={ocupado !== null}
+                              className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition disabled:opacity-40"
+                              title="Apagar definitivamente agora (não dá para recuperar depois)"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -296,13 +307,15 @@ export function LixeiraPage() {
             </div>
             <div className="flex justify-end gap-2 pt-1">
               <Button variant="ghost" onClick={() => setVerItem(null)}>Fechar</Button>
-              <Button
-                loading={ocupado === verItem.id}
-                disabled={ocupado !== null}
-                onClick={async () => { const alvo = verItem; setVerItem(null); await restaurar(alvo); }}
-              >
-                <Undo2 size={14} /> Restaurar
-              </Button>
+              {podeEditar && (
+                <Button
+                  loading={ocupado === verItem.id}
+                  disabled={ocupado !== null}
+                  onClick={async () => { const alvo = verItem; setVerItem(null); await restaurar(alvo); }}
+                >
+                  <Undo2 size={14} /> Restaurar
+                </Button>
+              )}
             </div>
           </div>
         )}

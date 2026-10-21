@@ -21,7 +21,9 @@
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { autorizarApi } from "@/lib/acessos/servidor";
+import type { ModuloKey } from "@/lib/acessos/modulos";
 import {
   createDocument, isPdfMonkeyEnabled,
   PdfMonkeyConfigError, PdfMonkeyApiError,
@@ -55,6 +57,14 @@ interface Body {
   mes_referencia_label?: string;
 }
 
+// Gerar PDF é "extração de documento": basta VER um destes módulos (0058).
+const MODULOS_DO_SLUG: Record<PdfMonkeySlug, ModuloKey[]> = {
+  capa_empresa:       ["relatorios", "financeiro"],
+  relatorio_contabil: ["relatorios", "financeiro"],
+  capa_socio:         ["relatorios", "distribuicao"],
+  relatorio_socios:   ["relatorios"],
+};
+
 const VALID_SLUGS: PdfMonkeySlug[] = [
   "capa_empresa", "capa_socio", "relatorio_contabil", "relatorio_socios",
 ];
@@ -85,7 +95,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const supabase = await createClient();
+  const auth = await autorizarApi({ modulos: MODULOS_DO_SLUG[slug] });
+  if (!auth.ok) return auth.resposta;
+  // Leitura dos dados com a sessão do usuário (RLS); o histórico de gerações é
+  // gravado pelo servidor — quem só tem leitura também extrai PDF.
+  const supabase = auth.supabase;
+  const admin = createAdminClient();
 
   // 1) Monta o payload — usa o que veio no body se fornecido, senão chama o builder
   let payload: AnyPayload;
@@ -129,7 +144,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 2) Cria registro de geração ("pending") antes de chamar a API
-  const { data: geracao, error: insertErr } = await supabase
+  const { data: geracao, error: insertErr } = await admin
     .from("pdfmonkey_geracoes")
     .insert({
       template_slug: slug,
@@ -142,7 +157,7 @@ export async function POST(req: NextRequest) {
       scope_applied: body.scope ? (body.scope as unknown as Json) : null,
       download_url: null,
       erro: null,
-      created_by: null,
+      created_by: auth.user.id,
     })
     .select("id")
     .maybeSingle();
@@ -159,7 +174,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    await supabase
+    await admin
       .from("pdfmonkey_geracoes")
       .update({
         pdfmonkey_document_id: doc.id,
@@ -179,7 +194,7 @@ export async function POST(req: NextRequest) {
     const msg = e instanceof PdfMonkeyConfigError ? e.message
       : e instanceof PdfMonkeyApiError ? `PDFMonkey ${e.status}: ${JSON.stringify(e.body).slice(0, 500)}`
       : (e as Error).message;
-    await supabase.from("pdfmonkey_geracoes").update({ status: "failure", erro: msg }).eq("id", geracao!.id);
+    await admin.from("pdfmonkey_geracoes").update({ status: "failure", erro: msg }).eq("id", geracao!.id);
     return NextResponse.json({ error: msg, geracao_id: geracao!.id }, { status: 502 });
   }
 }

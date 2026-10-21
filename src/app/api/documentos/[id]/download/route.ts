@@ -2,7 +2,7 @@
 // Devolve uma signed URL temporária para baixar o PDF do bucket.
 
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { autorizarApi } from "@/lib/acessos/servidor";
 
 const BUCKET = "documentos-gerados";
 const TTL_SEC = 60 * 10;
@@ -14,9 +14,10 @@ export async function GET(
   const { id } = await ctx.params;
   if (!id) return NextResponse.json({ error: "id obrigatório" }, { status: 400 });
 
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+  // Baixar é leitura: basta ver o módulo Documentos.
+  const auth = await autorizarApi({ modulos: ["documentos"] });
+  if (!auth.ok) return auth.resposta;
+  const { supabase } = auth;
 
   const { data: row, error } = await supabase
     .from("documentos_gerados")

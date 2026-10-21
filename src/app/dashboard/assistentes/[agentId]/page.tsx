@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { ChatPage } from "@/components/assistentes/ChatPage";
+import { exigirModulo } from "@/lib/acessos/servidor";
 
 // Lista de agentes desativados temporariamente (reunião 15/05/2026).
 // Acessos diretos via URL são redirecionados para o hub.
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default async function Page({ params }: Props) {
+  await exigirModulo("assistentes");
   const { agentId } = await params;
   if (AGENTES_DESATIVADOS.has(agentId)) {
     redirect("/dashboard/assistentes");

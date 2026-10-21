@@ -21,6 +21,7 @@ import {
   Wallet,
   PiggyBank,
   Settings,
+  ShieldCheck,
   Users,
   CalendarClock,
   Wheat,
@@ -31,8 +32,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
+import { MODULO_POR_KEY, type ModuloKey } from "@/lib/acessos/modulos";
+import { usePermissoes } from "@/components/acessos/PermissoesProvider";
 
-type NavLink = { label: string; href: string; icon: LucideIcon };
+type NavLink = { label: string; href: string; icon: LucideIcon; modulo: ModuloKey };
 type NavGroup = { label: string; icon: LucideIcon; children: NavLink[] };
 type NavEntry = NavLink | NavGroup;
 
@@ -40,37 +43,47 @@ function isGroup(entry: NavEntry): entry is NavGroup {
   return "children" in entry;
 }
 
+// Rótulo e rota vêm do catálogo de módulos (o mesmo das guardas de acesso).
+const link = (modulo: ModuloKey, icon: LucideIcon): NavLink => ({
+  label: MODULO_POR_KEY[modulo].label,
+  href: MODULO_POR_KEY[modulo].href,
+  icon,
+  modulo,
+});
+
 const navItems: NavEntry[] = [
-  { label: "Home", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Financeiro", href: "/dashboard/financeiro", icon: TrendingUp },
-  { label: "Distribuição de Lucro", href: "/dashboard/distribuicao", icon: Users },
-  { label: "Bancos", href: "/dashboard/bancos", icon: Landmark },
-  { label: "Saldos Mensais", href: "/dashboard/saldos", icon: Wallet },
-  { label: "Orçamentos", href: "/dashboard/orcamentos", icon: PiggyBank },
-  { label: "Provisionamento Anual", href: "/dashboard/provisionamento", icon: CalendarClock },
-  { label: "Vendas Futuras", href: "/dashboard/vendas-futuras", icon: HandCoins },
+  link("home", LayoutDashboard),
+  link("financeiro", TrendingUp),
+  link("distribuicao", Users),
+  link("bancos", Landmark),
+  link("saldos", Wallet),
+  link("orcamentos", PiggyBank),
+  link("provisionamento", CalendarClock),
+  link("vendas", HandCoins),
   {
     label: "Estoque & Safra",
     icon: Sprout,
     children: [
-      { label: "Culturas & Safra", href: "/dashboard/estoque", icon: Wheat },
-      { label: "Animais", href: "/dashboard/animais", icon: PawPrint },
-      { label: "Maquinário", href: "/dashboard/maquinario", icon: Tractor },
-      { label: "Horta", href: "/dashboard/horta", icon: Carrot },
+      link("estoque", Wheat),
+      link("animais", PawPrint),
+      link("maquinario", Tractor),
+      link("horta", Carrot),
     ],
   },
-  { label: "Operação de Campo", href: "/dashboard/operacao", icon: ClipboardList },
-  { label: "Relatórios PDF", href: "/dashboard/relatorios", icon: FileBarChart },
-  { label: "Documentos", href: "/dashboard/documentos", icon: FileText },
-  { label: "Assistentes IA", href: "/dashboard/assistentes", icon: Bot },
-  { label: "Recibos & Termos", href: "/dashboard/recibos", icon: Receipt },
-  { label: "Lixeira", href: "/dashboard/lixeira", icon: Trash2 },
-  { label: "Logs do Sistema", href: "/dashboard/logs", icon: ScrollText },
-  { label: "Configurações", href: "/dashboard/configuracoes", icon: Settings },
+  link("operacao", ClipboardList),
+  link("relatorios", FileBarChart),
+  link("documentos", FileText),
+  link("assistentes", Bot),
+  link("recibos", Receipt),
+  link("lixeira", Trash2),
+  link("logs", ScrollText),
+  link("acessos", ShieldCheck),
+  link("configuracoes", Settings),
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { podeVer } = usePermissoes();
   const [collapsed, setCollapsed] = useState(false);
   // Grupos abertos: inicia aberto se a rota atual está dentro do grupo.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
@@ -138,9 +151,12 @@ export function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 py-4 flex flex-col gap-0.5 px-2 overflow-y-auto">
         {navItems.map((entry) => {
-          if (!isGroup(entry)) return renderLink(entry);
+          // Menu só com os módulos liberados (tela Acessos).
+          if (!isGroup(entry)) return podeVer(entry.modulo) ? renderLink(entry) : null;
 
-          const { label, icon: Icon, children } = entry;
+          const { label, icon: Icon } = entry;
+          const children = entry.children.filter((c) => podeVer(c.modulo));
+          if (children.length === 0) return null;
           const groupActive = children.some((c) => isActive(c.href));
           const open = openGroups[label] ?? false;
 

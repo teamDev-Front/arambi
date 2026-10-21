@@ -15,7 +15,7 @@
 //   }
 
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { autorizarApi } from "@/lib/acessos/servidor";
 import { gerarDocumentoPdf, resumoDocumento, type DocumentoPayloadMap } from "@/lib/pdf";
 import type { DocumentoGeradoTipo, Json } from "@/types";
 
@@ -60,11 +60,10 @@ export async function POST(req: NextRequest) {
   // id presente → edição (RF-09): registra uma nova versão do documento existente.
   const editId = typeof body.id === "string" && body.id ? body.id : null;
 
-  const supabase = await createClient();
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-  }
+  // Gerar/versionar documento grava dados: exige EDIÇÃO em Documentos (0058).
+  const auth = await autorizarApi({ modulos: ["documentos"], nivel: "edicao" });
+  if (!auth.ok) return auth.resposta;
+  const { supabase, user } = auth;
 
   const tipo  = body.tipo;
   const dados = body.dados as DocumentoPayloadMap[typeof tipo];

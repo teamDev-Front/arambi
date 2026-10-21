@@ -1,101 +1,128 @@
 "use client";
-import { useState, useMemo } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Pagination } from "@/components/ui/Pagination";
-import { Search, Download, RefreshCw, Shield, MessageSquare, Upload, ArrowDown, Database, Settings } from "lucide-react";
+import { useToast } from "@/components/ui/Toast";
+import { Search, Download, RefreshCw, Shield, MessageSquare, Upload, ArrowDown, Database, Settings, ChevronRight, Loader2 } from "lucide-react";
 import { formatDateTime } from "@/lib/utils/format";
+import { listarLogs, type LogLinha } from "@/lib/queries/logs";
+import { exportLogsXlsx } from "@/lib/export/logs-export";
+import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
+import type { LogTipo } from "@/types";
 
-type LogTipo = "auth" | "chat" | "import" | "export" | "crud" | "system";
-
-interface LogEntry {
-  id: string;
-  tipo: LogTipo;
-  acao: string;
-  descricao: string;
-  usuario: string;
-  ip: string;
-  created_at: string;
-}
-
-function genId() { return Math.random().toString(36).slice(2); }
+// Auditoria real (tabela logs, migration 0007 + RLS 0058): acessos, convites,
+// bloqueios, logins e logouts. Antes desta versão a tela mostrava exemplos fixos.
 
 const tipoBadge: Record<LogTipo, { variant: "success"|"info"|"warning"|"neutral"|"accent"|"danger"; label: string; icon: React.ReactNode }> = {
-  auth:   { variant: "success", label: "Auth",     icon: <Shield size={11}/> },
-  chat:   { variant: "info",    label: "Chat",     icon: <MessageSquare size={11}/> },
-  import: { variant: "warning", label: "Importação",icon: <Upload size={11}/> },
-  export: { variant: "accent",  label: "Exportação",icon: <ArrowDown size={11}/> },
-  crud:   { variant: "neutral", label: "CRUD",     icon: <Database size={11}/> },
-  system: { variant: "danger",  label: "Sistema",  icon: <Settings size={11}/> },
+  auth:   { variant: "success", label: "Acesso",     icon: <Shield size={11}/> },
+  chat:   { variant: "info",    label: "Chat",       icon: <MessageSquare size={11}/> },
+  import: { variant: "warning", label: "Importação", icon: <Upload size={11}/> },
+  export: { variant: "accent",  label: "Exportação", icon: <ArrowDown size={11}/> },
+  crud:   { variant: "neutral", label: "CRUD",       icon: <Database size={11}/> },
+  system: { variant: "danger",  label: "Sistema",    icon: <Settings size={11}/> },
 };
 
-const USERS = ["adriana@arambi.com","joao@arambi.com","sistema","maria@arambi.com"];
+const PAGE_SIZE = 15;
 
-function randomDate(base = new Date()) {
-  const d = new Date(base.getTime() - Math.random() * 7 * 24 * 60 * 60 * 1000);
-  return d.toISOString();
+function normalizar(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
-function mkLog(tipo: LogTipo, acao: string, descricao: string, usuario: string, ip: string): LogEntry {
-  return { id: genId(), tipo, acao, descricao, usuario, ip, created_at: randomDate() };
+/** Metadados em linhas legíveis ("Módulos: Financeiro (edição), …"). */
+function detalhes(meta: LogLinha["metadados"]): [string, string][] {
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return [];
+  const rotulos: Record<string, string> = {
+    alvo_email: "Usuário afetado", nivel: "Nível", nivel_antes: "Nível antes", nivel_depois: "Nível depois",
+    modulos: "Módulos", mudancas: "Mudanças", email_enviado: "E-mail enviado", motivo: "Motivo", aviso_auth: "Aviso do Auth",
+  };
+  return Object.entries(meta)
+    .filter(([k]) => k in rotulos)
+    .map(([k, v]) => [
+      rotulos[k],
+      Array.isArray(v) ? v.join(" · ") : typeof v === "boolean" ? (v ? "sim" : "não") : String(v ?? "—"),
+    ]);
 }
-
-const LOGS: LogEntry[] = [
-  mkLog("auth",   "LOGIN",          "Login bem-sucedido",                        USERS[0], "192.168.1.10"),
-  mkLog("crud",   "CREATE",         "Nova transação: Contrato de Serviços",       USERS[0], "192.168.1.10"),
-  mkLog("chat",   "CHAT_MESSAGE",   "Mensagem enviada ao Assistente Financeiro",  USERS[0], "192.168.1.10"),
-  mkLog("export", "EXPORT_PDF",     "Exportação de relatório financeiro jan/2024",USERS[1], "192.168.1.11"),
-  mkLog("import", "IMPORT_SHEET",   "Importação da planilha fev/2024",            USERS[0], "192.168.1.10"),
-  mkLog("auth",   "LOGOUT",         "Sessão encerrada",                           USERS[1], "192.168.1.11"),
-  mkLog("crud",   "UPDATE",         "Produto 'Sementes Milho HB' atualizado",     USERS[2], "127.0.0.1"),
-  mkLog("system", "CRON_JOB",       "Sync automático com Supabase",               "sistema","127.0.0.1"),
-  mkLog("crud",   "DELETE",         "Documento 'Nota Fiscal 99.pdf' removido",    USERS[3], "192.168.1.12"),
-  mkLog("auth",   "LOGIN",          "Login bem-sucedido",                         USERS[3], "192.168.1.12"),
-  mkLog("export", "EXPORT_RECIBO",  "Recibo REC-001 exportado em PDF",            USERS[0], "192.168.1.10"),
-  mkLog("import", "IMPORT_ESTOQUE", "47 produtos importados via CSV",             USERS[0], "192.168.1.10"),
-].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-const PAGE_SIZE = 10;
-
-const TIPO_COUNTS = (Object.keys(tipoBadge) as LogTipo[]).map(t => ({
-  tipo: t, count: LOGS.filter(l => l.tipo === t).length, ...tipoBadge[t],
-}));
 
 export function LogsPage() {
+  const toast = useToast();
+  const [logs, setLogs] = useState<LogLinha[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterTipo, setFilterTipo] = useState<LogTipo | "">("");
   const [filterUser, setFilterUser] = useState("");
   const [page, setPage] = useState(1);
+  const [aberto, setAberto] = useState<string | null>(null);
 
-  const filtered = useMemo(() => LOGS.filter((l) => {
-    const q = search.toLowerCase();
-    return (
-      (!q || l.descricao.toLowerCase().includes(q) || l.acao.toLowerCase().includes(q) || l.usuario.toLowerCase().includes(q)) &&
+  const avisarErro = useCallback((e: unknown) => {
+    toast.error("Erro ao carregar os logs", e instanceof Error ? e.message : undefined);
+  }, [toast]);
+
+  useEffect(() => {
+    let ativo = true;
+    listarLogs()
+      .then((r) => { if (ativo) setLogs(r); })
+      .catch((e) => { if (ativo) avisarErro(e); })
+      .finally(() => { if (ativo) setLoading(false); });
+    return () => { ativo = false; };
+  }, [avisarErro]);
+
+  async function carregar() {
+    setLoading(true);
+    try {
+      setLogs(await listarLogs());
+    } catch (e) {
+      avisarErro(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const usuarios = useMemo(
+    () => Array.from(new Set(logs.map((l) => l.usuario_nome ?? "Sistema"))).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    [logs],
+  );
+
+  const tipoCounts = useMemo(() => (Object.keys(tipoBadge) as LogTipo[]).map((t) => ({
+    tipo: t, count: logs.filter((l) => l.tipo === t).length, ...tipoBadge[t],
+  })), [logs]);
+
+  const filtered = useMemo(() => {
+    const q = normalizar(search.trim());
+    return logs.filter((l) =>
+      (!q || normalizar(`${l.descricao ?? ""} ${l.acao} ${l.usuario_nome ?? ""}`).includes(q)) &&
       (!filterTipo || l.tipo === filterTipo) &&
-      (!filterUser || l.usuario === filterUser)
+      (!filterUser || (l.usuario_nome ?? "Sistema") === filterUser),
     );
-  }), [search, filterTipo, filterUser]);
+  }, [logs, search, filterTipo, filterUser]);
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  async function exportar() {
+    if (filtered.length === 0) { toast.warning("Nada para exportar com esses filtros."); return; }
+    exportLogsXlsx(filtered, (t) => tipoBadge[t].label, linhaEmissao(await getNomeUsuarioAtual()));
+  }
 
   return (
     <div className="space-y-6 max-w-[1600px]">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-[#0f1f1c]">Logs do Sistema</h1>
-          <p className="text-sm text-stone-500">Auditoria completa de chats, importações, exportações e banco de dados</p>
+          <p className="text-sm text-stone-500">Auditoria de acessos: convites, alterações de permissão, bloqueios, logins e saídas</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm"><RefreshCw size={14} /></Button>
-          <Button variant="outline" size="sm"><Download size={14} /> Exportar Logs</Button>
+          <Button variant="ghost" size="sm" onClick={() => void carregar()} title="Atualizar">
+            <RefreshCw size={14} className={loading ? "animate-spin" : undefined} />
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void exportar()}><Download size={14} /> Exportar Logs</Button>
         </div>
       </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-        {TIPO_COUNTS.map(({ tipo, count, label, variant, icon }) => (
+        {tipoCounts.map(({ tipo, count, label, variant, icon }) => (
           <button
             key={tipo}
             onClick={() => { setFilterTipo(filterTipo === tipo ? "" : tipo); setPage(1); }}
@@ -131,7 +158,7 @@ export function LogsPage() {
             </select>
             <select value={filterUser} onChange={(e) => { setFilterUser(e.target.value); setPage(1); }} className="h-8 rounded-lg border border-stone-200 px-2 text-xs focus:outline-none">
               <option value="">Todos os usuários</option>
-              {USERS.map(u => <option key={u}>{u}</option>)}
+              {usuarios.map(u => <option key={u}>{u}</option>)}
             </select>
           </div>
         </CardHeader>
@@ -146,24 +173,55 @@ export function LogsPage() {
                 </tr>
               </thead>
               <tbody>
+                {loading && logs.length === 0 && (
+                  <tr><td colSpan={6} className="px-4 py-10 text-center text-stone-400">
+                    <Loader2 size={16} className="inline animate-spin mr-2" />Carregando...
+                  </td></tr>
+                )}
                 {paged.map((log) => {
                   const meta = tipoBadge[log.tipo];
+                  const linhas = detalhes(log.metadados);
+                  const expandido = aberto === log.id;
                   return (
-                    <tr key={log.id} className="border-b border-stone-50 hover:bg-stone-50 transition table-row-alt">
-                      <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">{formatDateTime(log.created_at)}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant={meta.variant}>
-                          <span className="flex items-center gap-1">{meta.icon}{meta.label}</span>
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-stone-600">{log.acao}</td>
-                      <td className="px-4 py-3 text-stone-600 text-xs max-w-[260px] truncate">{log.descricao}</td>
-                      <td className="px-4 py-3 text-stone-500 text-xs">{log.usuario}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-stone-400">{log.ip}</td>
-                    </tr>
+                    <Fragment key={log.id}>
+                      <tr
+                        className={`border-b border-stone-50 hover:bg-stone-50 transition table-row-alt ${linhas.length ? "cursor-pointer" : ""}`}
+                        onClick={() => linhas.length && setAberto(expandido ? null : log.id)}
+                      >
+                        <td className="px-4 py-3 text-stone-500 text-xs whitespace-nowrap">
+                          {linhas.length > 0 && (
+                            <ChevronRight size={12} className={`inline -ml-1 mr-1 text-stone-400 transition-transform ${expandido ? "rotate-90" : ""}`} />
+                          )}
+                          {formatDateTime(log.created_at)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant={meta.variant}>
+                            <span className="flex items-center gap-1">{meta.icon}{meta.label}</span>
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-stone-600">{log.acao}</td>
+                        <td className="px-4 py-3 text-stone-600 text-xs max-w-[420px] truncate" title={log.descricao ?? ""}>{log.descricao}</td>
+                        <td className="px-4 py-3 text-stone-500 text-xs">{log.usuario_nome ?? "Sistema"}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-stone-400">{log.ip ?? "—"}</td>
+                      </tr>
+                      {expandido && (
+                        <tr className="border-b border-stone-100 bg-stone-50/60">
+                          <td colSpan={6} className="px-10 py-3">
+                            <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
+                              {linhas.map(([k, v]) => (
+                                <Fragment key={k}>
+                                  <dt className="font-medium text-stone-500">{k}</dt>
+                                  <dd className="text-stone-700">{v}</dd>
+                                </Fragment>
+                              ))}
+                            </dl>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
-                {paged.length === 0 && (
+                {!loading && paged.length === 0 && (
                   <tr><td colSpan={6} className="px-4 py-10 text-center text-stone-400">Nenhum log encontrado.</td></tr>
                 )}
               </tbody>

@@ -11,9 +11,10 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import {
   Plus, Search, Edit2, Trash2, Loader2, Building2, Users,
-  Landmark, AlertTriangle, CheckCircle2, HelpCircle,
+  Landmark, AlertTriangle, CheckCircle2, HelpCircle, Eye,
 } from "lucide-react";
 import {
   listarContasEmpresa, criarContaEmpresa, atualizarContaEmpresa, deletarContaEmpresa,
@@ -76,6 +77,8 @@ const EMPTY_SOCIO: CbsForm = {
 
 export function BancosPage() {
   const toast = useToast();
+  // Modo leitura (Acessos): sem criar/editar/excluir — o modal abre só como detalhes.
+  const { podeEditar } = useModulo("bancos");
   const [tab, setTab] = useState<Tab>("empresa");
 
   // ------- empresa -------
@@ -184,6 +187,7 @@ export function BancosPage() {
   // Empresa — handlers
   // ------------------------------------------------------------------
   function openNovaEmpresa() {
+    if (!podeEditar) return;
     setEmpEditId(null);
     setEmpForm({ ...EMPTY_EMPRESA });
     setEmpModalOpen(true);
@@ -206,6 +210,7 @@ export function BancosPage() {
     setEmpModalOpen(true);
   }
   async function saveEmpresa() {
+    if (!podeEditar) return;
     if (!empForm.nome.trim()) {
       toast.warning("Nome obrigatório", "Preencha o nome da conta (ex: 'Banco Cora (0001)')");
       return;
@@ -243,6 +248,7 @@ export function BancosPage() {
     }
   }
   async function removeEmpresa(c: ContaBancariaEmpresaRow) {
+    if (!podeEditar) return;
     if (!confirm(`Excluir a conta "${c.nome}"?\nLançamentos relacionados ficarão sem banco vinculado.`)) return;
     try {
       await deletarContaEmpresa(c.id);
@@ -257,6 +263,7 @@ export function BancosPage() {
   // Sócio — handlers
   // ------------------------------------------------------------------
   function openNovaSocio() {
+    if (!podeEditar) return;
     if (socios.length === 0) {
       toast.warning("Cadastre sócios antes", "Não há sócios ativos no banco de dados.");
       return;
@@ -282,6 +289,7 @@ export function BancosPage() {
     setSocioModalOpen(true);
   }
   async function saveSocio() {
+    if (!podeEditar) return;
     if (!socioForm.socio_id || !socioForm.nome.trim()) {
       toast.warning("Campos obrigatórios", "Selecione o sócio e preencha o nome da conta.");
       return;
@@ -318,6 +326,7 @@ export function BancosPage() {
     }
   }
   async function removeSocio(c: ContaBancariaSocioRich) {
+    if (!podeEditar) return;
     if (!confirm(`Excluir a conta "${c.nome}" do sócio ${c.socio?.nome_completo ?? "?"}?`)) return;
     try {
       await deletarContaSocio(c.id);
@@ -417,9 +426,11 @@ export function BancosPage() {
                   className="h-8 rounded-lg border border-stone-200 pl-8 pr-3 text-xs w-64 focus:outline-none focus:ring-1 focus:ring-accent-400"
                 />
               </div>
-              <Button size="sm" onClick={openNovaEmpresa}>
-                <Plus size={14} /> Nova Conta
-              </Button>
+              {podeEditar && (
+                <Button size="sm" onClick={openNovaEmpresa}>
+                  <Plus size={14} /> Nova Conta
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -467,12 +478,14 @@ export function BancosPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <button onClick={() => openEditEmpresa(c)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar">
-                            <Edit2 size={13}/>
+                          <button onClick={() => openEditEmpresa(c)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title={podeEditar ? "Editar" : "Ver detalhes"}>
+                            {podeEditar ? <Edit2 size={13}/> : <Eye size={13}/>}
                           </button>
-                          <button onClick={() => removeEmpresa(c)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
-                            <Trash2 size={13}/>
-                          </button>
+                          {podeEditar && (
+                            <button onClick={() => removeEmpresa(c)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
+                              <Trash2 size={13}/>
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -565,9 +578,11 @@ export function BancosPage() {
                     <option key={s.id} value={s.id}>{s.apelido ?? s.nome_completo}</option>
                   ))}
                 </select>
-                <Button size="sm" onClick={openNovaSocio}>
-                  <Plus size={14} /> Nova Conta
-                </Button>
+                {podeEditar && (
+                  <Button size="sm" onClick={openNovaSocio}>
+                    <Plus size={14} /> Nova Conta
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -614,12 +629,14 @@ export function BancosPage() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1">
-                            <button onClick={() => openEditSocio(c)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar">
-                              <Edit2 size={13}/>
+                            <button onClick={() => openEditSocio(c)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title={podeEditar ? "Editar" : "Ver detalhes"}>
+                              {podeEditar ? <Edit2 size={13}/> : <Eye size={13}/>}
                             </button>
-                            <button onClick={() => removeSocio(c)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
-                              <Trash2 size={13}/>
-                            </button>
+                            {podeEditar && (
+                              <button onClick={() => removeSocio(c)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
+                                <Trash2 size={13}/>
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -642,7 +659,7 @@ export function BancosPage() {
       <Modal
         open={empModalOpen}
         onClose={empGuard.requestClose}
-        title={empEditId ? "Editar Conta da Empresa" : "Nova Conta da Empresa"}
+        title={!podeEditar ? "Detalhes da Conta da Empresa" : empEditId ? "Editar Conta da Empresa" : "Nova Conta da Empresa"}
         size="lg"
       >
         <div className="p-6 space-y-4">
@@ -651,12 +668,14 @@ export function BancosPage() {
               label="Nome da Conta *"
               placeholder="Ex: Banco Cora (0001)"
               value={empForm.nome}
+              readOnly={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, nome: e.target.value })}
             />
             <Input
               label="Apelido"
               placeholder="Ex: Cora"
               value={empForm.apelido}
+              readOnly={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, apelido: e.target.value })}
             />
           </div>
@@ -665,17 +684,20 @@ export function BancosPage() {
               label="Banco / Instituição"
               placeholder="Ex: Banco Cora"
               value={empForm.banco}
+              readOnly={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, banco: e.target.value })}
             />
             <Input
               label="Agência"
               placeholder="0001"
               value={empForm.agencia}
+              readOnly={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, agencia: e.target.value })}
             />
             <Select
               label="Tipo"
               value={empForm.tipo}
+              disabled={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, tipo: e.target.value })}
             >
               {TIPO_OPTIONS.map((t) => <option key={t} value={t}>{TIPO_LABEL[t]}</option>)}
@@ -685,6 +707,7 @@ export function BancosPage() {
             <Select
               label="Tipo de instituição"
               value={empForm.tipo_instituicao}
+              disabled={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, tipo_instituicao: e.target.value })}
             >
               <option value="banco">Banco</option>
@@ -694,6 +717,7 @@ export function BancosPage() {
               label="Nº do Banco (BACEN)"
               placeholder="403 / 748 / 077 / 348"
               value={empForm.numero_banco}
+              readOnly={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, numero_banco: e.target.value })}
             />
           </div>
@@ -702,18 +726,21 @@ export function BancosPage() {
               label="Número da Conta"
               placeholder="123456"
               value={empForm.numero_conta}
+              readOnly={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, numero_conta: e.target.value })}
             />
             <Input
               label="Dígito"
               placeholder="7"
               value={empForm.digito}
+              readOnly={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, digito: e.target.value })}
             />
             <Input
               label="Ordem (exibição)"
               type="number"
               value={empForm.ordem}
+              readOnly={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, ordem: e.target.value })}
             />
           </div>
@@ -721,6 +748,7 @@ export function BancosPage() {
             <input
               type="checkbox"
               checked={empForm.ativa}
+              disabled={!podeEditar}
               onChange={(e) => setEmpForm({ ...empForm, ativa: e.target.checked })}
               className="w-4 h-4 rounded text-[#a67c20] focus:ring-[#a67c20]"
             />
@@ -728,10 +756,12 @@ export function BancosPage() {
           </label>
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={empGuard.requestClose}>Cancelar</Button>
-            <Button onClick={saveEmpresa} loading={empSaving} disabled={empSaving}>
-              {empEditId ? "Salvar Alterações" : "Adicionar"}
-            </Button>
+            <Button variant="ghost" onClick={empGuard.requestClose}>{podeEditar ? "Cancelar" : "Fechar"}</Button>
+            {podeEditar && (
+              <Button onClick={saveEmpresa} loading={empSaving} disabled={empSaving}>
+                {empEditId ? "Salvar Alterações" : "Adicionar"}
+              </Button>
+            )}
           </div>
         </div>
       </Modal>
@@ -740,7 +770,7 @@ export function BancosPage() {
       <Modal
         open={socioModalOpen}
         onClose={socioGuard.requestClose}
-        title={socioEditId ? "Editar Conta do Sócio" : "Nova Conta do Sócio"}
+        title={!podeEditar ? "Detalhes da Conta do Sócio" : socioEditId ? "Editar Conta do Sócio" : "Nova Conta do Sócio"}
         size="lg"
       >
         <div className="p-6 space-y-4">
@@ -748,7 +778,7 @@ export function BancosPage() {
             label="Sócio *"
             value={socioForm.socio_id}
             onChange={(e) => setSocioForm({ ...socioForm, socio_id: e.target.value })}
-            disabled={!!socioEditId}
+            disabled={!podeEditar || !!socioEditId}
           >
             <option value="">Selecione…</option>
             {socios.map((s) => {
@@ -766,6 +796,7 @@ export function BancosPage() {
             label="Nome da Conta *"
             placeholder="Ex: Bradesco 3489 C/C 3154-2"
             value={socioForm.nome}
+            readOnly={!podeEditar}
             onChange={(e) => setSocioForm({ ...socioForm, nome: e.target.value })}
           />
 
@@ -774,17 +805,20 @@ export function BancosPage() {
               label="Banco"
               placeholder="Bradesco, Inter, Nubank…"
               value={socioForm.banco}
+              readOnly={!podeEditar}
               onChange={(e) => setSocioForm({ ...socioForm, banco: e.target.value })}
             />
             <Input
               label="Agência"
               placeholder="3489"
               value={socioForm.agencia}
+              readOnly={!podeEditar}
               onChange={(e) => setSocioForm({ ...socioForm, agencia: e.target.value })}
             />
             <Select
               label="Tipo"
               value={socioForm.tipo}
+              disabled={!podeEditar}
               onChange={(e) => setSocioForm({ ...socioForm, tipo: e.target.value })}
             >
               {TIPO_OPTIONS.map((t) => <option key={t} value={t}>{TIPO_LABEL[t]}</option>)}
@@ -796,18 +830,21 @@ export function BancosPage() {
               label="Número da Conta"
               placeholder="3154"
               value={socioForm.numero_conta}
+              readOnly={!podeEditar}
               onChange={(e) => setSocioForm({ ...socioForm, numero_conta: e.target.value })}
             />
             <Input
               label="Dígito"
               placeholder="2"
               value={socioForm.digito}
+              readOnly={!podeEditar}
               onChange={(e) => setSocioForm({ ...socioForm, digito: e.target.value })}
             />
             <Input
               label="Ordem"
               type="number"
               value={socioForm.ordem}
+              readOnly={!podeEditar}
               onChange={(e) => setSocioForm({ ...socioForm, ordem: e.target.value })}
             />
           </div>
@@ -816,6 +853,7 @@ export function BancosPage() {
             label="Chave PIX por email (opcional)"
             placeholder="email@dominio.com"
             value={socioForm.email_chave}
+            readOnly={!podeEditar}
             onChange={(e) => setSocioForm({ ...socioForm, email_chave: e.target.value })}
           />
 
@@ -823,6 +861,7 @@ export function BancosPage() {
             <input
               type="checkbox"
               checked={socioForm.ativa}
+              disabled={!podeEditar}
               onChange={(e) => setSocioForm({ ...socioForm, ativa: e.target.checked })}
               className="w-4 h-4 rounded text-[#a67c20] focus:ring-[#a67c20]"
             />
@@ -830,10 +869,12 @@ export function BancosPage() {
           </label>
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={socioGuard.requestClose}>Cancelar</Button>
-            <Button onClick={saveSocio} loading={socioSaving} disabled={socioSaving}>
-              {socioEditId ? "Salvar Alterações" : "Adicionar"}
-            </Button>
+            <Button variant="ghost" onClick={socioGuard.requestClose}>{podeEditar ? "Cancelar" : "Fechar"}</Button>
+            {podeEditar && (
+              <Button onClick={saveSocio} loading={socioSaving} disabled={socioSaving}>
+                {socioEditId ? "Salvar Alterações" : "Adicionar"}
+              </Button>
+            )}
           </div>
         </div>
       </Modal>

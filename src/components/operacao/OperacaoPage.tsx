@@ -17,9 +17,9 @@ import { Tabs } from "@/components/ui/Tabs";
 import { isoLocalHoje } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDateTime, formatDate } from "@/lib/utils/format";
-import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import {
   listarTaloes, listarAbastecimentos, regularizarDiscrepancia,
   saldosReservatorios, listarEntradasReservatorio, criarEntradaReservatorio,
@@ -38,7 +38,7 @@ export function OperacaoPage() {
   const toast = useToast();
   const [aba, setAba] = useState<Aba>("taloes");
   const [loading, setLoading] = useState(true);
-  const [canEdit, setCanEdit] = useState(false);
+  const { podeEditar: canEdit } = useModulo("operacao");
 
   const [taloes, setTaloes] = useState<TalaoRich[]>([]);
   const [abastecimentos, setAbastecimentos] = useState<AbastecimentoRich[]>([]);
@@ -68,7 +68,6 @@ export function OperacaoPage() {
 
   useEffect(() => {
     fetchAll();
-    obterRoleAtual().then((r) => setCanEdit(r === "admin" || r === "editor")).catch(() => {});
   }, [fetchAll]);
 
   const discrepancias = useMemo(
@@ -142,6 +141,7 @@ export function OperacaoPage() {
         <button
           title="Excluir"
           onClick={async () => {
+            if (!canEdit) return;
             try { await excluirEntradaReservatorio(e.id); toast.success("Entrada removida"); fetchAll(); }
             catch (err) { toast.error("Erro ao excluir", err instanceof Error ? err.message : undefined); }
           }}
@@ -314,11 +314,13 @@ function RegularizarModal({ talao, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("operacao");
   const [obs, setObs] = useState("");
   const [busy, setBusy] = useState(false);
   const guard = useUnsavedGuard(true, obs, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!obs.trim()) { toast.warning("Explique o que aconteceu (ex.: uso do proprietário no fim de semana)."); return; }
     setBusy(true);
     try {
@@ -363,6 +365,7 @@ function RegularizarModal({ talao, onClose, onSaved }: {
 // ============================================================================
 function EntradaModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("operacao");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     fonte: "tanque_diesel" as CombustivelFonte,
@@ -373,6 +376,7 @@ function EntradaModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =
   const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     const litros = Number(String(form.litros).replace(",", "."));
     if (!Number.isFinite(litros) || litros <= 0) { toast.warning("Informe os litros."); return; }
     setBusy(true);

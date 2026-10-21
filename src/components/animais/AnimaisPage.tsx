@@ -18,9 +18,9 @@ import { Tabs } from "@/components/ui/Tabs";
 import { CalendarioMes, isoLocalHoje } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDate } from "@/lib/utils/format";
-import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import {
   listarEspecies, criarEspecie, atualizarEspecie,
   listarLotes, criarLote, atualizarLote, excluirLote,
@@ -53,8 +53,7 @@ export function AnimaisPage() {
   const toast = useToast();
   const [aba, setAba] = useState<Aba>("lotes");
   const [loading, setLoading] = useState(true);
-  const [canEdit, setCanEdit] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const { podeEditar: canEdit } = useModulo("animais");
 
   const [especies, setEspecies] = useState<AnimalEspecieRow[]>([]);
   const [lotes, setLotes] = useState<AnimalLoteRow[]>([]);
@@ -93,10 +92,6 @@ export function AnimaisPage() {
 
   useEffect(() => {
     fetchAll();
-    obterRoleAtual().then((r) => {
-      setCanEdit(r === "admin" || r === "editor");
-      setIsAdmin(r === "admin");
-    }).catch(() => {});
   }, [fetchAll]);
 
   // --------------------------------------------------------------------------
@@ -175,7 +170,7 @@ export function AnimaisPage() {
   // Ações
   // --------------------------------------------------------------------------
   async function handleExcluir() {
-    if (!confirmExcluir) return;
+    if (!canEdit || !confirmExcluir) return;
     setBusy(true);
     try {
       // Snapshot antes de apagar — base do "Desfazer" de 8s (RF 31-jul).
@@ -317,6 +312,7 @@ export function AnimaisPage() {
           <button
             title={oc.resolvida ? "Reabrir" : "Marcar como resolvida"}
             onClick={async () => {
+              if (!canEdit) return;
               try {
                 await setOcorrenciaResolvida(oc.id, !oc.resolvida);
                 fetchAll();
@@ -351,7 +347,7 @@ export function AnimaisPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          {isAdmin && (
+          {canEdit && (
             <Button variant="outline" size="sm" onClick={() => setEspeciesModal(true)}>
               <Settings2 size={14} /> Espécies
             </Button>
@@ -549,6 +545,7 @@ function LoteModal({ editando, especies, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("animais");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<LoteFormPayload>({
     codigo: editando?.codigo ?? "",
@@ -563,6 +560,7 @@ function LoteModal({ editando, especies, onClose, onSaved }: {
   const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!form.codigo.trim()) { toast.warning("Informe o código do lote."); return; }
     if (!form.especie_id) { toast.warning("Selecione a espécie."); return; }
     setBusy(true);
@@ -618,6 +616,7 @@ function EventoModal({ editando, loteIdInicial, lotes, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("animais");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<EventoFormPayload>({
     lote_id: editando?.lote_id ?? loteIdInicial ?? (lotes[0]?.id ?? ""),
@@ -630,6 +629,7 @@ function EventoModal({ editando, loteIdInicial, lotes, onClose, onSaved }: {
   const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!form.lote_id) { toast.warning("Selecione o lote."); return; }
     if (!form.nome.trim()) { toast.warning("Informe o nome da vacina/produto."); return; }
     setBusy(true);
@@ -683,6 +683,7 @@ function OcorrenciaModal({ loteIdInicial, lotes, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("animais");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     lote_id: loteIdInicial ?? (lotes[0]?.id ?? ""),
@@ -693,6 +694,7 @@ function OcorrenciaModal({ loteIdInicial, lotes, onClose, onSaved }: {
   const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!form.lote_id) { toast.warning("Selecione o lote."); return; }
     if (!form.descricao.trim()) { toast.warning("Descreva a ocorrência."); return; }
     setBusy(true);
@@ -733,7 +735,7 @@ function OcorrenciaModal({ loteIdInicial, lotes, onClose, onSaved }: {
 }
 
 // ============================================================================
-// Modal — Gerenciar espécies (admin)
+// Modal — Gerenciar espécies (quem edita o módulo Animais)
 // ============================================================================
 function EspeciesModal({ especies, onClose, onChanged }: {
   especies: AnimalEspecieRow[];
@@ -741,10 +743,12 @@ function EspeciesModal({ especies, onClose, onChanged }: {
   onChanged: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("animais");
   const [busy, setBusy] = useState(false);
   const [novo, setNovo] = useState({ nome: "", icone: "🐄" });
 
   async function adicionar() {
+    if (!podeEditar) return;
     if (!novo.nome.trim()) { toast.warning("Informe o nome da espécie."); return; }
     setBusy(true);
     try {
@@ -760,6 +764,7 @@ function EspeciesModal({ especies, onClose, onChanged }: {
   }
 
   async function toggleAtivo(esp: AnimalEspecieRow) {
+    if (!podeEditar) return;
     try {
       await atualizarEspecie(esp.id, { nome: esp.nome, icone: esp.icone, ordem: esp.ordem, ativo: !esp.ativo });
       onChanged();

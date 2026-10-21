@@ -7,6 +7,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Pagination } from "@/components/ui/Pagination";
 import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import { useToast } from "@/components/ui/Toast";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { clearDraft } from "@/lib/hooks/useFormDraft";
 import {
   Search, Download, Trash2, FileText, Fuel, Home as HomeIcon, Wrench,
@@ -54,6 +55,8 @@ const PAGE_SIZE = 10;
 
 export function DocumentosPage() {
   const toast = useToast();
+  // Leitura: só consulta e baixa os PDFs — gerar, editar, duplicar e excluir ficam ocultos.
+  const { podeEditar } = useModulo("documentos");
   const [rows, setRows]         = useState<DocumentoGeradoRow[]>([]);
   const [total, setTotal]       = useState(0);
   const [meses, setMeses]       = useState<string[]>([]);
@@ -135,7 +138,7 @@ export function DocumentosPage() {
   }
 
   async function handleGerar(dados: unknown) {
-    if (!tipoAberto) return;
+    if (!podeEditar || !tipoAberto) return;
     const editId = editando?.id;
     setSubmitting(true);
     try {
@@ -163,7 +166,7 @@ export function DocumentosPage() {
 
   /** RF 24-jul — salva as alterações da edição SEM gerar novo PDF. */
   async function handleSalvarSemPdf(dados: unknown) {
-    if (!tipoAberto || !editando) return;
+    if (!podeEditar || !tipoAberto || !editando) return;
     setSalvandoSemPdf(true);
     try {
       await gerarDocumento(tipoAberto, dados as never, editando.id, { semPdf: true });
@@ -192,6 +195,7 @@ export function DocumentosPage() {
   }
 
   async function handleExcluir(row: DocumentoGeradoRow) {
+    if (!podeEditar) return;
     if (!confirm(`Excluir "${row.beneficiario ?? DOCUMENTO_GERADO_LABEL[row.tipo]}"? Esta ação não pode ser desfeita.`)) {
       return;
     }
@@ -206,6 +210,7 @@ export function DocumentosPage() {
 
   // ─── RF-03 / RF-09 — abertura/fechamento com proteção de rascunho ─────────
   function abrirModelo(tipo: DocumentoGeradoTipo) {
+    if (!podeEditar) return;
     setEditando(null);
     setDuplicando(null);
     setFormDirty(false);
@@ -215,6 +220,7 @@ export function DocumentosPage() {
 
   /** RF-09 — abre o formulário preenchido para corrigir um documento. */
   function editarDocumento(row: DocumentoGeradoRow) {
+    if (!podeEditar) return;
     setEditando(row);
     setDuplicando(null);
     setFormDirty(false);
@@ -225,6 +231,7 @@ export function DocumentosPage() {
   /** RF 24-jul — duplicar: abre um NOVO documento já preenchido com os dados
    *  do existente (a Lola ajusta valor/data/descrição e gera). */
   function duplicarDocumento(row: DocumentoGeradoRow) {
+    if (!podeEditar) return;
     setEditando(null);
     setDuplicando(row);
     setFormDirty(false);
@@ -259,20 +266,24 @@ export function DocumentosPage() {
   function renderAcoes(r: DocumentoGeradoRow) {
     return (
       <div className="flex items-center gap-1">
-        <button
-          onClick={() => editarDocumento(r)}
-          title="Editar (gera nova versão, ou salva sem gerar PDF)"
-          className="p-1.5 rounded hover:bg-sky-50 text-stone-400 hover:text-sky-600 transition"
-        >
-          <Pencil size={13} />
-        </button>
-        <button
-          onClick={() => duplicarDocumento(r)}
-          title="Duplicar (abre um novo documento já preenchido com estes dados)"
-          className="p-1.5 rounded hover:bg-amber-50 text-stone-400 hover:text-amber-600 transition"
-        >
-          <Copy size={13} />
-        </button>
+        {podeEditar && (
+          <>
+            <button
+              onClick={() => editarDocumento(r)}
+              title="Editar (gera nova versão, ou salva sem gerar PDF)"
+              className="p-1.5 rounded hover:bg-sky-50 text-stone-400 hover:text-sky-600 transition"
+            >
+              <Pencil size={13} />
+            </button>
+            <button
+              onClick={() => duplicarDocumento(r)}
+              title="Duplicar (abre um novo documento já preenchido com estes dados)"
+              className="p-1.5 rounded hover:bg-amber-50 text-stone-400 hover:text-amber-600 transition"
+            >
+              <Copy size={13} />
+            </button>
+          </>
+        )}
         <button
           onClick={() => handleDownload(r)}
           disabled={downloading === r.id}
@@ -283,13 +294,15 @@ export function DocumentosPage() {
             ? <Loader2 size={13} className="animate-spin" />
             : <Download size={13} />}
         </button>
-        <button
-          onClick={() => handleExcluir(r)}
-          title="Excluir"
-          className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition"
-        >
-          <Trash2 size={13} />
-        </button>
+        {podeEditar && (
+          <button
+            onClick={() => handleExcluir(r)}
+            title="Excluir"
+            className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition"
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
       </div>
     );
   }
@@ -304,31 +317,33 @@ export function DocumentosPage() {
       </div>
 
       {/* ─── Modelos disponíveis ─────────────────────────────────────────── */}
-      <div>
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-stone-500 mb-3">Modelos disponíveis</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {MODELOS_DISPONIVEIS.map((m) => {
-            const Icon = m.icone;
-            return (
-              <button
-                key={m.tipo}
-                onClick={() => abrirModelo(m.tipo)}
-                className="group flex items-start gap-3 p-4 bg-white rounded-xl border border-stone-200 hover:border-[#a67c20] hover:shadow-sm transition text-left"
-              >
-                <div className={`w-9 h-9 rounded-lg flex items-center justify-center border ${m.cor} shrink-0`}>
-                  <Icon size={18} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-stone-800 leading-tight">
-                    {DOCUMENTO_GERADO_LABEL[m.tipo]}
-                  </p>
-                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">{m.resumo}</p>
-                </div>
-              </button>
-            );
-          })}
+      {podeEditar && (
+        <div>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-stone-500 mb-3">Modelos disponíveis</h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {MODELOS_DISPONIVEIS.map((m) => {
+              const Icon = m.icone;
+              return (
+                <button
+                  key={m.tipo}
+                  onClick={() => abrirModelo(m.tipo)}
+                  className="group flex items-start gap-3 p-4 bg-white rounded-xl border border-stone-200 hover:border-[#a67c20] hover:shadow-sm transition text-left"
+                >
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center border ${m.cor} shrink-0`}>
+                    <Icon size={18} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-stone-800 leading-tight">
+                      {DOCUMENTO_GERADO_LABEL[m.tipo]}
+                    </p>
+                    <p className="text-xs text-stone-500 mt-1 leading-relaxed">{m.resumo}</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ─── Últimos gerados ────────────────────────────────────────────── */}
       <Card>
@@ -470,7 +485,7 @@ export function DocumentosPage() {
                 ) : rows.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-4 py-10 text-center text-stone-400">
-                      Nenhum documento encontrado. Escolha um modelo acima para gerar o primeiro.
+                      Nenhum documento encontrado.{podeEditar && " Escolha um modelo acima para gerar o primeiro."}
                     </td>
                   </tr>
                 ) : (

@@ -10,6 +10,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Cell,
   PieChart, Pie, Legend,
@@ -17,7 +18,7 @@ import {
 import {
   Plus, Search, Edit2, Trash2, Loader2, Sprout,
   Wallet, CalendarClock, ArrowDownToLine, HandCoins, PackageCheck,
-  Link2,
+  Link2, Eye,
 } from "lucide-react";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
@@ -104,6 +105,8 @@ function statusBadge(s: VendaStatus): BadgeVariant {
 
 export function VendasFuturasPage() {
   const toast = useToast();
+  // Modo leitura (Acessos): sem criar/editar/excluir — a seleção fica só para a soma.
+  const { podeEditar } = useModulo("vendas");
 
   const [rows, setRows] = useState<VendaProvisionadaRichRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -296,6 +299,7 @@ export function VendasFuturasPage() {
 
   // ---- handlers ----
   function openNova() {
+    if (!podeEditar) return;
     setEditId(null);
     setForm({ ...EMPTY });
     setBaixarEstoque(true);
@@ -467,6 +471,7 @@ export function VendasFuturasPage() {
     }
   }
   async function save() {
+    if (!podeEditar) return;
     if (!form.comprador.trim() || !form.kg || !form.preco_sc || !form.data_pgto_prevista || !form.safra) {
       toast.warning("Campos obrigatórios", "Preencha comprador, safra, quantidade, preço e data prevista.");
       return;
@@ -593,6 +598,7 @@ export function VendasFuturasPage() {
   }
   // ---- ações em massa (ajuste 27-jul) ----
   async function aplicarStatusEmMassa() {
+    if (!podeEditar) return;
     if (!bulkStatus || selectedIds.size === 0) return;
     setBulkBusy(true);
     try {
@@ -609,6 +615,7 @@ export function VendasFuturasPage() {
   }
 
   async function excluirSelecionados() {
+    if (!podeEditar) return;
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
     const comBaixa = ids.filter((id) => (kgBaixadoPorVenda.get(id) ?? 0) > 0);
@@ -638,6 +645,7 @@ export function VendasFuturasPage() {
   }
 
   async function remove(v: VendaProvisionadaRichRow) {
+    if (!podeEditar) return;
     const kgBaixado = kgBaixadoPorVenda.get(v.id) ?? 0;
     const msg = kgBaixado > 0
       ? `Esta venda tem baixa de estoque vinculada (${kgBaixado.toLocaleString("pt-BR")} kg). Ao excluir, as baixas serão desfeitas e o volume VOLTA ao estoque.\n\nExcluir a venda de ${v.comprador} (${v.numero_contrato ?? "sem contrato"})?`
@@ -685,7 +693,7 @@ export function VendasFuturasPage() {
               onChange={(v) => { setFilterCompetencias(v); setPage(1); }}
             />
           </label>
-          <Button size="sm" onClick={openNova}><Plus size={14} /> Nova Venda</Button>
+          {podeEditar && <Button size="sm" onClick={openNova}><Plus size={14} /> Nova Venda</Button>}
         </div>
       </div>
 
@@ -851,29 +859,33 @@ export function VendasFuturasPage() {
             <span className="font-medium text-stone-700">
               {selectedIds.size} selecionada{selectedIds.size === 1 ? "" : "s"}:
             </span>
-            <select
-              value={bulkStatus}
-              onChange={(e) => setBulkStatus(e.target.value)}
-              className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
-              title="Status a aplicar em todas as vendas selecionadas"
-            >
-              <option value="">Escolher status…</option>
-              {(Object.keys(VENDA_STATUS_LABEL) as VendaStatus[]).map((s) =>
-                <option key={s} value={s}>{VENDA_STATUS_LABEL[s]}</option>)}
-            </select>
-            <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy || bulkDeleteBusy}
-              loading={bulkBusy}
-              onClick={aplicarStatusEmMassa}
-              title="Aplica o status escolhido em todas as vendas selecionadas de uma vez">
-              Aplicar status
-            </Button>
-            <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
-              loading={bulkDeleteBusy}
-              onClick={excluirSelecionados}
-              className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-              title="Exclui DE UMA VEZ todas as vendas selecionadas (baixas de estoque vinculadas são desfeitas)">
-              <Trash2 size={13} /> Excluir selecionadas
-            </Button>
+            {podeEditar && (
+              <>
+                <select
+                  value={bulkStatus}
+                  onChange={(e) => setBulkStatus(e.target.value)}
+                  className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+                  title="Status a aplicar em todas as vendas selecionadas"
+                >
+                  <option value="">Escolher status…</option>
+                  {(Object.keys(VENDA_STATUS_LABEL) as VendaStatus[]).map((s) =>
+                    <option key={s} value={s}>{VENDA_STATUS_LABEL[s]}</option>)}
+                </select>
+                <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy || bulkDeleteBusy}
+                  loading={bulkBusy}
+                  onClick={aplicarStatusEmMassa}
+                  title="Aplica o status escolhido em todas as vendas selecionadas de uma vez">
+                  Aplicar status
+                </Button>
+                <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
+                  loading={bulkDeleteBusy}
+                  onClick={excluirSelecionados}
+                  className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+                  title="Exclui DE UMA VEZ todas as vendas selecionadas (baixas de estoque vinculadas são desfeitas)">
+                  <Trash2 size={13} /> Excluir selecionadas
+                </Button>
+              </>
+            )}
             <span className="ml-auto inline-flex items-center gap-1.5 font-semibold text-stone-700 tabular-nums bg-white border border-accent-200 rounded-lg px-2.5 py-1">
               Soma: <span className="text-emerald-700">{formatCurrency(somaSelecionados)}</span>
             </span>
@@ -959,8 +971,8 @@ export function VendasFuturasPage() {
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-1">
-                        <button onClick={() => openEdit(v)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar"><Edit2 size={13}/></button>
-                        <button onClick={() => remove(v)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir"><Trash2 size={13}/></button>
+                        <button onClick={() => openEdit(v)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title={podeEditar ? "Editar" : "Ver detalhes"}>{podeEditar ? <Edit2 size={13}/> : <Eye size={13}/>}</button>
+                        {podeEditar && <button onClick={() => remove(v)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir"><Trash2 size={13}/></button>}
                       </div>
                     </td>
                   </tr>
@@ -993,14 +1005,14 @@ export function VendasFuturasPage() {
 
       {/* Modal CRUD */}
       <Modal open={modalOpen} onClose={guard.requestClose}
-        title={editId ? "Editar Venda" : "Nova Venda"} size="lg">
+        title={!podeEditar ? "Detalhes da Venda" : editId ? "Editar Venda" : "Nova Venda"} size="lg">
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-3 gap-3">
-            <Input label="Data da Venda *" type="date" value={form.data_venda}
+            <Input label="Data da Venda *" type="date" value={form.data_venda} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, data_venda: e.target.value })} />
-            <Input label="Comprador *" placeholder="Copasul" value={form.comprador}
+            <Input label="Comprador *" placeholder="Copasul" value={form.comprador} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, comprador: e.target.value })} />
-            <Select label="Status" value={form.status}
+            <Select label="Status" value={form.status} disabled={!podeEditar}
               onChange={(e) => setForm({ ...form, status: e.target.value as VendaStatus })}>
               {(Object.keys(VENDA_STATUS_LABEL) as VendaStatus[]).map((s) =>
                 <option key={s} value={s}>{VENDA_STATUS_LABEL[s]}</option>)}
@@ -1008,23 +1020,23 @@ export function VendasFuturasPage() {
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <Select label="Cultura *" value={form.cultura}
+            <Select label="Cultura *" value={form.cultura} disabled={!podeEditar}
               onChange={(e) => setForm({ ...form, cultura: e.target.value as CulturaSafra })}>
               {(Object.keys(CULTURA_LABEL) as CulturaSafra[]).map((c) =>
                 <option key={c} value={c}>{CULTURA_EMOJI[c]} {CULTURA_LABEL[c]}</option>)}
             </Select>
-            <Input label="Safra *" placeholder="24/25" value={form.safra}
+            <Input label="Safra *" placeholder="24/25" value={form.safra} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, safra: e.target.value })} />
-            <Input label="Data Prevista do Pgto *" type="date" value={form.data_pgto_prevista}
+            <Input label="Data Prevista do Pgto *" type="date" value={form.data_pgto_prevista} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, data_pgto_prevista: e.target.value })} />
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <Input label="Quantidade (kg) *" type="number" step="0.001"
+            <Input label="Quantidade (kg) *" type="number" step="0.001" readOnly={!podeEditar}
               value={form.kg} onChange={(e) => setForm({ ...form, kg: e.target.value })} />
-            <Input label="Preço por Saca (R$) *" type="number" step="0.0001"
+            <Input label="Preço por Saca (R$) *" type="number" step="0.0001" readOnly={!podeEditar}
               value={form.preco_sc} onChange={(e) => setForm({ ...form, preco_sc: e.target.value })} />
-            <Input label="kg por Saca" type="number" step="0.01"
+            <Input label="kg por Saca" type="number" step="0.01" readOnly={!podeEditar}
               value={form.kg_por_saca} onChange={(e) => setForm({ ...form, kg_por_saca: e.target.value })} />
           </div>
 
@@ -1050,6 +1062,7 @@ export function VendasFuturasPage() {
                 <input
                   type="checkbox"
                   checked={baixarEstoque}
+                  disabled={!podeEditar}
                   onChange={(e) => setBaixarEstoque(e.target.checked)}
                   className="h-4 w-4 rounded border-stone-300 accent-accent-500"
                 />
@@ -1103,11 +1116,11 @@ export function VendasFuturasPage() {
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <Input label="Autorização de Fixação" placeholder="153076" value={form.aut_fixacao}
+            <Input label="Autorização de Fixação" placeholder="153076" value={form.aut_fixacao} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, aut_fixacao: e.target.value })} />
-            <Input label="Nº Contrato" value={form.numero_contrato}
+            <Input label="Nº Contrato" value={form.numero_contrato} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, numero_contrato: e.target.value })} />
-            <Input label="Nota Fiscal" placeholder="8066969" value={form.nota_fiscal}
+            <Input label="Nota Fiscal" placeholder="8066969" value={form.nota_fiscal} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, nota_fiscal: e.target.value })} />
           </div>
 
@@ -1115,18 +1128,18 @@ export function VendasFuturasPage() {
             <p className="text-xs font-semibold text-stone-600 uppercase tracking-wide">Destino do recebimento</p>
             <div className="flex items-center gap-4">
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" checked={form.destino_empresa}
+                <input type="radio" checked={form.destino_empresa} disabled={!podeEditar}
                   onChange={() => setForm({ ...form, destino_empresa: true })} />
                 <span className="text-sm">Empresa Aramburu</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" checked={!form.destino_empresa}
+                <input type="radio" checked={!form.destino_empresa} disabled={!podeEditar}
                   onChange={() => setForm({ ...form, destino_empresa: false })} />
                 <span className="text-sm">Sócio direto</span>
               </label>
             </div>
             {!form.destino_empresa && (
-              <Select label="Sócio destinatário *" value={form.socio_destino_id}
+              <Select label="Sócio destinatário *" value={form.socio_destino_id} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, socio_destino_id: e.target.value })}>
                 <option value="">Selecione…</option>
                 {socios.map((s) => <option key={s.id} value={s.id}>{s.nome_completo}</option>)}
@@ -1140,17 +1153,20 @@ export function VendasFuturasPage() {
             <div className="grid grid-cols-2 gap-3">
               <Input label="Valor (R$)" type="number" step="0.01" min="0"
                 value={form.taxa_armazenagem}
+                readOnly={!podeEditar}
                 onChange={(e) => setForm({ ...form, taxa_armazenagem: e.target.value })}
               />
               <Input label="Data de Pagamento" type="date"
                 value={form.taxa_data_pgto}
+                readOnly={!podeEditar}
                 onChange={(e) => setForm({ ...form, taxa_data_pgto: e.target.value })}
               />
               <Input label="ND (Nota de Débito)" placeholder="29635"
                 value={form.taxa_nd}
+                readOnly={!podeEditar}
                 onChange={(e) => setForm({ ...form, taxa_nd: e.target.value })}
               />
-              <Select label="Banco" value={form.taxa_banco_id}
+              <Select label="Banco" value={form.taxa_banco_id} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, taxa_banco_id: e.target.value })}>
                 <option value="">—</option>
                 {bancosEmpresa.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
@@ -1240,15 +1256,17 @@ export function VendasFuturasPage() {
             </div>
           )}
 
-          <Textarea label="Observações" rows={2}
+          <Textarea label="Observações" rows={2} readOnly={!podeEditar}
             value={form.observacao} onChange={(e) => setForm({ ...form, observacao: e.target.value })}
             placeholder="Ex: pagamento em 4 parcelas (jan/mar/mar/jul)" />
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={guard.requestClose}>Cancelar</Button>
-            <Button onClick={save} loading={saving} disabled={saving}>
-              {editId ? "Salvar Alterações" : "Adicionar"}
-            </Button>
+            <Button variant="ghost" onClick={guard.requestClose}>{podeEditar ? "Cancelar" : "Fechar"}</Button>
+            {podeEditar && (
+              <Button onClick={save} loading={saving} disabled={saving}>
+                {editId ? "Salvar Alterações" : "Adicionar"}
+              </Button>
+            )}
           </div>
         </div>
       </Modal>

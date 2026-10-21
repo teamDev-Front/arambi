@@ -20,14 +20,17 @@
 //   }
 //
 // Erros:
-//   400 (body) · 401 (não autenticado) · 424 (chave/treinamento ausente)
+//   400 (body) · 401 (não autenticado) · 403 (sem o módulo) · 424 (chave/treinamento ausente)
 //   500 (Supabase) · 502 (provedor IA falhou) · 504 (request abortado)
 
 import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import type { createClient } from "@/lib/supabase/server";
+import { autorizarApi } from "@/lib/acessos/servidor";
+import { podeVer } from "@/lib/acessos/permissoes";
+import { MODULO_POR_KEY } from "@/lib/acessos/modulos";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { callProvider, modelForProvider, type AIMensagem } from "@/lib/ai/providers";
-import { toolsParaAgente, executarTool } from "@/lib/ai/tools";
+import { toolsParaAgente, executarTool, modulosBloqueadosDoAgente } from "@/lib/ai/tools";
 import type { IAProvider } from "@/types";
 
 interface ChatRequestBody {
@@ -85,11 +88,10 @@ export async function POST(req: NextRequest) {
   }
 
   // ---- 2) Auth + perfil do usuário ----------------------------------------
-  const supabase = await createClient();
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
-  }
+  // Módulo Assistentes liberado (0058); conversar é leitura.
+  const auth = await autorizarApi({ modulos: ["assistentes"] });
+  if (!auth.ok) return auth.resposta;
+  const { supabase, user, acesso } = auth;
 
   // ---- 3) Lê config_ia (admin, bypass RLS) + agente_prompt + perfil ------
   // config_ia tem SELECT restrito a admin/editor (migration 0020). Aqui
@@ -195,12 +197,22 @@ export async function POST(req: NextRequest) {
     .map((m) => ({ role: m.role, content: m.conteudo }));
 
   // ---- 7) Chama o provedor com tools do agente -----------------------------
-  const tools = toolsParaAgente(agenteId);
+  // A IA só consulta os módulos que o usuário enxerga; o resto é avisado no prompt.
+  const ver = (m: Parameters<typeof podeVer>[1]) => podeVer(acesso, m);
+  const tools = toolsParaAgente(agenteId, ver);
+  const bloqueados = modulosBloqueadosDoAgente(agenteId, ver);
+  const avisoPermissao = bloqueados.length
+    ? `
+
+[Permissões do usuário] Ele NÃO tem acesso aos módulos: ${bloqueados.map((m) => MODULO_POR_KEY[m].label).join(", ")}. `
+      + "Você não tem ferramentas para consultar esses dados. Se ele pedir algo desses módulos, explique com educação "
+      + "que o acesso não está liberado para ele e que pode pedir ao administrador na tela Acessos. Nunca invente esses números."
+    : "";
   let resposta;
   try {
     if (req.signal.aborted) throw new DOMException("Request cancelado.", "AbortError");
     resposta = await callProvider(provider, apiKey, historico, {
-      systemPrompt: prompt.system_prompt ?? "",
+      systemPrompt: (prompt.system_prompt ?? "") + avisoPermissao,
       temperatura:  Number(prompt.temperatura ?? 0.3),
       tools,
       onToolCall: async (name, args) => {

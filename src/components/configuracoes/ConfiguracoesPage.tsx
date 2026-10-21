@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
-import { ListTree, Palette, ShieldAlert, Users, Zap } from "lucide-react";
-import { obterRoleAtual } from "@/lib/queries/configuracoes";
+import { useState } from "react";
+import { ListTree, Palette, Users, Zap } from "lucide-react";
+import { usePermissoes } from "@/components/acessos/PermissoesProvider";
 import { PlanoContasTab } from "./PlanoContasTab";
 import { StatusCoresTab } from "./StatusCoresTab";
 import { ColaboradoresTab } from "./ColaboradoresTab";
@@ -18,17 +18,8 @@ const ABAS: { id: Aba; label: string; icon: typeof ListTree }[] = [
 
 export function ConfiguracoesPage() {
   const [aba, setAba] = useState<Aba>("plano");
-  const [role, setRole] = useState<string | null>(null);
-  const [roleCarregado, setRoleCarregado] = useState(false);
-
-  useEffect(() => {
-    obterRoleAtual()
-      .then((r) => setRole(r))
-      .catch(() => setRole(null))
-      .finally(() => setRoleCarregado(true));
-  }, []);
-
-  const canEdit = role === "admin";
+  // Tela exclusiva do Super Admin (a página barra os demais no servidor).
+  const { superAdmin: canEdit } = usePermissoes();
 
   return (
     <div className="space-y-6">
@@ -38,16 +29,6 @@ export function ConfiguracoesPage() {
           Gerencie o plano de contas, os status dos lançamentos, suas cores e os colaboradores do portal. Alterações valem para todo o sistema.
         </p>
       </div>
-
-      {roleCarregado && !canEdit && (
-        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <ShieldAlert size={18} className="shrink-0 mt-0.5" />
-          <span>
-            Você está vendo em modo leitura. Apenas usuários <b>administradores</b> podem criar, editar ou excluir.
-            {role ? ` (sua função atual: ${role})` : ""}
-          </span>
-        </div>
-      )}
 
       {/* Abas */}
       <div className="flex gap-1 border-b border-stone-200">

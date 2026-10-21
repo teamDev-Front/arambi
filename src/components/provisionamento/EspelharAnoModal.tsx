@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Toast";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { CopyPlus, Loader2, AlertTriangle, Check, CalendarDays } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { useStatusConfig, getStatusLabel } from "@/lib/utils/status-config";
@@ -62,6 +63,8 @@ interface Props {
  */
 export function EspelharAnoModal({ open, onClose, anoOrigem, anos, onConcluido }: Props) {
   const toast = useToast();
+  // Modo leitura: a prévia é consulta, mas gravar o espelhamento não.
+  const { podeEditar } = useModulo("provisionamento");
   const { entries: statusEntries } = useStatusConfig();
 
   const [origem, setOrigem] = useState(anoOrigem);
@@ -115,6 +118,7 @@ export function EspelharAnoModal({ open, onClose, anoOrigem, anos, onConcluido }
   }
 
   async function gravar() {
+    if (!podeEditar) return;
     if (!previa) return;
     const resumo =
       `Criar ${previa.novas} lançamento${previa.novas === 1 ? "" : "s"} ` +
@@ -355,10 +359,12 @@ export function EspelharAnoModal({ open, onClose, anoOrigem, anos, onConcluido }
 
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose} disabled={gravando}>Cancelar</Button>
-          <Button onClick={gravar} loading={gravando} disabled={!podeGravar}>
-            <CopyPlus size={14} />
-            {previa && previa.novas > 0 ? `Espelhar ${previa.novas} para ${destino}` : "Espelhar"}
-          </Button>
+          {podeEditar && (
+            <Button onClick={gravar} loading={gravando} disabled={!podeGravar}>
+              <CopyPlus size={14} />
+              {previa && previa.novas > 0 ? `Espelhar ${previa.novas} para ${destino}` : "Espelhar"}
+            </Button>
+          )}
         </div>
       </div>
     </Modal>

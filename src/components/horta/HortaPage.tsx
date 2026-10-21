@@ -16,9 +16,9 @@ import { Tabs } from "@/components/ui/Tabs";
 import { isoLocalHoje } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDate } from "@/lib/utils/format";
-import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import {
   listarCulturasHorta, criarCulturaHorta, atualizarCulturaHorta,
   listarCanteiros, criarCanteiro, atualizarCanteiro,
@@ -47,7 +47,7 @@ export function HortaPage() {
   const toast = useToast();
   const [aba, setAba] = useState<Aba>("canteiros");
   const [loading, setLoading] = useState(true);
-  const [canEdit, setCanEdit] = useState(false);
+  const { podeEditar: canEdit } = useModulo("horta");
 
   const [culturas, setCulturas] = useState<HortaCulturaRow[]>([]);
   const [canteiros, setCanteiros] = useState<CanteiroRow[]>([]);
@@ -77,7 +77,6 @@ export function HortaPage() {
 
   useEffect(() => {
     fetchAll();
-    obterRoleAtual().then((r) => setCanEdit(r === "admin" || r === "editor")).catch(() => {});
   }, [fetchAll]);
 
   const culturaById = useMemo(() => new Map(culturas.map((c) => [c.id, c])), [culturas]);
@@ -97,6 +96,7 @@ export function HortaPage() {
   const historico = useMemo(() => ciclos.filter((c) => c.status === "finalizado"), [ciclos]);
 
   async function mudarStatus(ciclo: CanteiroCicloRow, status: CanteiroCicloStatus) {
+    if (!canEdit) return;
     try {
       await atualizarCiclo(ciclo.id, status === "finalizado" ? { status, colhido_em: hoje } : { status });
       toast.success(status === "finalizado" ? "Ciclo finalizado! Canteiro liberado." : "Status atualizado");
@@ -297,7 +297,7 @@ export function HortaPage() {
         confirmText="Excluir"
         busy={busy}
         onConfirm={async () => {
-          if (!confirmExcluir) return;
+          if (!canEdit || !confirmExcluir) return;
           setBusy(true);
           try {
             await excluirCiclo(confirmExcluir.id);
@@ -327,6 +327,7 @@ function PlantarModal({ canteiroIdInicial, canteiros, culturas, onClose, onSaved
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("horta");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     canteiro_id: canteiroIdInicial ?? (canteiros[0]?.id ?? ""),
@@ -349,6 +350,7 @@ function PlantarModal({ canteiroIdInicial, canteiros, culturas, onClose, onSaved
   }, [form.cultura_id, form.data_plantio]);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!form.canteiro_id) { toast.warning("Selecione o canteiro."); return; }
     if (!form.cultura_id) { toast.warning("Selecione a cultura."); return; }
     if (!form.data_plantio) { toast.warning("Informe a data de plantio."); return; }
@@ -412,12 +414,14 @@ function NovoCanteiroModal({ proximoNumero, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("horta");
   const [busy, setBusy] = useState(false);
   const [numero, setNumero] = useState(proximoNumero);
   const [area, setArea] = useState("");
   const guard = useUnsavedGuard(true, { numero, area }, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!numero || numero < 1) { toast.warning("Informe o número do canteiro."); return; }
     setBusy(true);
     try {
@@ -455,10 +459,12 @@ function CulturasModal({ culturas, onClose, onChanged }: {
   onChanged: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("horta");
   const [busy, setBusy] = useState(false);
   const [novo, setNovo] = useState({ nome: "", ciclo: "" });
 
   async function adicionar() {
+    if (!podeEditar) return;
     if (!novo.nome.trim()) { toast.warning("Informe o nome da cultura."); return; }
     setBusy(true);
     try {
@@ -477,6 +483,7 @@ function CulturasModal({ culturas, onClose, onChanged }: {
   }
 
   async function salvarCiclo(cultura: HortaCulturaRow, ciclo: string) {
+    if (!podeEditar) return;
     const valor = ciclo === "" ? null : Number(ciclo);
     if (valor != null && (!Number.isFinite(valor) || valor < 1)) return;
     try {
@@ -488,6 +495,7 @@ function CulturasModal({ culturas, onClose, onChanged }: {
   }
 
   async function toggleAtivo(cultura: HortaCulturaRow) {
+    if (!podeEditar) return;
     try {
       await atualizarCulturaHorta(cultura.id, { nome: cultura.nome, ciclo_dias_padrao: cultura.ciclo_dias_padrao, ativo: !cultura.ativo });
       onChanged();

@@ -73,8 +73,38 @@ export type UserRow = {
   full_name: string | null;
   role: UserRole;
   avatar_url: string | null;
+  // Tela Acessos (migration 0058)
+  cargo: string | null;
+  setor: string | null;
+  /** {"<modulo>": "leitura" | "edicao"} — ver src/lib/acessos/modulos.ts. */
+  permissoes: Record<string, "leitura" | "edicao">;
+  /** false = bloqueado ou convite ainda não ativado. */
+  ativo: boolean;
+  senha_definida_em: string | null;
+  convidado_por: string | null;
+  convidado_em: string | null;
+  bloqueado_em: string | null;
+  bloqueado_por: string | null;
   created_at: string;
   updated_at: string;
+};
+
+/** Colunas da 0058 com default no banco (opcionais no insert). */
+type UserColunas0058 =
+  | "cargo" | "setor" | "permissoes" | "ativo" | "senha_definida_em"
+  | "convidado_por" | "convidado_em" | "bloqueado_em" | "bloqueado_por";
+
+export type LogRow = {
+  id: string;
+  tipo: LogTipo;
+  acao: string;
+  descricao: string | null;
+  usuario_id: string | null;
+  usuario_nome: string | null;
+  metadados: Json | null;
+  ip: string | null;
+  user_agent: string | null;
+  created_at: string;
 };
 
 export type ClassificacaoFinanceiraRow = {
@@ -917,8 +947,14 @@ export interface Database {
     Tables: {
       users: {
         Row: UserRow;
-        Insert: Omit<UserRow, "created_at" | "updated_at">;
+        Insert: Omit<UserRow, "created_at" | "updated_at" | UserColunas0058> & Partial<Pick<UserRow, UserColunas0058>>;
         Update: Partial<Omit<UserRow, "id" | "created_at" | "updated_at">>;
+        Relationships: EmptyRels;
+      };
+      logs: {
+        Row: LogRow;
+        Insert: Pick<LogRow, "tipo" | "acao"> & Partial<Omit<LogRow, "id" | "created_at" | "tipo" | "acao">>;
+        Update: Partial<Omit<LogRow, "id">>;
         Relationships: EmptyRels;
       };
       classificacao_financeira: {

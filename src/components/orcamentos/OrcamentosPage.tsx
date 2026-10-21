@@ -8,9 +8,10 @@ import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { createClient } from "@/lib/supabase/client";
 import {
-  Plus, Pencil, Trash2, Wallet,
+  Plus, Pencil, Trash2, Wallet, Eye,
 } from "lucide-react";
 import {
   TIPO_DESPESA_LABEL,
@@ -54,6 +55,8 @@ const DEFAULT_FORM: FormState = {
 
 export function OrcamentosPage() {
   const toast = useToast();
+  // Modo leitura: lista e filtros livres; criar, editar e remover não.
+  const { podeEditar } = useModulo("orcamentos");
   const [linhas, setLinhas] = useState<OrcamentoMensalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [filtroMes, setFiltroMes] = useState<string>("");
@@ -109,6 +112,7 @@ export function OrcamentosPage() {
   }
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!/^\d{4}-\d{2}$/.test(form.mes_referencia)) {
       toast.error("Mês inválido", "Use o formato YYYY-MM.");
       return;
@@ -153,6 +157,7 @@ export function OrcamentosPage() {
   }
 
   async function confirmarRemocao() {
+    if (!podeEditar) return;
     if (!confirmDelId) return;
     setDeleting(true);
     const supabase = createClient();
@@ -183,7 +188,7 @@ export function OrcamentosPage() {
             Teto mensal de gasto por tipo de despesa. Substitui o orçamento fixo de R$ 20.000 que ficava chumbado na Memória de Cálculo da planilha. O card &quot;Realizado vs Saldo&quot; do relatório mensal consulta esta tabela.
           </p>
         </div>
-        <Button onClick={abrirNovo}><Plus size={14}/> Novo orçamento</Button>
+        {podeEditar && <Button onClick={abrirNovo}><Plus size={14}/> Novo orçamento</Button>}
       </div>
 
       <Card>
@@ -236,7 +241,7 @@ export function OrcamentosPage() {
                 )}
                 {!loading && linhasFiltradas.length === 0 && (
                   <tr><td colSpan={5} className="px-4 py-12 text-center text-xs text-stone-400">
-                    Nenhum orçamento {filtroMes || filtroTipo ? "com esses filtros" : "cadastrado"}. Clique em &quot;Novo orçamento&quot; para começar.
+                    Nenhum orçamento {filtroMes || filtroTipo ? "com esses filtros" : "cadastrado"}.{podeEditar && <> Clique em &quot;Novo orçamento&quot; para começar.</>}
                   </td></tr>
                 )}
                 {!loading && linhasFiltradas.map(r => (
@@ -247,12 +252,15 @@ export function OrcamentosPage() {
                     <td className="px-4 py-3 text-stone-500 text-xs truncate max-w-[300px]">{r.observacao ?? "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <button onClick={() => abrirEdicao(r)} className="p-1.5 rounded hover:bg-stone-100 text-stone-500 hover:text-accent-500 transition" title="Editar">
-                          <Pencil size={13}/>
+                        {/* Modo leitura: o lápis vira "Ver detalhes" (mesmo modal, travado). */}
+                        <button onClick={() => abrirEdicao(r)} className="p-1.5 rounded hover:bg-stone-100 text-stone-500 hover:text-accent-500 transition" title={podeEditar ? "Editar" : "Ver detalhes"}>
+                          {podeEditar ? <Pencil size={13}/> : <Eye size={13}/>}
                         </button>
-                        <button onClick={() => setConfirmDelId(r.id)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-600 transition" title="Remover">
-                          <Trash2 size={13}/>
-                        </button>
+                        {podeEditar && (
+                          <button onClick={() => setConfirmDelId(r.id)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-600 transition" title="Remover">
+                            <Trash2 size={13}/>
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -263,20 +271,20 @@ export function OrcamentosPage() {
         </CardContent>
       </Card>
 
-      <Modal open={editOpen} onClose={() => !saving && guard.requestClose()} title={form.id ? "Editar orçamento" : "Novo orçamento"} size="md">
+      <Modal open={editOpen} onClose={() => !saving && guard.requestClose()} title={form.id ? (podeEditar ? "Editar orçamento" : "Detalhes do orçamento") : "Novo orçamento"} size="md">
         <div className="p-6 space-y-4">
           <Input
             label="Mês (YYYY-MM)"
             type="month"
             value={form.mes_referencia}
             onChange={(e) => setForm({ ...form, mes_referencia: e.target.value })}
-            disabled={!!form.id}
+            disabled={!podeEditar || !!form.id}
           />
           <Select
             label="Tipo de Despesa"
             value={form.tipo_despesa}
             onChange={(e) => setForm({ ...form, tipo_despesa: e.target.value as TipoDespesa })}
-            disabled={!!form.id}
+            disabled={!podeEditar || !!form.id}
           >
             {TIPOS_ORCAVEIS.map(t => (
               <option key={t} value={t}>{TIPO_DESPESA_LABEL[t]}</option>
@@ -290,19 +298,24 @@ export function OrcamentosPage() {
             value={form.valor_orcado}
             onChange={(e) => setForm({ ...form, valor_orcado: e.target.value })}
             placeholder="20000.00"
+            disabled={!podeEditar}
           />
+          {/* readOnly (não disabled) no modo leitura: dá para rolar e copiar o texto. */}
           <Input
             label="Observação (opcional)"
             value={form.observacao}
             onChange={(e) => setForm({ ...form, observacao: e.target.value })}
             placeholder="Ex.: ajustado por causa da safra"
+            readOnly={!podeEditar}
           />
         </div>
         <div className="px-6 py-4 border-t border-stone-100 flex items-center justify-end gap-2 bg-stone-50/50">
-          <Button variant="ghost" onClick={guard.requestClose} disabled={saving}>Cancelar</Button>
-          <Button onClick={salvar} loading={saving} disabled={saving}>
-            {form.id ? "Salvar" : "Criar orçamento"}
-          </Button>
+          <Button variant="ghost" onClick={guard.requestClose} disabled={saving}>{podeEditar ? "Cancelar" : "Fechar"}</Button>
+          {podeEditar && (
+            <Button onClick={salvar} loading={saving} disabled={saving}>
+              {form.id ? "Salvar" : "Criar orçamento"}
+            </Button>
+          )}
         </div>
       </Modal>
       <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />

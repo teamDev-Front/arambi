@@ -10,11 +10,12 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import {
   Plus, Search, Edit2, Trash2, Loader2, Save,
   Warehouse, Sprout, Calculator, Calendar, PackageCheck,
   Coins, TrendingDown, ArrowDownToLine, HelpCircle,
-  Copy, FileSpreadsheet, ClipboardList, Gauge, Handshake, Info, Scale,
+  Copy, FileSpreadsheet, ClipboardList, Gauge, Handshake, Info, Scale, Eye,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer,
@@ -85,6 +86,8 @@ const fmtSc = (n: number) => `${n.toLocaleString("pt-BR", { maximumFractionDigit
 
 export function EstoquePage() {
   const toast = useToast();
+  // Modo leitura (Acessos): parâmetros e depósitos só para consulta; exportar continua.
+  const { podeEditar } = useModulo("estoque");
 
   const [armazens, setArmazens] = useState<ArmazemRow[]>([]);
   const [armazemId, setArmazemId] = useState<string>("");
@@ -258,6 +261,7 @@ export function EstoquePage() {
 
   // ---- Salvar parâmetros ----
   async function saveParam() {
+    if (!podeEditar) return;
     if (!armazemId || !cultura || !safra || !paramForm) return;
     setParamSaving(true);
     try {
@@ -296,6 +300,7 @@ export function EstoquePage() {
 
   // ---- CRUD depósito ----
   function openNovoDep() {
+    if (!podeEditar) return;
     setDepEditId(null);
     setDepSnapshot(null);
     setDepForm({ ...EMPTY_DEP, cultura, safra });
@@ -320,6 +325,7 @@ export function EstoquePage() {
   // Copiar depósito (ajuste 27-jul): abre o modal de NOVO já preenchido com os
   // dados do existente — ajusta o que precisar (DFe/NFP/data) e salva.
   function openCopyDep(r: SafraDepositoCalculadoRow) {
+    if (!podeEditar) return;
     setDepEditId(null);
     setDepForm({
       cultura: r.cultura,
@@ -353,6 +359,7 @@ export function EstoquePage() {
     toast.success("Exportação concluída", `Arquivo XLSX gerado (${rows.length} depósito${rows.length === 1 ? "" : "s"}).`);
   }
   async function saveDep() {
+    if (!podeEditar) return;
     if (!armazemId || !depForm.kg_bruto || !depForm.safra || !depForm.data_deposito) {
       toast.warning("Campos obrigatórios", "Safra, data e quantidade são obrigatórios.");
       return;
@@ -402,6 +409,7 @@ export function EstoquePage() {
     }
   }
   async function removeDep(r: SafraDepositoCalculadoRow) {
+    if (!podeEditar) return;
     if (!confirm(`Excluir depósito DFe ${r.dfe_entrada ?? "(s/ DFe)"} de ${fmtKg(Number(r.kg_bruto))}? Você ainda terá 8 segundos para desfazer.`)) return;
     try {
       const apagado = await deletarDeposito(r.id);
@@ -418,6 +426,7 @@ export function EstoquePage() {
 
   // ---- Ajuste de saldo: zerar o resíduo da quebra técnica ----
   function openAjusteSaldo() {
+    if (!podeEditar) return;
     setAjusteForm({
       data: paramForm?.data_atual ?? new Date().toISOString().slice(0, 10),
       observacao: "",
@@ -425,6 +434,7 @@ export function EstoquePage() {
     setAjusteModal(true);
   }
   async function zerarSaldo() {
+    if (!podeEditar) return;
     if (!safra) return;
     setAjusteSaving(true);
     try {
@@ -467,16 +477,18 @@ export function EstoquePage() {
             Acompanhamento de grãos armazenados — taxa de armazenagem, quebra técnica e simulação de venda
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={openAjusteSaldo}
-            disabled={!armazemId || !safra || resumo.total_kg_saldo <= 0}
-            title="Zera o saldo remanescente lançando-o como quebra técnica — para quando 100% do estoque já foi comercializado e sobrou só a diferença do peso bruto para o líquido fixado pelo armazém">
-            <Scale size={14} /> Ajustar Saldo
-          </Button>
-          <Button size="sm" onClick={openNovoDep} disabled={!armazemId}>
-            <Plus size={14} /> Novo Depósito
-          </Button>
-        </div>
+        {podeEditar && (
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={openAjusteSaldo}
+              disabled={!armazemId || !safra || resumo.total_kg_saldo <= 0}
+              title="Zera o saldo remanescente lançando-o como quebra técnica — para quando 100% do estoque já foi comercializado e sobrou só a diferença do peso bruto para o líquido fixado pelo armazém">
+              <Scale size={14} /> Ajustar Saldo
+            </Button>
+            <Button size="sm" onClick={openNovoDep} disabled={!armazemId}>
+              <Plus size={14} /> Novo Depósito
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Seletor: Armazém × Cultura × Safra */}
@@ -682,7 +694,7 @@ export function EstoquePage() {
                       <HelpCircle size={11} className="text-stone-300" />
                     </Tooltip>
                   </div>
-                  <input type="date" value={paramForm.data_atual}
+                  <input type="date" value={paramForm.data_atual} readOnly={!podeEditar}
                     onChange={(e) => setParamForm({ ...paramForm, data_atual: e.target.value })}
                     className="w-full h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent-400"
                   />
@@ -694,7 +706,7 @@ export function EstoquePage() {
                       <HelpCircle size={11} className="text-stone-300" />
                     </Tooltip>
                   </div>
-                  <input type="number" step="0.01" value={paramForm.cotacao_simulada_sc}
+                  <input type="number" step="0.01" value={paramForm.cotacao_simulada_sc} readOnly={!podeEditar}
                     onChange={(e) => setParamForm({ ...paramForm, cotacao_simulada_sc: e.target.value })}
                     placeholder="R$ 50,00"
                     className="w-full h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent-400"
@@ -703,7 +715,7 @@ export function EstoquePage() {
                 <div className="grid grid-cols-2 gap-2 pt-2 border-t border-stone-100">
                   <div>
                     <label className="text-[10px] font-medium text-stone-500 uppercase">Quebra/Quinzena</label>
-                    <input type="number" step="0.00001" value={paramForm.quebra_quinzena_pct}
+                    <input type="number" step="0.00001" value={paramForm.quebra_quinzena_pct} readOnly={!podeEditar}
                       onChange={(e) => setParamForm({ ...paramForm, quebra_quinzena_pct: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
@@ -716,7 +728,7 @@ export function EstoquePage() {
                         <HelpCircle size={10} className="text-stone-300" />
                       </Tooltip>
                     </div>
-                    <input type="number" value={paramForm.carencia_dias}
+                    <input type="number" value={paramForm.carencia_dias} readOnly={!podeEditar}
                       onChange={(e) => setParamForm({ ...paramForm, carencia_dias: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
@@ -729,7 +741,7 @@ export function EstoquePage() {
                         <HelpCircle size={10} className="text-stone-300" />
                       </Tooltip>
                     </div>
-                    <input type="number" value={paramForm.carencia_armazem_dias}
+                    <input type="number" value={paramForm.carencia_armazem_dias} readOnly={!podeEditar}
                       disabled={!!paramForm.carencia_armazem_ate}
                       onChange={(e) => setParamForm({ ...paramForm, carencia_armazem_dias: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs disabled:bg-stone-100 disabled:text-stone-400"
@@ -750,11 +762,11 @@ export function EstoquePage() {
                       </Tooltip>
                     </div>
                     <div className="flex gap-1.5">
-                      <input type="date" value={paramForm.carencia_armazem_ate}
+                      <input type="date" value={paramForm.carencia_armazem_ate} readOnly={!podeEditar}
                         onChange={(e) => setParamForm({ ...paramForm, carencia_armazem_ate: e.target.value })}
                         className="flex-1 h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                       />
-                      {paramForm.carencia_armazem_ate && (
+                      {podeEditar && paramForm.carencia_armazem_ate && (
                         <button type="button"
                           onClick={() => setParamForm({ ...paramForm, carencia_armazem_ate: "" })}
                           className="h-8 px-2 rounded-lg border border-stone-200 text-[10px] text-stone-500 hover:bg-stone-50"
@@ -771,7 +783,7 @@ export function EstoquePage() {
                         <HelpCircle size={10} className="text-stone-300" />
                       </Tooltip>
                     </div>
-                    <input type="number" step="0.01" value={paramForm.taxa_recepcao_por_saca}
+                    <input type="number" step="0.01" value={paramForm.taxa_recepcao_por_saca} readOnly={!podeEditar}
                       onChange={(e) => setParamForm({ ...paramForm, taxa_recepcao_por_saca: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
@@ -779,7 +791,7 @@ export function EstoquePage() {
                   </div>
                   <div>
                     <label className="text-[10px] font-medium text-stone-500 uppercase">Armaz. kg/quinz</label>
-                    <input type="number" step="0.0001" value={paramForm.armazenagem_por_kg_quinzena}
+                    <input type="number" step="0.0001" value={paramForm.armazenagem_por_kg_quinzena} readOnly={!podeEditar}
                       onChange={(e) => setParamForm({ ...paramForm, armazenagem_por_kg_quinzena: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
@@ -787,7 +799,7 @@ export function EstoquePage() {
                   </div>
                   <div>
                     <label className="text-[10px] font-medium text-stone-500 uppercase">Devolução/saca</label>
-                    <input type="number" step="0.01" value={paramForm.devolucao_por_saca}
+                    <input type="number" step="0.01" value={paramForm.devolucao_por_saca} readOnly={!podeEditar}
                       onChange={(e) => setParamForm({ ...paramForm, devolucao_por_saca: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
@@ -795,7 +807,7 @@ export function EstoquePage() {
                   </div>
                   <div className="col-span-2">
                     <label className="text-[10px] font-medium text-stone-500 uppercase">kg por saca</label>
-                    <input type="number" step="0.01" value={paramForm.kg_por_saca}
+                    <input type="number" step="0.01" value={paramForm.kg_por_saca} readOnly={!podeEditar}
                       onChange={(e) => setParamForm({ ...paramForm, kg_por_saca: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
@@ -807,16 +819,18 @@ export function EstoquePage() {
                         <HelpCircle size={10} className="text-stone-300" />
                       </Tooltip>
                     </div>
-                    <input type="number" step="0.001" min="0" value={paramForm.deposito_total_programado_kg}
+                    <input type="number" step="0.001" min="0" value={paramForm.deposito_total_programado_kg} readOnly={!podeEditar}
                       onChange={(e) => setParamForm({ ...paramForm, deposito_total_programado_kg: e.target.value })}
                       className="w-full h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs"
                     />
                     <span className="text-[10px] text-stone-400">0 = sem acompanhamento</span>
                   </div>
                 </div>
-                <Button size="sm" className="w-full mt-2" onClick={saveParam} loading={paramSaving} disabled={paramSaving}>
-                  <Save size={14}/> Aplicar / Salvar Parâmetros
-                </Button>
+                {podeEditar && (
+                  <Button size="sm" className="w-full mt-2" onClick={saveParam} loading={paramSaving} disabled={paramSaving}>
+                    <Save size={14}/> Aplicar / Salvar Parâmetros
+                  </Button>
+                )}
               </>
             )}
           </CardContent>
@@ -1038,7 +1052,7 @@ export function EstoquePage() {
                 {!loading && paged.length === 0 && (
                   <tr><td colSpan={17} className="px-4 py-12 text-center text-stone-400">
                     Sem depósitos nesta seleção — estoque zerado ou ainda não lançado.
-                    Clique em &quot;Novo Depósito&quot; para registrar uma entrada.
+                    {podeEditar && <> Clique em &quot;Novo Depósito&quot; para registrar uma entrada.</>}
                   </td></tr>
                 )}
                 {!loading && paged.map((r) => (
@@ -1065,9 +1079,13 @@ export function EstoquePage() {
                     <td className="px-2 py-2"><Badge variant={statusBadge(r.status)}>{SAFRA_DEP_STATUS_LABEL[r.status]}</Badge></td>
                     <td className="px-2 py-2">
                       <div className="flex items-center gap-0.5">
-                        <button onClick={() => openEditDep(r)} className="p-1 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar"><Edit2 size={12}/></button>
-                        <button onClick={() => openCopyDep(r)} className="p-1 rounded hover:bg-accent-50 text-stone-400 hover:text-accent-600 transition" title="Copiar (abre um novo depósito já preenchido)"><Copy size={12}/></button>
-                        <button onClick={() => removeDep(r)} className="p-1 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir"><Trash2 size={12}/></button>
+                        <button onClick={() => openEditDep(r)} className="p-1 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title={podeEditar ? "Editar" : "Ver detalhes"}>{podeEditar ? <Edit2 size={12}/> : <Eye size={12}/>}</button>
+                        {podeEditar && (
+                          <>
+                            <button onClick={() => openCopyDep(r)} className="p-1 rounded hover:bg-accent-50 text-stone-400 hover:text-accent-600 transition" title="Copiar (abre um novo depósito já preenchido)"><Copy size={12}/></button>
+                            <button onClick={() => removeDep(r)} className="p-1 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir"><Trash2 size={12}/></button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1107,41 +1125,43 @@ export function EstoquePage() {
 
       {/* Modal Depósito */}
       <Modal open={depModal} onClose={depGuard.requestClose}
-        title={depEditId ? "Editar Depósito" : "Novo Depósito"} size="lg">
+        title={!podeEditar ? "Detalhes do Depósito" : depEditId ? "Editar Depósito" : "Novo Depósito"} size="lg">
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Select label="Cultura *" value={depForm.cultura}
+            <Select label="Cultura *" value={depForm.cultura} disabled={!podeEditar}
               onChange={(e) => setDepForm({ ...depForm, cultura: e.target.value as CulturaSafra })}>
               {(Object.keys(CULTURA_LABEL) as CulturaSafra[]).map((c) =>
                 <option key={c} value={c}>{CULTURA_EMOJI[c]} {CULTURA_LABEL[c]}</option>)}
             </Select>
-            <Input label="Safra *" placeholder="25/25" value={depForm.safra}
+            <Input label="Safra *" placeholder="25/25" value={depForm.safra} readOnly={!podeEditar}
               onChange={(e) => setDepForm({ ...depForm, safra: e.target.value })} />
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <Input label="Data Depósito *" type="date" value={depForm.data_deposito}
+            <Input label="Data Depósito *" type="date" value={depForm.data_deposito} readOnly={!podeEditar}
               onChange={(e) => setDepForm({ ...depForm, data_deposito: e.target.value })} />
-            <Input label="DFe (entrada)" placeholder="54383" value={depForm.dfe_entrada}
+            <Input label="DFe (entrada)" placeholder="54383" value={depForm.dfe_entrada} readOnly={!podeEditar}
               onChange={(e) => setDepForm({ ...depForm, dfe_entrada: e.target.value })} />
-            <Input label="NFP" placeholder="8285721" value={depForm.nfp}
+            <Input label="NFP" placeholder="8285721" value={depForm.nfp} readOnly={!podeEditar}
               onChange={(e) => setDepForm({ ...depForm, nfp: e.target.value })} />
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Quantidade (kg bruto) *" type="number" step="0.001"
+            <Input label="Quantidade (kg bruto) *" type="number" step="0.001" readOnly={!podeEditar}
               value={depForm.kg_bruto} onChange={(e) => setDepForm({ ...depForm, kg_bruto: e.target.value })} />
-            <Select label="Status" value={depForm.status}
+            <Select label="Status" value={depForm.status} disabled={!podeEditar}
               onChange={(e) => setDepForm({ ...depForm, status: e.target.value as SafraDepositoStatus })}>
               {(Object.keys(SAFRA_DEP_STATUS_LABEL) as SafraDepositoStatus[]).map((s) =>
                 <option key={s} value={s}>{SAFRA_DEP_STATUS_LABEL[s]}</option>)}
             </Select>
           </div>
-          <Textarea label="Observação" rows={2} value={depForm.observacao}
+          <Textarea label="Observação" rows={2} value={depForm.observacao} readOnly={!podeEditar}
             onChange={(e) => setDepForm({ ...depForm, observacao: e.target.value })} />
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={depGuard.requestClose}>Cancelar</Button>
-            <Button onClick={saveDep} loading={depSaving} disabled={depSaving}>
-              {depEditId ? "Salvar Alterações" : "Adicionar"}
-            </Button>
+            <Button variant="ghost" onClick={depGuard.requestClose}>{podeEditar ? "Cancelar" : "Fechar"}</Button>
+            {podeEditar && (
+              <Button onClick={saveDep} loading={depSaving} disabled={depSaving}>
+                {depEditId ? "Salvar Alterações" : "Adicionar"}
+              </Button>
+            )}
           </div>
         </div>
       </Modal>

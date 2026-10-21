@@ -5,10 +5,15 @@
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { autorizarApi } from "@/lib/acessos/servidor";
 import { fetchDocument, isPdfMonkeyEnabled, PdfMonkeyApiError } from "@/lib/pdfmonkey/client";
 
 export async function GET(req: NextRequest) {
+  // Mesmos módulos que geram PDF (ver /api/pdfmonkey/generate).
+  const auth = await autorizarApi({ modulos: ["relatorios", "financeiro", "distribuicao"] });
+  if (!auth.ok) return auth.resposta;
+
   const url = new URL(req.url);
   const documentId = url.searchParams.get("document_id");
   const geracaoId  = url.searchParams.get("geracao_id");
@@ -22,8 +27,8 @@ export async function GET(req: NextRequest) {
   try {
     const doc = await fetchDocument(documentId);
     if (geracaoId) {
-      const supabase = await createClient();
-      await supabase
+      // Histórico gravado pelo servidor (quem só tem leitura também acompanha).
+      await createAdminClient()
         .from("pdfmonkey_geracoes")
         .update({
           status:       doc.status,

@@ -2,16 +2,25 @@
 // Sininho do Header — antes decorativo, agora mostra a Central de Alertas
 // (vacinações, manutenções, documentos, discrepâncias) computada por query.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Bell, CheckCircle2 } from "lucide-react";
 import { listarAlertas, type AlertaItem } from "@/lib/queries/agro";
 import { formatDate } from "@/lib/utils/format";
+import { usePermissoes } from "@/components/acessos/PermissoesProvider";
+import { classificarRota } from "@/lib/acessos/modulos";
 
 export function NotificacoesBell() {
   const [open, setOpen] = useState(false);
-  const [alertas, setAlertas] = useState<AlertaItem[]>([]);
+  const [todos, setAlertas] = useState<AlertaItem[]>([]);
   const ref = useRef<HTMLDivElement>(null);
+  const { podeVer } = usePermissoes();
+
+  // Só alertas de módulos que a pessoa vê (tela Acessos).
+  const alertas = useMemo(() => todos.filter((a) => {
+    const rota = classificarRota(a.href);
+    return rota.tipo !== "modulo" || podeVer(rota.modulo);
+  }), [todos, podeVer]);
 
   useEffect(() => {
     listarAlertas().then(setAlertas).catch(() => setAlertas([]));

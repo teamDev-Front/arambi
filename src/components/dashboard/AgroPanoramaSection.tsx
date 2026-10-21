@@ -17,7 +17,8 @@ import { Modal } from "@/components/ui/Modal";
 import { CalendarioMes, MESES_LABEL } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
 import { formatDate } from "@/lib/utils/format";
-import { obterRoleAtual } from "@/lib/queries/configuracoes";
+import { useModulo, usePermissoes } from "@/components/acessos/PermissoesProvider";
+import { classificarRota } from "@/lib/acessos/modulos";
 import {
   listarChuvasPeriodo, salvarChuvaDia, listarAlertas, listarEventosVacinacao,
   type AlertaItem, type AlertaTipo,
@@ -47,7 +48,11 @@ interface AgroPanoramaSectionProps {
 export function AgroPanoramaSection({ layout = "row" }: AgroPanoramaSectionProps) {
   const toast = useToast();
   const agora = new Date();
-  const [canEdit, setCanEdit] = useState(false);
+  // Chuva é lançada aqui mesmo: edição do módulo Home. Vacinação e alertas
+  // só dos módulos que a pessoa vê (0058).
+  const { podeEditar: canEdit } = useModulo("home");
+  const { podeVer } = usePermissoes();
+  const verVacinacao = podeVer("animais");
   const [loading, setLoading] = useState(true);
 
   // Chuva
@@ -63,7 +68,7 @@ export function AgroPanoramaSection({ layout = "row" }: AgroPanoramaSectionProps
   const [eventos, setEventos] = useState<(AnimalEventoRow & { lote_codigo: string | null })[]>([]);
 
   // Alertas
-  const [alertas, setAlertas] = useState<AlertaItem[]>([]);
+  const [todosAlertas, setAlertas] = useState<AlertaItem[]>([]);
   const [gerandoPdf, setGerandoPdf] = useState(false);
 
   const fetchChuvas = useCallback(async (ano: number, mes: number) => {
@@ -95,8 +100,12 @@ export function AgroPanoramaSection({ layout = "row" }: AgroPanoramaSectionProps
 
   useEffect(() => {
     fetchTudo();
-    obterRoleAtual().then((r) => setCanEdit(r === "admin" || r === "editor")).catch(() => {});
   }, [fetchTudo]);
+
+  const alertas = useMemo(() => todosAlertas.filter((a) => {
+    const rota = classificarRota(a.href);
+    return rota.tipo !== "modulo" || podeVer(rota.modulo);
+  }), [todosAlertas, podeVer]);
 
   // Derivados — chuva
   const chuvaPorDia = useMemo(() => new Map(chuvas.map((c) => [c.data, c])), [chuvas]);
@@ -156,7 +165,7 @@ export function AgroPanoramaSection({ layout = "row" }: AgroPanoramaSectionProps
 
   return (
     <>
-      <div className={layout === "column" ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 lg:grid-cols-3 gap-4"}>
+      <div className={layout === "column" ? "grid grid-cols-1 gap-4" : verVacinacao ? "grid grid-cols-1 lg:grid-cols-3 gap-4" : "grid grid-cols-1 lg:grid-cols-2 gap-4"}>
         {/* Calendário de Chuva */}
         <Card>
           <CardHeader className="py-3">
@@ -202,55 +211,57 @@ export function AgroPanoramaSection({ layout = "row" }: AgroPanoramaSectionProps
         </Card>
 
         {/* Calendário de Vacinação */}
-        <Card>
-          <CardHeader className="py-3">
-            <CardTitle className="flex items-center gap-2">
-              <Syringe size={15} className="text-emerald-600" /> Calendário de Vacinação
-            </CardTitle>
-            <Link href="/dashboard/animais" className="text-xs text-accent-600 hover:underline">
-              Ver animais
-            </Link>
-          </CardHeader>
-          <CardContent className="pt-3">
-            <CalendarioMes
-              ano={vacAno}
-              mes={vacMes}
-              compact
-              onNavigate={(a, m) => { setVacAno(a); setVacMes(m); }}
-              renderDia={(cel) => {
-                const evs = eventosPorDia.get(cel.iso);
-                if (!evs?.length) return null;
-                return (
-                  <span
-                    title={evs.map((e) => `${e.lote_codigo ?? ""} ${e.nome}`.trim()).join(" · ")}
-                    className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-700 text-[8px] font-bold flex items-center justify-center"
-                  >
-                    {evs.length}
-                  </span>
-                );
-              }}
-            />
-            <div className="mt-3 space-y-1 max-h-24 overflow-y-auto">
-              {eventos
-                .filter((ev) => ev.proxima_data?.startsWith(`${vacAno}-${pad(vacMes)}`))
-                .sort((a, b) => (a.proxima_data ?? "").localeCompare(b.proxima_data ?? ""))
-                .slice(0, 6)
-                .map((ev) => (
-                  <div key={ev.id} className="flex items-center gap-2 text-[11px] text-stone-600">
-                    <span className="font-semibold text-emerald-700 tabular-nums shrink-0">
-                      {ev.proxima_data ? formatDate(ev.proxima_data) : ""}
+        {verVacinacao && (
+          <Card>
+            <CardHeader className="py-3">
+              <CardTitle className="flex items-center gap-2">
+                <Syringe size={15} className="text-emerald-600" /> Calendário de Vacinação
+              </CardTitle>
+              <Link href="/dashboard/animais" className="text-xs text-accent-600 hover:underline">
+                Ver animais
+              </Link>
+            </CardHeader>
+            <CardContent className="pt-3">
+              <CalendarioMes
+                ano={vacAno}
+                mes={vacMes}
+                compact
+                onNavigate={(a, m) => { setVacAno(a); setVacMes(m); }}
+                renderDia={(cel) => {
+                  const evs = eventosPorDia.get(cel.iso);
+                  if (!evs?.length) return null;
+                  return (
+                    <span
+                      title={evs.map((e) => `${e.lote_codigo ?? ""} ${e.nome}`.trim()).join(" · ")}
+                      className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-700 text-[8px] font-bold flex items-center justify-center"
+                    >
+                      {evs.length}
                     </span>
-                    <span className="truncate">💉 {ev.nome}{ev.lote_codigo ? ` — ${ev.lote_codigo}` : ""}</span>
-                  </div>
-                ))}
-              {eventos.filter((ev) => ev.proxima_data?.startsWith(`${vacAno}-${pad(vacMes)}`)).length === 0 && (
-                <p className="text-[11px] text-stone-400 text-center py-1">
-                  Nenhuma vacinação agendada em {MESES_LABEL[vacMes - 1]}.
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                  );
+                }}
+              />
+              <div className="mt-3 space-y-1 max-h-24 overflow-y-auto">
+                {eventos
+                  .filter((ev) => ev.proxima_data?.startsWith(`${vacAno}-${pad(vacMes)}`))
+                  .sort((a, b) => (a.proxima_data ?? "").localeCompare(b.proxima_data ?? ""))
+                  .slice(0, 6)
+                  .map((ev) => (
+                    <div key={ev.id} className="flex items-center gap-2 text-[11px] text-stone-600">
+                      <span className="font-semibold text-emerald-700 tabular-nums shrink-0">
+                        {ev.proxima_data ? formatDate(ev.proxima_data) : ""}
+                      </span>
+                      <span className="truncate">💉 {ev.nome}{ev.lote_codigo ? ` — ${ev.lote_codigo}` : ""}</span>
+                    </div>
+                  ))}
+                {eventos.filter((ev) => ev.proxima_data?.startsWith(`${vacAno}-${pad(vacMes)}`)).length === 0 && (
+                  <p className="text-[11px] text-stone-400 text-center py-1">
+                    Nenhuma vacinação agendada em {MESES_LABEL[vacMes - 1]}.
+                  </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Central de Alertas */}
         <Card>

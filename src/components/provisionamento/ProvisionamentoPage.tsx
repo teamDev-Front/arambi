@@ -1,12 +1,13 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { LinkModulo } from "@/components/acessos/LinkModulo";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { useToast } from "@/components/ui/Toast";
 import { Loader2, CalendarClock, TrendingUp, TrendingDown, HandCoins, Scale, HelpCircle, CopyPlus } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { EspelharAnoModal } from "@/components/provisionamento/EspelharAnoModal";
 import { formatCurrency } from "@/lib/utils/format";
 import {
@@ -36,6 +37,8 @@ interface LinhaConta {
 
 export function ProvisionamentoPage() {
   const toast = useToast();
+  // Modo leitura: a grade é só consulta; o que grava aqui é o "Espelhar ano".
+  const { podeEditar } = useModulo("provisionamento");
 
   const anoCorrente = String(new Date().getFullYear());
   const [ano, setAno] = useState(anoCorrente);
@@ -166,10 +169,12 @@ export function ProvisionamentoPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Espelhamento da virada do ano (17-ago) */}
-          <Button variant="outline" size="sm" onClick={() => setEspelharOpen(true)}
-            title="Copia as despesas fixas e periódicas deste ano para o ano seguinte, já provisionadas — sem lançar item por item">
-            <CopyPlus size={14} /> Espelhar ano
-          </Button>
+          {podeEditar && (
+            <Button variant="outline" size="sm" onClick={() => setEspelharOpen(true)}
+              title="Copia as despesas fixas e periódicas deste ano para o ano seguinte, já provisionadas — sem lançar item por item">
+              <CopyPlus size={14} /> Espelhar ano
+            </Button>
+          )}
           <select value={ano} onChange={(e) => setAno(e.target.value)}
             className="h-9 rounded-lg border border-stone-300 bg-white px-3 text-sm">
             {(anos.includes(ano) ? anos : [ano, ...anos]).map((a) => <option key={a} value={a}>{a}</option>)}
@@ -233,7 +238,7 @@ export function ProvisionamentoPage() {
           ) : linhas.length === 0 ? (
             <div className="px-4 py-12 text-center text-stone-400">
               Nenhum lançamento em {ano}. Os valores aparecem aqui automaticamente a partir do{" "}
-              <Link href="/dashboard/financeiro" className="underline">Financeiro</Link>.
+              <LinkModulo href="/dashboard/financeiro" className="underline">Financeiro</LinkModulo>.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -268,9 +273,9 @@ export function ProvisionamentoPage() {
                   {/* Vendas firmadas (satélite) */}
                   <tr className="border-b border-stone-50 hover:bg-stone-50 transition-colors">
                     <td className="px-3 py-1.5 text-xs text-stone-700 whitespace-nowrap sticky left-0 bg-white">
-                      <Link href="/dashboard/vendas-futuras" className="hover:underline" title="Contratos firmados no módulo Vendas Futuras — mês previsto de recebimento">
+                      <LinkModulo href="/dashboard/vendas-futuras" className="hover:underline" title="Contratos firmados no módulo Vendas Futuras — mês previsto de recebimento">
                         💰 Vendas firmadas (contratos)
-                      </Link>
+                      </LinkModulo>
                     </td>
                     {vendasMes.map((v, i) => celula(v, 0, i === mesCorrenteIdx))}
                     <td className="px-3 py-1.5 text-right text-xs font-bold text-emerald-700 whitespace-nowrap">
@@ -289,9 +294,9 @@ export function ProvisionamentoPage() {
                       <td className="px-3 py-1.5 text-xs text-stone-700 whitespace-nowrap sticky left-0 bg-white">
                         <span className="text-stone-400 mr-1">{l.cod}</span>{l.nome}
                         {l.cod === "2.8" && (
-                          <Link href="/dashboard/distribuicao" className="ml-1 text-accent-600 hover:underline text-[10px]">
+                          <LinkModulo href="/dashboard/distribuicao" className="ml-1 text-accent-600 hover:underline text-[10px]">
                             ver detalhado →
-                          </Link>
+                          </LinkModulo>
                         )}
                       </td>
                       {MESES_LABEL.map((_, i) => celula(l.previsto[i], l.realizado[i], i === mesCorrenteIdx))}
@@ -303,9 +308,9 @@ export function ProvisionamentoPage() {
                   {/* DL detalhado (satélite, conferência) */}
                   <tr className="border-b border-stone-50 hover:bg-stone-50 transition-colors">
                     <td className="px-3 py-1.5 text-xs text-stone-500 whitespace-nowrap sticky left-0 bg-white italic">
-                      <Link href="/dashboard/distribuicao" className="hover:underline" title="Soma do detalhado por sócio (provisionado + a pagar) — deve bater com a linha 2.8">
+                      <LinkModulo href="/dashboard/distribuicao" className="hover:underline" title="Soma do detalhado por sócio (provisionado + a pagar) — deve bater com a linha 2.8">
                         ↳ conferência: DL detalhado por sócio
-                      </Link>
+                      </LinkModulo>
                     </td>
                     {dlMes.map((v, i) => celula(v === 0 ? 0 : -v, 0, i === mesCorrenteIdx))}
                     <td className="px-3 py-1.5 text-right text-xs font-bold text-stone-500 whitespace-nowrap italic">
@@ -336,9 +341,9 @@ export function ProvisionamentoPage() {
       </Card>
 
       <p className="text-xs text-stone-400">
-        Fontes: lançamentos do <Link href="/dashboard/financeiro" className="underline">Financeiro</Link> (provisionado,
-        a pagar/receber e realizado), contratos de <Link href="/dashboard/vendas-futuras" className="underline">Vendas Futuras</Link> e
-        o detalhado da <Link href="/dashboard/distribuicao" className="underline">Distribuição de Lucro</Link>.
+        Fontes: lançamentos do <LinkModulo href="/dashboard/financeiro" className="underline">Financeiro</LinkModulo> (provisionado,
+        a pagar/receber e realizado), contratos de <LinkModulo href="/dashboard/vendas-futuras" className="underline">Vendas Futuras</LinkModulo> e
+        o detalhado da <LinkModulo href="/dashboard/distribuicao" className="underline">Distribuição de Lucro</LinkModulo>.
         Nada é digitado aqui — esta tela só espelha o que já está lançado, como as planilhas de provisionamento faziam.
       </p>
     </div>

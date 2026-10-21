@@ -362,14 +362,3 @@ export async function salvarConfigApp(chave: string, valor: string): Promise<voi
     throw new Error("Não foi possível salvar — sua conta precisa ser administradora (e a migration 0047 aplicada).");
   }
 }
-
-// ----------------------------------------------------------------------------
-// Papel do usuário atual (para gating de UI). Escrita real é barrada por RLS.
-// ----------------------------------------------------------------------------
-export async function obterRoleAtual(): Promise<string | null> {
-  const supabase = createClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) return null;
-  const { data } = await supabase.from("users").select("role").eq("id", auth.user.id).maybeSingle();
-  return (data?.role as string | undefined) ?? null;
-}

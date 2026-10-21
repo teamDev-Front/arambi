@@ -37,7 +37,7 @@ export function Header({ userName = "Usuário", userRole = "Admin", pageTitle }:
             </div>
             <div className="hidden sm:block text-left">
               <p className="text-xs font-semibold text-stone-800 leading-tight">{userName}</p>
-              <p className="text-[10px] text-stone-400 capitalize">{userRole}</p>
+              <p className="text-[10px] text-stone-400">{userRole}</p>
             </div>
             <ChevronDown size={14} className="text-stone-400" />
           </button>

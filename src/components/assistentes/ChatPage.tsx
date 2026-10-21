@@ -10,7 +10,8 @@ import { Send, Bot, User, ArrowLeft, Settings, Plus, X, AlertTriangle, Info } fr
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { ConfigPromptModal, loadAgentePromptPublico } from "@/components/assistentes/ConfigPromptModal";
-import type { ChatMensagemRow, UserRole } from "@/types";
+import type { ChatMensagemRow } from "@/types";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 
 interface DisplayMessage {
   id: string;
@@ -33,7 +34,6 @@ const AGENT_INFO: Record<string, { nome: string; descricao: string; color: strin
 
 const FALLBACK_WELCOME = "Olá! Como posso ajudá-lo hoje?";
 const REQUEST_TIMEOUT_MS = 90_000;
-const PODE_EDITAR_PROMPT: ReadonlySet<UserRole> = new Set<UserRole>(["admin", "editor"]);
 
 function genTempId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -85,7 +85,8 @@ export function ChatPage({ agentId }: { agentId: string }) {
   const [confirmNovaConversa, setConfirmNovaConversa] = useState(false);
   const [agenteAtivo, setAgenteAtivo] = useState<boolean>(true);
   const [agenteNome, setAgenteNome]  = useState<string>(agentFallback.nome);
-  const [podeEditar, setPodeEditar]  = useState<boolean>(false);
+  // Engrenagem (chaves de API e treinamento): Super Admin ou Edição em Assistentes.
+  const { podeEditar } = useModulo("assistentes");
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef  = useRef<AbortController | null>(null);
 
@@ -106,18 +107,9 @@ export function ChatPage({ agentId }: { agentId: string }) {
 
     if (!user) {
       setMessages([]);
-      setPodeEditar(false);
       setHistoricoCarregando(false);
       return;
     }
-
-    // Papel do usuário (gate da engrenagem). Erro silencioso → assume viewer.
-    const { data: perfil } = await supabase
-      .from("users")
-      .select("role")
-      .eq("id", user.id)
-      .maybeSingle();
-    setPodeEditar(PODE_EDITAR_PROMPT.has((perfil?.role as UserRole) ?? "viewer"));
 
     // Resolve a sessão: 1º tenta o ?session=<uuid> da URL (qualquer status,
     // desde que pertença ao usuário e ao agente); senão pega a sessão viva.

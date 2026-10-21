@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { LinkModulo } from "@/components/acessos/LinkModulo";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
@@ -9,6 +9,7 @@ import { MultiSelect } from "@/components/ui/MultiSelect";
 import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import { ComboBox } from "@/components/ui/ComboBox";
 import { StatusSelect } from "@/components/ui/StatusSelect";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { BankLogo } from "@/components/ui/BankLogo";
 import { Pagination } from "@/components/ui/Pagination";
 import { SelectAllHeader } from "@/components/ui/SelectAllHeader";
@@ -20,7 +21,7 @@ import { ConferenciaSicrediModal } from "@/components/financeiro/ConferenciaSicr
 import { ehResgateAutomatico } from "@/lib/queries/resgates";
 import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
-  Plus, FileText, Search, Edit2, Trash2, Copy,
+  Plus, FileText, Search, Edit2, Eye, Trash2, Copy,
   TrendingUp, Loader2,
   FileDown, CalendarRange,
   ChevronUp, ChevronDown, Wallet, FilterX,
@@ -96,6 +97,7 @@ import {
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 
 const PAGE_SIZE = 25;
 /**
@@ -243,6 +245,8 @@ const EMPTY_FORM: FormState = {
 
 export function FinanceiroPage() {
   const toast = useToast();
+  // Modo leitura (Acessos): sem edição no módulo, a tela só consulta, filtra e exporta.
+  const { podeEditar } = useModulo("financeiro");
 
   // ---- dados ----
   const [rows, setRows] = useState<TransacaoEmpresaRich[]>([]);
@@ -422,6 +426,7 @@ export function FinanceiroPage() {
   const [confirmInvestBusy, setConfirmInvestBusy] = useState(false);
 
   async function executarConfirmInvest() {
+    if (!podeEditar) return;
     if (!confirmInvest) return;
     setConfirmInvestBusy(true);
     try {
@@ -973,6 +978,7 @@ export function FinanceiroPage() {
 
   // ---- ações ----
   function openNew() {
+    if (!podeEditar) return;
     setEditId(null);
     setEditSnapshot(null);
     setForm({ ...EMPTY_FORM });
@@ -1009,6 +1015,7 @@ export function FinanceiroPage() {
   // Duplicar lançamento (RF 23-jul): abre o modal de NOVO já preenchido com os
   // dados do existente — a Lola ajusta só a descrição (ou o que precisar) e salva.
   function openDuplicate(row: TransacaoEmpresaRich) {
+    if (!podeEditar) return;
     setEditId(null);
     setEditSnapshot(null);
     setTipoSaida("global");
@@ -1018,6 +1025,7 @@ export function FinanceiroPage() {
   }
 
   async function handleSave() {
+    if (!podeEditar) return;
     // Saída DETALHADA (conta 2.8): grava no detalhado por sócio (transacoes_socio),
     // não em transacoes_empresa — o global é consolidado depois na tela Distribuição.
     if (salvandoDetalhada) {
@@ -1206,6 +1214,7 @@ export function FinanceiroPage() {
   }
 
   async function handleDelete(id: string) {
+    if (!podeEditar) return;
     if (!confirm("Excluir este lançamento?")) return;
     // Snapshot antes de apagar — é o que o "Desfazer" reinsere (mesmo id).
     const snapshot = rows.find((r) => r.id === id);
@@ -1238,6 +1247,7 @@ export function FinanceiroPage() {
 
   // ---- status direto na tela (1 linha) — padrão da Distribuição (RF 23-jul) ----
   async function mudarStatusInline(row: TransacaoEmpresaRich, status: StatusAramburu) {
+    if (!podeEditar) return;
     const statusAnterior = row.status;
     const concluir = async () => {
       toast.desfazer(
@@ -1275,6 +1285,7 @@ export function FinanceiroPage() {
 
   // ---- status em massa dos selecionados (RF 23-jul) ----
   async function aplicarStatusEmMassa() {
+    if (!podeEditar) return;
     if (!bulkStatus || selectedIds.size === 0) return;
     const ids = Array.from(selectedIds);
     const status = bulkStatus as StatusAramburu;
@@ -1327,6 +1338,7 @@ export function FinanceiroPage() {
 
   // ---- exclusão em massa dos selecionados (RF 24-jul) ----
   async function excluirSelecionados() {
+    if (!podeEditar) return;
     const n = selectedIds.size;
     if (n === 0) return;
     const alvo = n === 1 ? "o lançamento selecionado" : `os ${n} lançamentos selecionados`;
@@ -1379,6 +1391,7 @@ export function FinanceiroPage() {
    * automática dela no banco — migration 0054.
    */
   async function gerarSaldoDvDoMes() {
+    if (!podeEditar) return;
     setDvGerando(true);
     try {
       const id = await gerarLinhaSaldoDv(dvMes);
@@ -1465,10 +1478,10 @@ export function FinanceiroPage() {
             title="Gera o relatório (Capa/Contábil via PDFMonkey) a partir dos filtros ou da seleção">
             <FileText size={14} /> {selectedIds.size > 0 ? `Gerar (${selectedIds.size} selecionados)` : "Gerar relatório"}
           </Button>
-          <Link href="/dashboard/relatorios">
+          <LinkModulo href="/dashboard/relatorios" semAcesso="ocultar">
             <Button variant="ghost" size="sm">Relatórios PDF</Button>
-          </Link>
-          <Button size="sm" onClick={openNew}><Plus size={14} /> Nova Transação</Button>
+          </LinkModulo>
+          {podeEditar && <Button size="sm" onClick={openNew}><Plus size={14} /> Nova Transação</Button>}
         </div>
       </div>
 
@@ -1634,35 +1647,37 @@ export function FinanceiroPage() {
           {/* Linha automática do saldo (17-ago) — a resposta ao "o sistema vai
               debitando automático desse valor conforme as despesas variáveis
               forem sendo lançadas?". Passa a ir, a partir daqui. */}
-          <div className="mt-3 rounded-xl border border-stone-200 bg-white px-4 py-3 flex items-start justify-between gap-4 flex-wrap">
-            <div className="text-xs text-stone-600 max-w-xl space-y-1">
-              <p className="font-semibold text-stone-800">
-                Lançar o saldo de {mesHumano(dvMes)} no Financeiro (Provisionado DV)
-              </p>
-              <p className="leading-relaxed">
-                Cria no Financeiro a linha <b>Provisionado DV</b> do mês e passa a mantê-la igual ao
-                <b> saldo</b> ({formatCurrency(dvResumo?.limiteMensal ?? 0)} − o que já foi usado). A partir daí
-                cada Despesa Variável nova <b>debita sozinha</b>, e um lançamento positivo (devolução, reembolso)
-                <b> credita de volta</b> — sem precisar editar a linha à mão.
-              </p>
-              <p className="text-[11px] text-stone-400">
-                Se o mês já tem uma linha Provisionado DV, ela é <b>adotada</b> (não duplica) — inclusive
-                a que veio da planilha. Se a competência já passou do teto, não há saldo a programar e a
-                linha não é criada. Vale só para <b>{mesHumano(dvMes)}</b>: para o ano inteiro de uma vez,
-                use <b>Provisionamento Anual → Espelhar ano</b>.
-              </p>
+          {podeEditar && (
+            <div className="mt-3 rounded-xl border border-stone-200 bg-white px-4 py-3 flex items-start justify-between gap-4 flex-wrap">
+              <div className="text-xs text-stone-600 max-w-xl space-y-1">
+                <p className="font-semibold text-stone-800">
+                  Lançar o saldo de {mesHumano(dvMes)} no Financeiro (Provisionado DV)
+                </p>
+                <p className="leading-relaxed">
+                  Cria no Financeiro a linha <b>Provisionado DV</b> do mês e passa a mantê-la igual ao
+                  <b> saldo</b> ({formatCurrency(dvResumo?.limiteMensal ?? 0)} − o que já foi usado). A partir daí
+                  cada Despesa Variável nova <b>debita sozinha</b>, e um lançamento positivo (devolução, reembolso)
+                  <b> credita de volta</b> — sem precisar editar a linha à mão.
+                </p>
+                <p className="text-[11px] text-stone-400">
+                  Se o mês já tem uma linha Provisionado DV, ela é <b>adotada</b> (não duplica) — inclusive
+                  a que veio da planilha. Se a competência já passou do teto, não há saldo a programar e a
+                  linha não é criada. Vale só para <b>{mesHumano(dvMes)}</b>: para o ano inteiro de uma vez,
+                  use <b>Provisionamento Anual → Espelhar ano</b>.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                loading={dvGerando}
+                disabled={dvGerando}
+                onClick={gerarSaldoDvDoMes}
+                title="Cria (ou adota) a linha Provisionado DV do mês e liga a atualização automática"
+              >
+                <Layers size={14} /> Lançar/atualizar saldo
+              </Button>
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              loading={dvGerando}
-              disabled={dvGerando}
-              onClick={gerarSaldoDvDoMes}
-              title="Cria (ou adota) a linha Provisionado DV do mês e liga a atualização automática"
-            >
-              <Layers size={14} /> Lançar/atualizar saldo
-            </Button>
-          </div>
+          )}
 
           <p className="mt-2 text-[11px] text-stone-400 text-center">
             Orçamento mensal programado: {formatCurrency(dvResumo?.limiteMensal ?? 0)} · ajustável em
@@ -1927,29 +1942,34 @@ export function FinanceiroPage() {
             <span className="font-medium text-stone-700">
               {selectedIds.size} selecionado{selectedIds.size === 1 ? "" : "s"}:
             </span>
-            <select
-              value={bulkStatus}
-              onChange={(e) => setBulkStatus(e.target.value)}
-              className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
-              title="Status a aplicar em todos os selecionados"
-            >
-              <option value="">Escolher status…</option>
-              {statusAtivos.map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
-            </select>
-            <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy || bulkDeleteBusy}
-              loading={bulkBusy}
-              onClick={aplicarStatusEmMassa}
-              title="Aplica o status escolhido em todos os lançamentos selecionados de uma vez">
-              Aplicar status
-            </Button>
-            {/* Exclusão em massa (RF 24-jul) */}
-            <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
-              loading={bulkDeleteBusy}
-              onClick={excluirSelecionados}
-              className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
-              title="Exclui DE UMA VEZ todos os lançamentos selecionados (pede confirmação)">
-              <Trash2 size={13} /> Excluir selecionados
-            </Button>
+            {/* Em modo leitura a seleção segue servindo à exportação e ao relatório */}
+            {podeEditar && (
+              <>
+                <select
+                  value={bulkStatus}
+                  onChange={(e) => setBulkStatus(e.target.value)}
+                  className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+                  title="Status a aplicar em todos os selecionados"
+                >
+                  <option value="">Escolher status…</option>
+                  {statusAtivos.map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
+                </select>
+                <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy || bulkDeleteBusy}
+                  loading={bulkBusy}
+                  onClick={aplicarStatusEmMassa}
+                  title="Aplica o status escolhido em todos os lançamentos selecionados de uma vez">
+                  Aplicar status
+                </Button>
+                {/* Exclusão em massa (RF 24-jul) */}
+                <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
+                  loading={bulkDeleteBusy}
+                  onClick={excluirSelecionados}
+                  className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+                  title="Exclui DE UMA VEZ todos os lançamentos selecionados (pede confirmação)">
+                  <Trash2 size={13} /> Excluir selecionados
+                </Button>
+              </>
+            )}
             {/* Ver todos os selecionados (RF 31-jul): a seleção sobrevive à troca
                 de filtros/página, mas só o recorte atual aparece na tabela — aqui
                 ela confere a lista COMPLETA antes de aplicar status ou emitir o
@@ -2101,16 +2121,20 @@ export function FinanceiroPage() {
                         {t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? <span className="text-stone-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusSelect
-                          value={t.status}
-                          onChange={(v) => mudarStatusInline(t, v as StatusAramburu)}
-                          options={(statusAtivos.some((e) => e.codigo === t.status)
-                            ? statusAtivos
-                            : [statusMap.get(t.status) ?? { codigo: t.status, label: getStatusLabel(t.status), cor_bg: "#6b7280", cor_text: "#ffffff", kind: "neutro" as const, ordem: 0, ativo: false, is_sistema: true }, ...statusAtivos]
-                          ).map((e) => ({ value: e.codigo, label: e.label, bg: e.cor_bg, text: e.cor_text }))}
-                          title="Mudar o status deste lançamento direto na tela"
-                          aria-label={`Status de ${t.descricao ?? "lançamento"}`}
-                        />
+                        {podeEditar ? (
+                          <StatusSelect
+                            value={t.status}
+                            onChange={(v) => mudarStatusInline(t, v as StatusAramburu)}
+                            options={(statusAtivos.some((e) => e.codigo === t.status)
+                              ? statusAtivos
+                              : [statusMap.get(t.status) ?? { codigo: t.status, label: getStatusLabel(t.status), cor_bg: "#6b7280", cor_text: "#ffffff", kind: "neutro" as const, ordem: 0, ativo: false, is_sistema: true }, ...statusAtivos]
+                            ).map((e) => ({ value: e.codigo, label: e.label, bg: e.cor_bg, text: e.cor_text }))}
+                            title="Mudar o status deste lançamento direto na tela"
+                            aria-label={`Status de ${t.descricao ?? "lançamento"}`}
+                          />
+                        ) : (
+                          <StatusBadge status={t.status} />
+                        )}
                       </td>
                       {/* Cor pelo SINAL do valor (ajuste 27-jul): positivo verde,
                           negativo vermelho — mesmo em resgates saindo do SICREDINVEST. */}
@@ -2134,15 +2158,20 @@ export function FinanceiroPage() {
                               <Layers size={13} />
                             </button>
                           ) : null}
-                          <button onClick={() => openEdit(t)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar">
-                            <Edit2 size={13} />
+                          {/* Em modo leitura o mesmo modal abre só para consulta */}
+                          <button onClick={() => openEdit(t)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title={podeEditar ? "Editar" : "Ver detalhes"}>
+                            {podeEditar ? <Edit2 size={13} /> : <Eye size={13} />}
                           </button>
-                          <button onClick={() => openDuplicate(t)} className="p-1.5 rounded hover:bg-accent-50 text-stone-400 hover:text-accent-600 transition" title="Duplicar (abre um novo lançamento já preenchido)">
-                            <Copy size={13} />
-                          </button>
-                          <button onClick={() => handleDelete(t.id)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
-                            <Trash2 size={13} />
-                          </button>
+                          {podeEditar && (
+                            <>
+                              <button onClick={() => openDuplicate(t)} className="p-1.5 rounded hover:bg-accent-50 text-stone-400 hover:text-accent-600 transition" title="Duplicar (abre um novo lançamento já preenchido)">
+                                <Copy size={13} />
+                              </button>
+                              <button onClick={() => handleDelete(t.id)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
+                                <Trash2 size={13} />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -2175,26 +2204,27 @@ export function FinanceiroPage() {
       <Modal
         open={modalOpen}
         onClose={guard.requestClose}
-        title={editId ? "Editar Lançamento" : "Novo Lançamento"}
+        title={!podeEditar ? "Detalhes do Lançamento" : editId ? "Editar Lançamento" : "Novo Lançamento"}
         size="lg"
       >
+        {/* Modo leitura: mesmos campos, só para consulta (texto em readOnly p/ rolar e copiar) */}
         <div className="p-6 space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Input label="Vencimento" type="date" value={form.data}
+            <Input label="Vencimento" type="date" value={form.data} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, data: e.target.value })} />
             {!salvandoDetalhada && (
-              <Input label="Emissão (opcional)" type="date" value={form.data_emissao}
+              <Input label="Emissão (opcional)" type="date" value={form.data_emissao} readOnly={!podeEditar}
                 onChange={(e) => setForm({ ...form, data_emissao: e.target.value })} />
             )}
           </div>
 
           {!salvandoDetalhada && (
             <div className="grid grid-cols-2 gap-3">
-              <Select label="Tipo de Despesa" value={form.tipo_despesa}
+              <Select label="Tipo de Despesa" value={form.tipo_despesa} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, tipo_despesa: e.target.value as TipoDespesa })}>
                 {Object.entries(TIPO_DESPESA_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </Select>
-              <Select label="Status" value={form.status}
+              <Select label="Status" value={form.status} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, status: e.target.value as StatusAramburu })}>
                 {/* Status ativos; inclui o valor atual mesmo se inativado, p/ não perder na edição. */}
                 {(statusAtivos.some((e) => e.codigo === form.status)
@@ -2208,6 +2238,7 @@ export function FinanceiroPage() {
           <div className="grid grid-cols-2 gap-3">
             <Select label="Conta Contábil"
               value={form.conta_contabil_cod}
+              disabled={!podeEditar}
               onChange={(e) => setForm({ ...form, conta_contabil_cod: e.target.value, centro_custo_cod: "" })}>
               <option value="">Selecione…</option>
               {classificacoesN2.map((c) => (
@@ -2217,7 +2248,7 @@ export function FinanceiroPage() {
             {!salvandoDetalhada && (
               <Select label="Centro de Custo"
                 value={form.centro_custo_cod}
-                disabled={!form.conta_contabil_cod}
+                disabled={!podeEditar || !form.conta_contabil_cod}
                 onChange={(e) => setForm({ ...form, centro_custo_cod: e.target.value })}>
                 <option value="">Selecione…</option>
                 {childrenOf(form.conta_contabil_cod).map((c) => (
@@ -2233,13 +2264,13 @@ export function FinanceiroPage() {
               <p className="text-xs font-semibold text-stone-600 uppercase tracking-wide">Tipo de saída</p>
               <div className="flex gap-5 text-sm text-stone-700">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="tipo-saida" checked={tipoSaida === "global"}
+                  <input type="radio" name="tipo-saida" checked={tipoSaida === "global"} disabled={!podeEditar}
                     onChange={() => setTipoSaida("global")}
                     className="h-4 w-4 accent-accent-500" />
                   Saída global <span className="text-xs text-stone-400">(valor total — Cora → Inter)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="tipo-saida" checked={tipoSaida === "detalhada"}
+                  <input type="radio" name="tipo-saida" checked={tipoSaida === "detalhada"} disabled={!podeEditar}
                     onChange={() => setTipoSaida("detalhada")}
                     className="h-4 w-4 accent-accent-500" />
                   Saída detalhada <span className="text-xs text-stone-400">(por sócio — Inter → conta pessoal)</span>
@@ -2256,23 +2287,23 @@ export function FinanceiroPage() {
 
           {salvandoDetalhada && (
             <div className="grid grid-cols-2 gap-3">
-              <Select label="Sócio *" value={dlSocioId}
+              <Select label="Sócio *" value={dlSocioId} disabled={!podeEditar}
                 onChange={(e) => { setDlSocioId(e.target.value); setDlContaSocioId(""); }}>
                 <option value="">Selecione…</option>
                 {socios.map((s) => <option key={s.id} value={s.id}>{s.apelido ?? s.nome_completo}</option>)}
               </Select>
-              <Select label="Classificação *" value={dlClassif}
+              <Select label="Classificação *" value={dlClassif} disabled={!podeEditar}
                 onChange={(e) => setDlClassif(e.target.value)}>
                 <option value="">Selecione…</option>
                 {classifsPessoais.map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>)}
               </Select>
               <Select label="Conta destino do sócio" value={dlContaSocioId}
-                disabled={!dlSocioId}
+                disabled={!podeEditar || !dlSocioId}
                 onChange={(e) => setDlContaSocioId(e.target.value)}>
                 <option value="">—</option>
                 {contasSocio.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
               </Select>
-              <Select label="Status" value={dlStatus}
+              <Select label="Status" value={dlStatus} disabled={!podeEditar}
                 onChange={(e) => setDlStatus(e.target.value as StatusDL)}>
                 {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
                   <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
@@ -2280,12 +2311,12 @@ export function FinanceiroPage() {
             </div>
           )}
 
-          <Input label="Descrição" value={form.descricao}
+          <Input label="Descrição" value={form.descricao} readOnly={!podeEditar}
             onChange={(e) => setForm({ ...form, descricao: e.target.value })}
             placeholder={salvandoDetalhada ? "IPTU, Folha de pagamento, Energia…" : "Descrição do lançamento"} />
 
           <div className="grid grid-cols-2 gap-3">
-            {!salvandoDetalhada && (
+            {!salvandoDetalhada && podeEditar && (
               <ComboBox
                 label="Fornecedor / contraparte"
                 value={form.fornecedor_nome}
@@ -2294,26 +2325,30 @@ export function FinanceiroPage() {
                 placeholder="Digite para buscar o cadastrado…"
               />
             )}
+            {!salvandoDetalhada && !podeEditar && (
+              <Input label="Fornecedor / contraparte" value={form.fornecedor_nome} readOnly />
+            )}
             <Input
               label={salvandoDetalhada ? "Valor (R$)" : "Valor (R$, negativo = saída)"}
               type="number" step="0.01"
               min={salvandoDetalhada ? "0" : undefined}
               value={form.valor}
+              readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, valor: e.target.value })} />
           </div>
 
           {!salvandoDetalhada && (
             <div className="grid grid-cols-3 gap-3">
-              <Select label="Forma de Pgto" value={form.forma_pgto}
+              <Select label="Forma de Pgto" value={form.forma_pgto} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, forma_pgto: e.target.value as FormaPgto })}>
                 {Object.entries(FORMA_PGTO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </Select>
-              <Select label="Banco" value={form.conta_bancaria_id}
+              <Select label="Banco" value={form.conta_bancaria_id} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, conta_bancaria_id: e.target.value })}>
                 <option value="">—</option>
                 {bancos.map((b) => <option key={b.id} value={b.id}>{b.apelido ?? b.nome}</option>)}
               </Select>
-              <Select label="Obs. Obra" value={form.obs_obra}
+              <Select label="Obs. Obra" value={form.obs_obra} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, obs_obra: e.target.value as ObsObra })}>
                 {Object.entries(OBS_OBRA_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </Select>
@@ -2322,11 +2357,11 @@ export function FinanceiroPage() {
 
           {!salvandoDetalhada && (
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Referência (NF / recibo)" value={form.ref}
+              <Input label="Referência (NF / recibo)" value={form.ref} readOnly={!podeEditar}
                 onChange={(e) => setForm({ ...form, ref: e.target.value })}
                 placeholder='NF 12345 / "AGUARDANDO NF"' />
               <div className="flex flex-col gap-1.5">
-                <Input label="Parcelas (quantidade ou n/N)" value={form.parcelas}
+                <Input label="Parcelas (quantidade ou n/N)" value={form.parcelas} readOnly={!podeEditar}
                   onChange={(e) => setForm({ ...form, parcelas: e.target.value })}
                   placeholder={editId ? "2/12" : "ex.: 6 (gera 1/6 a 6/6) ou 2/12"} />
                 {!editId && (() => {
@@ -2351,6 +2386,7 @@ export function FinanceiroPage() {
               <input
                 type="checkbox"
                 checked={form.dispensa_resgate}
+                disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, dispensa_resgate: e.target.checked })}
                 className="h-3.5 w-3.5 mt-0.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
               />
@@ -2363,15 +2399,17 @@ export function FinanceiroPage() {
             </label>
           )}
 
-          <Textarea label="Observação" value={form.observacao}
+          <Textarea label="Observação" value={form.observacao} readOnly={!podeEditar}
             onChange={(e) => setForm({ ...form, observacao: e.target.value })}
             rows={2} placeholder="Anotações livres (exceções, regras especiais…)" />
 
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="ghost" onClick={guard.requestClose}>Cancelar</Button>
-            <Button onClick={handleSave} loading={saving} disabled={saving}>
-              {editId ? "Salvar Alterações" : "Adicionar"}
-            </Button>
+            <Button variant="ghost" onClick={guard.requestClose}>{podeEditar ? "Cancelar" : "Fechar"}</Button>
+            {podeEditar && (
+              <Button onClick={handleSave} loading={saving} disabled={saving}>
+                {editId ? "Salvar Alterações" : "Adicionar"}
+              </Button>
+            )}
           </div>
         </div>
       </Modal>

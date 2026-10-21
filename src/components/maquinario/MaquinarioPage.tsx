@@ -18,9 +18,9 @@ import { Tabs } from "@/components/ui/Tabs";
 import { isoLocalHoje } from "@/components/ui/CalendarioMes";
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { formatDate } from "@/lib/utils/format";
-import { obterRoleAtual } from "@/lib/queries/configuracoes";
 import {
   listarEquipamentos, criarEquipamento, atualizarEquipamento, excluirEquipamento,
   listarManutencoes, criarManutencao, atualizarManutencao, excluirManutencao,
@@ -51,7 +51,7 @@ export function MaquinarioPage() {
   const toast = useToast();
   const [aba, setAba] = useState<Aba>("equipamentos");
   const [loading, setLoading] = useState(true);
-  const [canEdit, setCanEdit] = useState(false);
+  const { podeEditar: canEdit } = useModulo("maquinario");
 
   const [equipamentos, setEquipamentos] = useState<EquipamentoRow[]>([]);
   const [manutencoes, setManutencoes] = useState<EquipamentoManutencaoRow[]>([]);
@@ -89,7 +89,6 @@ export function MaquinarioPage() {
 
   useEffect(() => {
     fetchAll();
-    obterRoleAtual().then((r) => setCanEdit(r === "admin" || r === "editor")).catch(() => {});
   }, [fetchAll]);
 
   // --------------------------------------------------------------------------
@@ -137,7 +136,7 @@ export function MaquinarioPage() {
   // Ações
   // --------------------------------------------------------------------------
   async function handleExcluir() {
-    if (!confirmExcluir) return;
+    if (!canEdit || !confirmExcluir) return;
     setBusy(true);
     try {
       if (confirmExcluir.tipo === "equipamento") await excluirEquipamento(confirmExcluir.id);
@@ -154,6 +153,7 @@ export function MaquinarioPage() {
   }
 
   async function marcarRealizada(m: EquipamentoManutencaoRow) {
+    if (!canEdit) return;
     try {
       await atualizarManutencao(m.id, { realizada_em: hoje });
       toast.success("Manutenção marcada como realizada");
@@ -461,6 +461,7 @@ function EquipamentoModal({ editando, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("maquinario");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<EquipamentoFormPayload>({
     codigo: editando?.codigo ?? "",
@@ -479,6 +480,7 @@ function EquipamentoModal({ editando, onClose, onSaved }: {
   const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!form.codigo.trim()) { toast.warning("Informe o código."); return; }
     if (!form.nome.trim()) { toast.warning("Informe o nome do equipamento."); return; }
     setBusy(true);
@@ -559,6 +561,7 @@ function ManutencaoModal({ editando, equipamentoIdInicial, equipamentos, onClose
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("maquinario");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<ManutencaoFormPayload>({
     equipamento_id: editando?.equipamento_id ?? equipamentoIdInicial ?? (equipamentos[0]?.id ?? ""),
@@ -571,6 +574,7 @@ function ManutencaoModal({ editando, equipamentoIdInicial, equipamentos, onClose
   const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!form.equipamento_id) { toast.warning("Selecione o equipamento."); return; }
     if (!form.descricao.trim()) { toast.warning("Descreva a manutenção."); return; }
     setBusy(true);
@@ -625,6 +629,7 @@ function DocumentoModal({ equipamentoIdInicial, equipamentos, onClose, onSaved }
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const { podeEditar } = useModulo("maquinario");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     equipamento_id: equipamentoIdInicial ?? (equipamentos[0]?.id ?? ""),
@@ -635,6 +640,7 @@ function DocumentoModal({ equipamentoIdInicial, equipamentos, onClose, onSaved }
   const guard = useUnsavedGuard(true, form, onClose);
 
   async function salvar() {
+    if (!podeEditar) return;
     if (!form.equipamento_id) { toast.warning("Selecione o equipamento."); return; }
     if (!form.tipo.trim()) { toast.warning("Informe o tipo do documento."); return; }
     if (!form.vencimento) { toast.warning("Informe o vencimento."); return; }

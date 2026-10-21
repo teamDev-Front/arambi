@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { LinkModulo } from "@/components/acessos/LinkModulo";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
@@ -9,10 +9,11 @@ import { Input, Select, Textarea } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import {
   Plus, Search, Edit2, Trash2, Loader2, HandCoins, CheckCheck,
   ArrowRightLeft, Undo2, CalendarCheck, CalendarDays, Users, Landmark, AlertTriangle, FilterX,
-  Copy, Tag, X, FileDown, FileText, RefreshCw,
+  Copy, Tag, X, FileDown, FileText, RefreshCw, Eye,
 } from "lucide-react";
 import { gerarPdfBloqueante } from "@/lib/pdfmonkey/frontend";
 import type { ReportScope } from "@/lib/pdfmonkey/types";
@@ -153,6 +154,9 @@ function carregarTagsDL(): Map<string, TagSnapshot> {
 
 export function DistribuicaoPage() {
   const toast = useToast();
+  // Modo leitura (acessos): consulta, filtros, exportação e capa seguem livres;
+  // tudo que grava some da tela e os handlers recusam.
+  const { podeEditar } = useModulo("distribuicao");
 
   // ---- competência (tabela / consolidação) ----
   // Competência multi-seleção (17-ago). Lista vazia = TODAS as competências —
@@ -317,8 +321,9 @@ export function DistribuicaoPage() {
    * quando há algo a fazer. Com tudo já repassado (o caso comum) ela ficava
    * como uma coluna vazia — foi isso que a Adri pediu para tirar. Os botões
    * "Dar baixa" / "Desfazer" continuam disponíveis quando há repasse pendente.
+   * No modo leitura a coluna nunca aparece.
    */
-  const temAcoesRepasse = repassesModal.some((r) => r.status === "a_pagar" || r.status === "a_repassar");
+  const temAcoesRepasse = podeEditar && repassesModal.some((r) => r.status === "a_pagar" || r.status === "a_repassar");
   /**
    * Total de lançamentos DETALHADOS das competências do filtro (todos os
    * status) — é o que a tabela mostra quando se clica no card "Global na
@@ -611,6 +616,7 @@ export function DistribuicaoPage() {
   // intervenção no banco.
   const [religando, setReligando] = useState(false);
   async function handleReligarSync() {
+    if (!podeEditar) return;
     // A religação é de UM mês (a etiqueta dl_auto: é por competência) — o mês
     // em foco, que é o mesmo da conferência que mostrou a divergência.
     setReligando(true);
@@ -688,6 +694,7 @@ export function DistribuicaoPage() {
 
   // ---- ações em massa ----
   async function aplicarEmMassa(payload: { status?: StatusDL; data_vencimento?: string }, rotulo: string) {
+    if (!podeEditar) return;
     if (selectedIds.size === 0) return;
     // Consolidados podem ser SELECIONADOS (17-ago), mas não alterados: mudar
     // valor ou status de um lançamento já repassado não atualiza o global, e a
@@ -728,6 +735,7 @@ export function DistribuicaoPage() {
 
   // ---- exclusão em lote (ajuste 27-jul) ----
   async function excluirSelecionados() {
+    if (!podeEditar) return;
     // Consolidados entram na seleção (17-ago) mas não são excluídos aqui.
     const snapshots = selecionadosEditaveis;
     const n = snapshots.length;
@@ -908,6 +916,7 @@ export function DistribuicaoPage() {
 
   // ---- status inline (1 linha) ----
   async function mudarStatus(row: TransacaoSocioRich, status: StatusDL) {
+    if (!podeEditar) return;
     const statusAnterior = row.status;
     try {
       await atualizarDetalhado(row.id, { status });
@@ -928,6 +937,7 @@ export function DistribuicaoPage() {
    * `mes_referencia` é derivado; datas de repasse/vencimento ficam como estão.
    */
   async function moverCompetencia(row: TransacaoSocioRich, destino: string) {
+    if (!podeEditar) return;
     if (row.repasse_id) {
       toast.warning("Lançamento vinculado a repasse", "Desfaça o repasse antes de mudar a competência.");
       return;
@@ -998,6 +1008,7 @@ export function DistribuicaoPage() {
   }
 
   async function handleSave() {
+    if (!podeEditar) return;
     if (!form) return;
     if (!form.socio_id || !form.classificacao_pessoal || !form.descricao || !form.valor || !form.competencia) {
       toast.warning("Campos obrigatórios", "Sócio, classificação, descrição, competência e valor são obrigatórios.");
@@ -1047,6 +1058,7 @@ export function DistribuicaoPage() {
   }
 
   async function handleDelete(row: TransacaoSocioRich) {
+    if (!podeEditar) return;
     if (row.repasse_id) {
       toast.warning("Lançamento vinculado a repasse", "Desfaça o repasse antes de excluir esta linha.");
       return;
@@ -1068,6 +1080,7 @@ export function DistribuicaoPage() {
 
   // ---- consolidar / desfazer / concluir ----
   async function handleConsolidar() {
+    if (!podeEditar) return;
     setConsolidando(true);
     try {
       if (!mesFoco) return;
@@ -1086,6 +1099,7 @@ export function DistribuicaoPage() {
   }
 
   async function handleDesfazer(rep: RepasseConsolidado) {
+    if (!podeEditar) return;
     if (!confirm(`Desfazer o repasse de ${formatCurrency(-rep.valor)}? Os lançamentos globais serão removidos e o detalhado volta a ficar disponível.`)) return;
     try {
       await desfazerRepasse(rep.id);
@@ -1098,6 +1112,7 @@ export function DistribuicaoPage() {
   }
 
   async function handleConcluir(rep: RepasseConsolidado) {
+    if (!podeEditar) return;
     if (!confirm(`Dar baixa no repasse de ${formatCurrency(-rep.valor)}? O global "A repassar" vira "Repassado", a transferência Cora → Inter vira "Pago/Recebido" e o detalhado vinculado vira "Repassado".`)) return;
     try {
       await concluirRepasse(rep.id);
@@ -1148,6 +1163,7 @@ export function DistribuicaoPage() {
               estava desligado. O span não é disabled, então o tooltip volta a
               funcionar (apontamento de 18-ago: "deixei somente 2026-08 e não
               habilitou o botão consolidar"). */}
+          {podeEditar && (
           <span title={motivoConsolidarBloqueado ?? "Cria o lançamento global no Financeiro a partir do detalhado marcado como A repassar"}>
             <Button
               size="sm"
@@ -1158,22 +1174,27 @@ export function DistribuicaoPage() {
               Consolidar repasse{totalConsolidavel > 0 ? ` (${formatCurrency(totalConsolidavel)})` : ""}
             </Button>
           </span>
-          <Button variant="outline" size="sm" onClick={openNew}>
-            <Plus size={14} /> Novo lançamento detalhado
-          </Button>
+          )}
+          {podeEditar && (
+            <Button variant="outline" size="sm" onClick={openNew}>
+              <Plus size={14} /> Novo lançamento detalhado
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Passo a passo (para quem vem da planilha) */}
-      <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-600 flex flex-wrap gap-x-6 gap-y-1">
-        <span><b className="text-stone-800">1.</b> Confira o detalhado do mês (valores, faturas, vencimentos) e marque item a item como <b>A repassar</b>.</span>
-        <span><b className="text-stone-800">2.</b> Clique em <b>Consolidar repasse</b> — o sistema cria o valor global no Financeiro (Cora → Inter) automaticamente.</span>
-        <span><b className="text-stone-800">3.</b> Feito o repasse aos sócios, clique em <b>Dar baixa</b> — tudo vira Repassado de uma vez.</span>
-      </div>
+      {/* Passo a passo (para quem vem da planilha) — só para quem edita */}
+      {podeEditar && (
+        <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-600 flex flex-wrap gap-x-6 gap-y-1">
+          <span><b className="text-stone-800">1.</b> Confira o detalhado do mês (valores, faturas, vencimentos) e marque item a item como <b>A repassar</b>.</span>
+          <span><b className="text-stone-800">2.</b> Clique em <b>Consolidar repasse</b> — o sistema cria o valor global no Financeiro (Cora → Inter) automaticamente.</span>
+          <span><b className="text-stone-800">3.</b> Feito o repasse aos sócios, clique em <b>Dar baixa</b> — tudo vira Repassado de uma vez.</span>
+        </div>
+      )}
 
       {/* Por que o botão está desligado — dito na tela, não só no tooltip
           (que nem aparece em botão desabilitado). Ajuste 18-ago. */}
-      {motivoConsolidarBloqueado && (
+      {podeEditar && motivoConsolidarBloqueado && (
         <div className="-mt-3 flex items-start gap-2 text-xs text-stone-500">
           <AlertTriangle size={13} className="mt-0.5 shrink-0 text-amber-500" />
           <span><b className="text-stone-700">Consolidar repasse está desligado:</b> {motivoConsolidarBloqueado}</span>
@@ -1313,15 +1334,20 @@ export function DistribuicaoPage() {
               Competência <b>{mesHumano(foco.mes)}</b>: o provisionado global no Financeiro ({formatCurrency(foco.global?.provisionadoGlobal ?? 0)}) difere
               da soma do detalhado ({formatCurrency(foco.resumo?.provisionado ?? 0)}) em {formatCurrency(divergenciaProvisionado)}.
               A linha global deste mês está fora do controle automático, então ela não acompanha mais as mudanças do
-              detalhado — nem quando você consolida um repasse. Clique em <b>Religar sincronização</b> para o sistema
-              voltar a mantê-la; se preferir, ajuste ou exclua a linha no{" "}
-              <Link href="/dashboard/financeiro" className="underline font-medium">Financeiro</Link>.
+              detalhado — nem quando você consolida um repasse.
+              {podeEditar && (
+                <> Clique em <b>Religar sincronização</b> para o sistema
+                  voltar a mantê-la; se preferir, ajuste ou exclua a linha no{" "}
+                  <LinkModulo href="/dashboard/financeiro" className="underline font-medium">Financeiro</LinkModulo>.</>
+              )}
             </span>
-            <Button size="sm" variant="outline" onClick={handleReligarSync}
-              loading={religando} disabled={religando}
-              title={`Passa a linha provisionada do centro 2.8.1 de ${mesHumano(foco.mes)} para o controle automático e recalcula o global pela soma do detalhado`}>
-              <RefreshCw size={13} /> Religar sincronização ({mesHumano(foco.mes)})
-            </Button>
+            {podeEditar && (
+              <Button size="sm" variant="outline" onClick={handleReligarSync}
+                loading={religando} disabled={religando}
+                title={`Passa a linha provisionada do centro 2.8.1 de ${mesHumano(foco.mes)} para o controle automático e recalcula o global pela soma do detalhado`}>
+                <RefreshCw size={13} /> Religar sincronização ({mesHumano(foco.mes)})
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -1362,8 +1388,8 @@ export function DistribuicaoPage() {
             <p className="px-2 py-8 text-center text-sm text-stone-400">
               {repassesOutroLoading
                 ? "Carregando…"
-                : <>Nenhum repasse consolidado em {mesHumano(repassesMesSel)}. Marque o detalhado como {"“A repassar”"} e use
-                  {" “Consolidar repasse”"} para criar o global no Financeiro.</>}
+                : <>Nenhum repasse consolidado em {mesHumano(repassesMesSel)}.{podeEditar && <> Marque o detalhado como {"“A repassar”"} e use
+                  {" “Consolidar repasse”"} para criar o global no Financeiro.</>}</>}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -1596,6 +1622,9 @@ export function DistribuicaoPage() {
         {selectedIds.size > 0 && (
           <div className="mx-4 mb-1 rounded-lg bg-accent-50 border border-accent-200 px-3 py-2 flex items-center gap-2 flex-wrap text-xs">
             <span className="font-medium text-stone-700">{selectedIds.size} selecionado{selectedIds.size === 1 ? "" : "s"}:</span>
+            {/* Modo leitura: a seleção fica (exportação e soma), as ações que gravam não. */}
+            {podeEditar && (
+            <>
             <input
               type="date"
               value={bulkVencimento}
@@ -1638,6 +1667,8 @@ export function DistribuicaoPage() {
               title="Exclui DE UMA VEZ todos os lançamentos selecionados (pede confirmação)">
               <Trash2 size={13} /> Excluir selecionados
             </Button>
+            </>
+            )}
             {/* Soma dos selecionados (27-jul) */}
             <span
               className="ml-auto inline-flex items-center gap-1.5 font-semibold text-stone-700 tabular-nums bg-white border border-accent-200 rounded-lg px-2.5 py-1"
@@ -1709,8 +1740,8 @@ export function DistribuicaoPage() {
                 )}
                 {!loading && rowsVisiveis.length === 0 && (
                   <tr><td colSpan={13} className="px-4 py-12 text-center text-stone-400">
-                    Nenhum lançamento detalhado no recorte. Clique em {"“Novo lançamento detalhado”"} para começar
-                    — ou lance pelo Financeiro escolhendo {"“Saída detalhada”"} na conta 2.8.
+                    Nenhum lançamento detalhado no recorte.{podeEditar && <> Clique em {"“Novo lançamento detalhado”"} para começar
+                    — ou lance pelo Financeiro escolhendo {"“Saída detalhada”"} na conta 2.8.</>}
                   </td></tr>
                 )}
                 {!loading && rowsPagina.map((r) => {
@@ -1755,6 +1786,25 @@ export function DistribuicaoPage() {
                           if (!sugerida) {
                             return <span className="text-stone-500 tabular-nums">{mesHumano(r.mes_referencia)}</span>;
                           }
+                          if (!podeEditar) {
+                            // Modo leitura: mantém o aviso, sem o atalho que move a competência.
+                            return (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="text-stone-700 tabular-nums font-medium">{mesHumano(r.mes_referencia)}</span>
+                                <span
+                                  title={
+                                    `Este lançamento está na competência ${mesHumano(r.mes_referencia)}, mas as datas ` +
+                                    `são de ${mesHumano(sugerida)} — por isso ele continua aparecendo no recorte de ` +
+                                    `${mesHumano(r.mes_referencia)}.`
+                                  }
+                                  className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold text-amber-700 bg-amber-100"
+                                >
+                                  <AlertTriangle size={10} />
+                                  → {mesHumano(sugerida)}
+                                </span>
+                              </span>
+                            );
+                          }
                           return (
                             <span className="inline-flex items-center gap-1.5">
                               <span className="text-stone-700 tabular-nums font-medium">{mesHumano(r.mes_referencia)}</span>
@@ -1798,7 +1848,7 @@ export function DistribuicaoPage() {
                         {formatCurrency(Number(r.valor))}
                       </td>
                       <td className="px-4 py-3">
-                        {vinculado ? (
+                        {vinculado || !podeEditar ? (
                           <Badge variant={DL_BADGE[r.status]}>{STATUS_DL_LABEL[r.status]}</Badge>
                         ) : (
                           <StatusSelect
@@ -1817,15 +1867,20 @@ export function DistribuicaoPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
-                          <button onClick={() => openEdit(r)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title="Editar">
-                            <Edit2 size={13} />
+                          {/* Modo leitura: o lápis vira "Ver detalhes" (mesmo modal, travado). */}
+                          <button onClick={() => openEdit(r)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition" title={podeEditar ? "Editar" : "Ver detalhes"}>
+                            {podeEditar ? <Edit2 size={13} /> : <Eye size={13} />}
                           </button>
+                          {podeEditar && (
+                          <>
                           <button onClick={() => openDuplicate(r)} className="p-1.5 rounded hover:bg-accent-50 text-stone-400 hover:text-accent-600 transition" title="Copiar (abre um novo lançamento já preenchido)">
                             <Copy size={13} />
                           </button>
                           <button onClick={() => handleDelete(r)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition" title="Excluir">
                             <Trash2 size={13} />
                           </button>
+                          </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1863,9 +1918,10 @@ export function DistribuicaoPage() {
         </CardContent>
       </Card>
 
-      {/* Modal CRUD detalhado */}
+      {/* Modal CRUD detalhado — no modo leitura abre só para consulta (campos
+          travados; os de texto em readOnly, para dar para rolar e copiar). */}
       <Modal open={modalOpen} onClose={guard.requestClose}
-        title={editRow ? "Editar Lançamento Detalhado" : "Novo Lançamento Detalhado"} size="lg">
+        title={editRow ? (podeEditar ? "Editar Lançamento Detalhado" : "Detalhes do Lançamento Detalhado") : "Novo Lançamento Detalhado"} size="lg">
         {form && (
           <div className="p-6 space-y-4">
             {editRow?.repasse_id && (
@@ -1875,52 +1931,54 @@ export function DistribuicaoPage() {
               </div>
             )}
             <div className="grid grid-cols-2 gap-3">
-              <Select label="Sócio *" value={form.socio_id}
+              <Select label="Sócio *" value={form.socio_id} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, socio_id: e.target.value, conta_bancaria_socio_id: "" })}>
                 <option value="">Selecione…</option>
                 {socios.map((s) => <option key={s.id} value={s.id}>{s.apelido ?? s.nome_completo}</option>)}
               </Select>
-              <Select label="Classificação *" value={form.classificacao_pessoal}
+              <Select label="Classificação *" value={form.classificacao_pessoal} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, classificacao_pessoal: e.target.value })}>
                 <option value="">Selecione…</option>
                 {classifs.map((c) => <option key={c.codigo} value={c.codigo}>{c.codigo} – {c.nome}</option>)}
               </Select>
             </div>
-            <Input label="Descrição *" value={form.descricao}
+            <Input label="Descrição *" value={form.descricao} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, descricao: e.target.value })}
               placeholder="IPTU, Folha de pagamento, Energia…" />
             <div className="grid grid-cols-2 gap-3">
               <Select label="Conta destino do sócio" value={form.conta_bancaria_socio_id}
-                disabled={!form.socio_id}
+                disabled={!podeEditar || !form.socio_id}
                 onChange={(e) => setForm({ ...form, conta_bancaria_socio_id: e.target.value })}>
                 <option value="">—</option>
                 {contasSocio.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
               </Select>
-              <Input label="Valor (R$) *" type="number" step="0.01" min="0" value={form.valor}
+              <Input label="Valor (R$) *" type="number" step="0.01" min="0" value={form.valor} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, valor: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Input label="Competência (mês) *" type="month" value={form.competencia}
+              <Input label="Competência (mês) *" type="month" value={form.competencia} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, competencia: e.target.value })} />
-              <Input label="Data do Repasse" type="date" value={form.data_vencimento}
+              <Input label="Data do Repasse" type="date" value={form.data_vencimento} disabled={!podeEditar}
                 title="Data programada para a realização do repasse ao sócio"
                 onChange={(e) => setForm({ ...form, data_vencimento: e.target.value })} />
-              <Input label="Vencimento" type="date" value={form.data_vencimento_despesa}
+              <Input label="Vencimento" type="date" value={form.data_vencimento_despesa} disabled={!podeEditar}
                 title="Data de vencimento da despesa/fatura"
                 onChange={(e) => setForm({ ...form, data_vencimento_despesa: e.target.value })} />
-              <Select label="Status" value={form.status}
+              <Select label="Status" value={form.status} disabled={!podeEditar}
                 onChange={(e) => setForm({ ...form, status: e.target.value as StatusDL })}>
                 {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
                   <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
               </Select>
             </div>
-            <Textarea label="Observação" rows={2} value={form.observacao}
+            <Textarea label="Observação" rows={2} value={form.observacao} readOnly={!podeEditar}
               onChange={(e) => setForm({ ...form, observacao: e.target.value })} />
             <div className="flex gap-3 justify-end pt-2">
-              <Button variant="ghost" onClick={guard.requestClose}>Cancelar</Button>
-              <Button onClick={handleSave} loading={saving} disabled={saving}>
-                {editRow ? "Salvar Alterações" : "Adicionar"}
-              </Button>
+              <Button variant="ghost" onClick={guard.requestClose}>{podeEditar ? "Cancelar" : "Fechar"}</Button>
+              {podeEditar && (
+                <Button onClick={handleSave} loading={saving} disabled={saving}>
+                  {editRow ? "Salvar Alterações" : "Adicionar"}
+                </Button>
+              )}
             </div>
           </div>
         )}

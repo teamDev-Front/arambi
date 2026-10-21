@@ -18,6 +18,8 @@ export type {
   VendaStatus,
   SafraDepositoStatus,
   PdfMonkeySlug,
+  UserRow,
+  LogRow,
   ClassificacaoFinanceiraRow,
   StatusConfigRow,
   ClassificacaoPessoalRow,

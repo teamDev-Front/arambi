@@ -7,6 +7,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
 import { Pagination } from "@/components/ui/Pagination";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { Plus, Search, Edit2, Trash2, Download, Eye, FileText } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
@@ -86,6 +87,8 @@ function ReciboPreview({ recibo }: { recibo: Recibo }) {
 }
 
 export function RecibosPage() {
+  // Leitura: só consulta, prévia e download — criar, editar e excluir ficam ocultos.
+  const { podeEditar } = useModulo("recibos");
   const [recibos, setRecibos] = useState<Recibo[]>(INITIAL);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<ReciboStatus | "">("");
@@ -111,24 +114,27 @@ export function RecibosPage() {
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   function openNew() {
+    if (!podeEditar) return;
     setEditRow(null);
     const next = `REC-${String(recibos.length + 1).padStart(3, "0")}`;
     setForm({ numero: next, modelo: "simples", beneficiario: "", descricao: "", valor: 0, data: new Date().toISOString().slice(0,10), status: "rascunho" });
     setModalOpen(true);
   }
   function openEdit(r: Recibo) {
+    if (!podeEditar) return;
     setEditRow(r);
     setForm({ numero: r.numero, modelo: r.modelo, beneficiario: r.beneficiario, descricao: r.descricao, valor: r.valor, data: r.data, status: r.status });
     setModalOpen(true);
   }
   function openPreview(r: Recibo) { setPreviewItem(r); setPreviewOpen(true); }
   function handleSave() {
+    if (!podeEditar) return;
     const entry: Recibo = { ...form, id: editRow?.id ?? genId() };
     if (editRow) setRecibos(prev => prev.map(r => r.id === editRow.id ? entry : r));
     else setRecibos(prev => [entry, ...prev]);
     setModalOpen(false);
   }
-  function handleDelete(id: string) { setRecibos(prev => prev.filter(r => r.id !== id)); }
+  function handleDelete(id: string) { if (!podeEditar) return; setRecibos(prev => prev.filter(r => r.id !== id)); }
 
   return (
     <div className="space-y-6 max-w-[1600px]">
@@ -137,27 +143,29 @@ export function RecibosPage() {
           <h1 className="text-xl font-bold text-[#0f1f1c]">Recibos & Termos</h1>
           <p className="text-sm text-stone-500">Templates de recibos, declarações e contratos</p>
         </div>
-        <Button size="sm" onClick={openNew}><Plus size={14} /> Novo Recibo</Button>
+        {podeEditar && <Button size="sm" onClick={openNew}><Plus size={14} /> Novo Recibo</Button>}
       </div>
 
       {/* Modelos rápidos */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        {MODELOS.map((m) => (
-          <button
-            key={m.value}
-            onClick={() => {
-              setEditRow(null);
-              const next = `REC-${String(recibos.length + 1).padStart(3, "0")}`;
-              setForm({ numero: next, modelo: m.value, beneficiario: "", descricao: "", valor: 0, data: new Date().toISOString().slice(0,10), status: "rascunho" });
-              setModalOpen(true);
-            }}
-            className="flex flex-col items-center gap-2 p-4 bg-white rounded-xl border border-stone-200 hover:border-accent-400 hover:shadow-sm transition text-center"
-          >
-            <FileText size={20} className="text-accent-600" />
-            <span className="text-xs font-medium text-stone-700">{m.label}</span>
-          </button>
-        ))}
-      </div>
+      {podeEditar && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {MODELOS.map((m) => (
+            <button
+              key={m.value}
+              onClick={() => {
+                setEditRow(null);
+                const next = `REC-${String(recibos.length + 1).padStart(3, "0")}`;
+                setForm({ numero: next, modelo: m.value, beneficiario: "", descricao: "", valor: 0, data: new Date().toISOString().slice(0,10), status: "rascunho" });
+                setModalOpen(true);
+              }}
+              className="flex flex-col items-center gap-2 p-4 bg-white rounded-xl border border-stone-200 hover:border-accent-400 hover:shadow-sm transition text-center"
+            >
+              <FileText size={20} className="text-accent-600" />
+              <span className="text-xs font-medium text-stone-700">{m.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Table */}
       <Card>
@@ -207,8 +215,12 @@ export function RecibosPage() {
                       <div className="flex items-center gap-1">
                         <button onClick={() => openPreview(r)} className="p-1.5 rounded hover:bg-blue-50 text-stone-400 hover:text-blue-500 transition"><Eye size={13}/></button>
                         <button className="p-1.5 rounded hover:bg-green-50 text-stone-400 hover:text-green-600 transition"><Download size={13}/></button>
-                        <button onClick={() => openEdit(r)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition"><Edit2 size={13}/></button>
-                        <button onClick={() => handleDelete(r.id)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition"><Trash2 size={13}/></button>
+                        {podeEditar && (
+                          <>
+                            <button onClick={() => openEdit(r)} className="p-1.5 rounded hover:bg-primary-50 text-stone-400 hover:text-primary-600 transition"><Edit2 size={13}/></button>
+                            <button onClick={() => handleDelete(r.id)} className="p-1.5 rounded hover:bg-red-50 text-stone-400 hover:text-red-500 transition"><Trash2 size={13}/></button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

@@ -14,6 +14,7 @@ import {
   ChevronDown, ChevronRight, Landmark,
 } from "lucide-react";
 import Link from "next/link";
+import { LinkModulo } from "@/components/acessos/LinkModulo";
 import { formatCurrency } from "@/lib/utils/format";
 import {
   getKpiMensal, getPorContaContabil, getSaldoAtualPorBanco, getFluxoCaixaMensal, getFluxoCaixaBancos,
@@ -27,6 +28,8 @@ import { SaldosBancariosGrid } from "@/components/dashboard/SaldosBancariosGrid"
 import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import { AgroPanoramaSection } from "@/components/dashboard/AgroPanoramaSection";
 import { useToast } from "@/components/ui/Toast";
+import { usePermissoes } from "@/components/acessos/PermissoesProvider";
+import type { ModuloKey } from "@/lib/acessos/modulos";
 
 const PIE_COLORS = ["#246354", "#a67c20", "#3a6230", "#c49830", "#7aa870", "#d9b455", "#1a4d40", "#836016"];
 
@@ -42,15 +45,20 @@ function mesShort(yyyymm: string) {
   return `${MES_NOMES[m[1]] ?? m[1]}/${m[0].slice(2)}`;
 }
 
-const quickAccess = [
-  { label: "Financeiro",  href: "/dashboard/financeiro",  icon: TrendingUp,      color: "bg-primary-700" },
-  { label: "Estoque",     href: "/dashboard/estoque",     icon: Package,          color: "bg-primary-600" },
-  { label: "Documentos",  href: "/dashboard/documentos",  icon: FileText,         color: "bg-accent-600" },
-  { label: "Assistentes", href: "/dashboard/assistentes", icon: Bot,              color: "bg-stone-700" },
+const quickAccess: { label: string; href: string; icon: typeof Bot; color: string; modulo: ModuloKey }[] = [
+  { label: "Financeiro",  href: "/dashboard/financeiro",  icon: TrendingUp,      color: "bg-primary-700", modulo: "financeiro" },
+  { label: "Estoque",     href: "/dashboard/estoque",     icon: Package,          color: "bg-primary-600", modulo: "estoque" },
+  { label: "Documentos",  href: "/dashboard/documentos",  icon: FileText,         color: "bg-accent-600",  modulo: "documentos" },
+  { label: "Assistentes", href: "/dashboard/assistentes", icon: Bot,              color: "bg-stone-700",   modulo: "assistentes" },
 ];
 
 export function DashboardHome() {
   const toast = useToast();
+  // Home adaptativa (0058): blocos financeiros só para quem vê o Financeiro;
+  // atalhos só para módulos liberados.
+  const { podeVer } = usePermissoes();
+  const verFinanceiro = podeVer("financeiro");
+  const atalhos = quickAccess.filter((q) => podeVer(q.modulo));
   const [kpiAll, setKpiAll]     = useState<KpiMensalRow[]>([]);
   const [byConta, setByConta]   = useState<PorContaContabilRow[]>([]);
   const [saldosBanco, setSaldosBanco] = useState<SaldoAtualBanco[]>([]);
@@ -91,7 +99,7 @@ export function DashboardHome() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesesFiltro]);
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => { if (verFinanceiro) fetchAll(); }, [fetchAll, verFinanceiro]);
 
   // KPI consolidado: usa o mês filtrado ou totaliza tudo.
   const kpiAtual = useMemo(() => {
@@ -159,6 +167,35 @@ export function DashboardHome() {
     });
   };
 
+  const atalhosJsx = atalhos.length > 0 && (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      {atalhos.map(({ label, href, icon: Icon, color }) => (
+        <Link key={href} href={href}>
+          <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-5 flex flex-col items-center gap-3 hover:shadow-md transition cursor-pointer">
+            <div className={`w-14 h-14 rounded-xl ${color} flex items-center justify-center`}>
+              <Icon size={24} className="text-white" />
+            </div>
+            <span className="text-sm font-semibold text-stone-800">{label}</span>
+          </div>
+        </Link>
+      ))}
+    </div>
+  );
+
+  // Sem o Financeiro: só atalhos e o panorama agro (calendários e alertas).
+  if (!verFinanceiro) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-xl font-bold text-[#0f1f1c]">Home</h1>
+          <p className="text-sm text-stone-500">Visão geral da Agropecuária Aramburu</p>
+        </div>
+        {atalhosJsx}
+        <AgroPanoramaSection layout="row" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -201,18 +238,7 @@ export function DashboardHome() {
           na horizontal — ver <AgroPanoramaSection layout="row" /> lá embaixo. */}
 
       {/* Quick access */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {quickAccess.map(({ label, href, icon: Icon, color }) => (
-          <Link key={href} href={href}>
-            <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-5 flex flex-col items-center gap-3 hover:shadow-md transition cursor-pointer">
-              <div className={`w-14 h-14 rounded-xl ${color} flex items-center justify-center`}>
-                <Icon size={24} className="text-white" />
-              </div>
-              <span className="text-sm font-semibold text-stone-800">{label}</span>
-            </div>
-          </Link>
-        ))}
-      </div>
+      {atalhosJsx}
 
       {/* KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -352,7 +378,7 @@ export function DashboardHome() {
       <Card>
         <CardHeader>
           <CardTitle>Fluxo de Caixa — Saldo vs. Próximo Mês</CardTitle>
-          <Link href="/dashboard/saldos" className="text-xs text-accent-600 hover:underline">Saldos mensais</Link>
+          <LinkModulo href="/dashboard/saldos" semAcesso="ocultar" className="text-xs text-accent-600 hover:underline">Saldos mensais</LinkModulo>
         </CardHeader>
         <CardContent className="p-0">
           {fluxo.length === 0 && !loading && (
