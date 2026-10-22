@@ -2,9 +2,8 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
 import { ToastProvider } from "@/components/ui/Toast";
 import { PermissoesProvider } from "@/components/acessos/PermissoesProvider";
-import { ModoLeituraBanner } from "@/components/acessos/ModoLeituraBanner";
 import { obterSessaoAcesso } from "@/lib/acessos/servidor";
-import { NIVEL_GERAL_LABEL, ehSuperAdmin, nivelGeral } from "@/lib/acessos/permissoes";
+import { NIVEL_GERAL_LABEL, ehSuperAdmin } from "@/lib/acessos/permissoes";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** Pedidos de nova senha esperando o Super Admin (contador no menu). */
@@ -23,9 +22,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const acesso = sessao?.acesso ?? null;
 
   const userName = acesso?.nome ?? sessao?.user.email?.split("@")[0] ?? "Usuário";
-  const userRole = acesso
-    ? (acesso.role === "admin" ? NIVEL_GERAL_LABEL.super_admin : acesso.cargo || NIVEL_GERAL_LABEL[nivelGeral(acesso)])
-    : "";
+  // Sob o nome: o cargo. Nível (leitura/edição) não é exibido para a pessoa.
+  const userRole = acesso?.cargo || (ehSuperAdmin(acesso) ? NIVEL_GERAL_LABEL.super_admin : "");
   const pedidosSenha = ehSuperAdmin(acesso) ? await contarPedidosSenha() : 0;
 
   return (
@@ -36,7 +34,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
           <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
             <Header userName={userName} userRole={userRole} />
             <main className="flex-1 overflow-y-auto p-6">
-              <ModoLeituraBanner />
               {children}
             </main>
           </div>

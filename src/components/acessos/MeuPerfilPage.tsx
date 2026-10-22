@@ -5,7 +5,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Crown, PencilLine, Eye, KeyRound, Save, Check, User } from "lucide-react";
+import { KeyRound, Save, Check, User, LayoutGrid, ArrowRight } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -13,15 +13,14 @@ import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils/cn";
-import { GRUPOS_MODULO, MODULOS, MODULOS_EXCLUSIVOS } from "@/lib/acessos/modulos";
-import { NIVEL_GERAL_LABEL } from "@/lib/acessos/permissoes";
+import { GRUPOS_MODULO, MODULOS } from "@/lib/acessos/modulos";
 import { usePermissoes } from "@/components/acessos/PermissoesProvider";
 import { REGRAS_SENHA, senhaValida } from "@/lib/acessos/senha";
 
 export function MeuPerfilPage() {
   const toast = useToast();
   const router = useRouter();
-  const { acesso, superAdmin, nivel, podeVer, podeEditar } = usePermissoes();
+  const { acesso, podeVer } = usePermissoes();
 
   const [nome, setNome] = useState(acesso?.nome ?? "");
   const [salvandoNome, setSalvandoNome] = useState(false);
@@ -29,7 +28,7 @@ export function MeuPerfilPage() {
   const [confirmacao, setConfirmacao] = useState("");
   const [salvandoSenha, setSalvandoSenha] = useState(false);
 
-  const liberados = useMemo(() => MODULOS.filter((m) => !m.exclusivoSuperAdmin && podeVer(m.key)), [podeVer]);
+  const liberados = useMemo(() => MODULOS.filter((m) => podeVer(m.key)), [podeVer]);
   const senhaOk = senhaValida(senha) && senha === confirmacao;
 
   if (!acesso) return null;
@@ -75,8 +74,6 @@ export function MeuPerfilPage() {
       setSalvandoSenha(false);
     }
   }
-
-  const NivelIcon = superAdmin ? Crown : nivel === "edicao" ? PencilLine : Eye;
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -138,22 +135,13 @@ export function MeuPerfilPage() {
         </Card>
       </div>
 
-      {/* Acessos */}
+      {/* Módulos (sem expor leitura/edição — a pessoa só vê onde pode entrar) */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <NivelIcon size={15} /> Seu acesso: {NIVEL_GERAL_LABEL[nivel]}
-          </CardTitle>
+          <CardTitle className="flex items-center gap-2"><LayoutGrid size={15} /> Seus módulos</CardTitle>
         </CardHeader>
         <CardContent>
-          {superAdmin ? (
-            <p className="text-sm text-stone-600">
-              Você é <b>Super Admin</b>: vê e altera todos os módulos, inclusive{" "}
-              {MODULOS_EXCLUSIVOS.map((m, i) => (
-                <span key={m.key}>{i > 0 && " e "}<Link href={m.href} className="text-accent-700 hover:underline">{m.label}</Link></span>
-              ))}.
-            </p>
-          ) : liberados.length === 0 ? (
+          {liberados.length === 0 ? (
             <p className="text-sm text-stone-600">Nenhum módulo liberado ainda. Fale com o administrador.</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -164,26 +152,17 @@ export function MeuPerfilPage() {
                   <div key={g.id}>
                     <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-stone-400">{g.label}</p>
                     <ul className="space-y-1">
-                      {mods.map((m) => {
-                        const edita = podeEditar(m.key);
-                        return (
-                          <li key={m.key}>
-                            <Link
-                              href={m.href}
-                              className="flex items-center justify-between gap-2 rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-700 transition hover:border-accent-300 hover:bg-accent-50/40"
-                            >
-                              {m.label}
-                              <span className={cn(
-                                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-                                edita ? "bg-emerald-50 text-emerald-800" : "bg-sky-50 text-sky-800",
-                              )}>
-                                {edita ? <PencilLine size={10} /> : <Eye size={10} />}
-                                {edita ? "Edição" : "Leitura"}
-                              </span>
-                            </Link>
-                          </li>
-                        );
-                      })}
+                      {mods.map((m) => (
+                        <li key={m.key}>
+                          <Link
+                            href={m.href}
+                            className="group flex items-center justify-between gap-2 rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-700 transition hover:border-accent-300 hover:bg-accent-50/40"
+                          >
+                            {m.label}
+                            <ArrowRight size={13} className="text-stone-300 transition group-hover:text-accent-600" />
+                          </Link>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 );

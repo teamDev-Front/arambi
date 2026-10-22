@@ -42,7 +42,10 @@ interface Body {
   mes_referencia?: string;
   socio_id?: string;
   payload?: AnyPayload;
-  /** Observações livres do relatório contábil (preenchidas no modal antes de gerar). */
+  /**
+   * Observações livres preenchidas no modal antes de gerar: cartões do
+   * relatório contábil e, desde 21-out, o campo `observacoes` das duas capas.
+   */
   observacoes?: ContabilObservacao[];
   /** Overrides editáveis do relatório de sócios (saldo inicial e notas dos gráficos). */
   socios_overrides?: RelatorioSociosOverrides;
@@ -113,6 +116,7 @@ export async function POST(req: NextRequest) {
         scope: body.scope,
         numeroLote: body.numero_lote,
         mesReferenciaLabel: body.mes_referencia_label,
+        observacoes: body.observacoes,
       });
     } else if (slug === "capa_socio") {
       // Recorte por tags da DL (ajuste 29-jul): aceita seleção manual ou ids
@@ -126,6 +130,7 @@ export async function POST(req: NextRequest) {
         ids: idsScope,
         numeroCapa: body.numero_lote,
         mesReferenciaLabel: body.mes_referencia_label,
+        observacoes: body.observacoes,
       });
     } else if (slug === "relatorio_contabil") {
       payload = await buildRelatorioContabil(supabase, { mesReferencia: body.mes_referencia, scope: body.scope });

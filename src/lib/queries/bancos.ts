@@ -31,13 +31,23 @@ export async function listarContasEmpresa(): Promise<ContaBancariaEmpresaRow[]> 
   return (data ?? []) as ContaBancariaEmpresaRow[];
 }
 
+// Coluna da 0060 ainda não criada → salva sem ela (o deploy pode vir antes do SQL).
+function semColunaFluxo(err: { code?: string; message?: string } | null): boolean {
+  return !!err && (err.code === "PGRST204" || err.code === "42703") && /compoe_fluxo_caixa/.test(err.message ?? "");
+}
+
 export async function criarContaEmpresa(payload: CbeInsert): Promise<ContaBancariaEmpresaRow> {
   const supabase = createClient();
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("contas_bancarias_empresa")
     .insert(payload)
     .select()
     .maybeSingle();
+  if (semColunaFluxo(error)) {
+    const semFluxo = { ...payload };
+    delete semFluxo.compoe_fluxo_caixa;
+    ({ data, error } = await supabase.from("contas_bancarias_empresa").insert(semFluxo).select().maybeSingle());
+  }
   if (error) throw error;
   if (!data) throw new Error("Falha ao criar conta da empresa (sem permissão?)");
   return data as ContaBancariaEmpresaRow;
@@ -45,12 +55,17 @@ export async function criarContaEmpresa(payload: CbeInsert): Promise<ContaBancar
 
 export async function atualizarContaEmpresa(id: string, payload: CbeUpdate): Promise<ContaBancariaEmpresaRow> {
   const supabase = createClient();
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("contas_bancarias_empresa")
     .update(payload)
     .eq("id", id)
     .select()
     .maybeSingle();
+  if (semColunaFluxo(error)) {
+    const semFluxo = { ...payload };
+    delete semFluxo.compoe_fluxo_caixa;
+    ({ data, error } = await supabase.from("contas_bancarias_empresa").update(semFluxo).eq("id", id).select().maybeSingle());
+  }
   if (error) throw error;
   if (!data) throw new Error("Falha ao atualizar conta da empresa");
   return data as ContaBancariaEmpresaRow;

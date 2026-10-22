@@ -48,15 +48,19 @@ export function validarCodigo(codigo: string): string | null {
 
 /**
  * Códigos que automações do banco e relatórios PDF procuram PELO NÚMERO — não
- * mudam de código. Espelho de fn_classificacao_codigos_sistema() (migration 0057).
+ * mudam de código. Espelho de fn_classificacao_codigos_sistema() (migrations
+ * 0057/0063) — as duas listas precisam ficar iguais.
+ * Plano alinhado à VS4 (0063): 1.9/2.9 = Transferências Entre Contas,
+ * 1.10/2.10 = Outros Recebimentos / Outras Saídas.
  */
 export const CODIGOS_DO_SISTEMA: ReadonlySet<string> = new Set([
-  // automações do banco: resgate do Invest, DL, transferências da DL, saldo DV
-  "1.8", "1.8.1", "1.9", "1.9.1", "2.8", "2.8.1", "2.9", "2.9.3",
-  // relatórios PDF e telas de Vendas/Provisionamento
-  "1.2", "1.2.1", "1.2.2", "1.3", "1.6",
+  // automações do banco: resgate do Invest (1.8), DL (2.8), par de
+  // transferência da DL (1.9.1 ↔ 2.9.1), saldo DV (2.10.3)
+  "1.8", "1.8.1", "1.9", "1.9.1", "2.8", "2.8.1", "2.9", "2.9.1", "2.10.3",
+  // relatórios PDF (capas, contábil, sócios) e telas de Vendas/Provisionamento
+  "1.2", "1.2.1", "1.2.2", "1.3", "1.6", "1.10",
   "2.1", "2.1.6", "2.2", "2.2.2", "2.3", "2.3.2", "2.4", "2.4.5",
-  "2.5", "2.6", "2.7", "2.7.2",
+  "2.5", "2.6", "2.7", "2.7.2", "2.10",
 ]);
 
 /** Contas com automação pela CONTA: centro de custo não entra nem sai delas trocando o código. */
@@ -334,6 +338,29 @@ export const CONFIG_RESGATES_SICREDI = "resgates_automaticos_sicredi";
 export const CONFIG_LIMITE_DV = "limite_despesa_variavel_mensal";
 /** Dia do vencimento da fatura do cartão Sicredi — resgate consolidado (0048). */
 export const CONFIG_FATURA_CARTAO_DIA = "fatura_cartao_sicredi_dia";
+/**
+ * Conta de investimento de onde saem os resgates automáticos NOVOS (0064).
+ * Valor = id da conta em Bancos; vazio = SICREDINVEST (padrão).
+ */
+export const CONFIG_RESGATE_CONTA_ORIGEM = "resgate_conta_origem";
+
+/**
+ * Como `obterConfigApp`, mas devolve `null` quando a chave não existe — é assim
+ * que a tela sabe que a migration que cria a chave ainda não foi aplicada.
+ */
+export async function obterConfigAppSeExistir(chave: string): Promise<string | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("app_config")
+    .select("valor")
+    .eq("chave", chave)
+    .maybeSingle();
+  if (error) {
+    if (/does not exist|schema cache|find the table/i.test(error.message)) return null;
+    throw error;
+  }
+  return (data as { valor: string } | null)?.valor ?? null;
+}
 
 /** Lê uma configuração; retorna o fallback se não existir (ou tabela ausente). */
 export async function obterConfigApp(chave: string, fallback: string): Promise<string> {

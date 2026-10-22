@@ -12,6 +12,13 @@ export interface CapaEmpresaItem {
   descricao: string;
   banco: string;
   pgto?: string;
+  /**
+   * Só nas compras no cartão de crédito (21-out): a linha aparece para
+   * conferência, mas NÃO soma no subtotal da seção, nas caixas de banco nem no
+   * total geral — sai na fatura, coberta pelo resgate "Fatura Cartão". Ausente
+   * nas demais linhas.
+   */
+  informativo?: boolean;
 }
 
 /**
@@ -69,13 +76,23 @@ export interface CapaEmpresaPayload {
   /**
    * Seção 10 do DOCUMENTACAO_JSON.md (out-2026): saídas de Distribuição de
    * Lucro do recorte — a DL em si (2.8) e as pernas de saída do repasse
-   * consolidado (ex.: 2.9.3 "Transf. Entre Contas_Distribuição de Lucro").
+   * consolidado ("Transf. Entre Contas_Distribuição de Lucro": centro 2.9.3
+   * antes da migration 0063, 2.9.1 depois — reconhecidas pela etiqueta).
    */
   distribuicao_lucro: CapaEmpresaItem[];
   total_distribuicao_lucro: string;
   /** Seção 10: resgates do Invest — só a SAÍDA da conta Invest (1.8 negativo). */
   resgates: CapaEmpresaItem[];
   total_resgates: string;
+  /**
+   * Soma das compras no cartão de crédito listadas nas seções (itens com
+   * `informativo: true`) — "R$ 0,00" quando não há. Fica FORA de total_geral.
+   */
+  total_cartao_informativo?: string;
+  /** Texto explicando o cartão — vazio ("") quando não há compra no cartão. */
+  nota_cartao?: string;
+  /** Observações digitadas no modal da capa (uma por linha). Vazio = []. */
+  observacoes?: ContabilObservacao[];
 }
 
 // ============================================================================
@@ -131,6 +148,8 @@ export interface CapaSocioPayload {
   /** Lista dinâmica de bancos com totais do mês — substituiu o par fixo Cora/Sicredi. */
   bancos: BancoTotal[];
   total_geral: string;
+  /** Observações digitadas no modal da capa (uma por linha). Vazio = []. */
+  observacoes?: ContabilObservacao[];
 }
 
 // ============================================================================
@@ -169,6 +188,11 @@ export interface ContabilBloco {
   categorias: ContabilCategoria[];
 }
 
+/**
+ * Observação livre do PDF: cartão do Relatório Contábil e, desde 21-out,
+ * campo `observacoes` das capas (lá cada linha digitada vira um item com
+ * `titulo` vazio).
+ */
 export interface ContabilObservacao {
   titulo: string;
   texto: string;

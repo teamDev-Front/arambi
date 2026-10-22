@@ -48,12 +48,14 @@ type CbeForm = {
   tipo: string;
   ativa: boolean;
   ordem: string;
+  /** Soma no "Saldo Fluxo de Caixa" da Home (migration 0060). */
+  compoe_fluxo_caixa: boolean;
 };
 
 const EMPTY_EMPRESA: CbeForm = {
   nome: "", apelido: "", banco: "", numero_banco: "", tipo_instituicao: "banco",
   agencia: "", numero_conta: "", digito: "", tipo: "corrente",
-  ativa: true, ordem: "",
+  ativa: true, ordem: "", compoe_fluxo_caixa: false,
 };
 
 type CbsForm = {
@@ -206,6 +208,7 @@ export function BancosPage() {
       tipo: c.tipo ?? "corrente",
       ativa: c.ativa,
       ordem: c.ordem !== null ? String(c.ordem) : "",
+      compoe_fluxo_caixa: c.compoe_fluxo_caixa ?? false,
     });
     setEmpModalOpen(true);
   }
@@ -230,6 +233,7 @@ export function BancosPage() {
       conta: null,
       ativa: empForm.ativa,
       ordem: empForm.ordem === "" ? null : Number(empForm.ordem),
+      compoe_fluxo_caixa: empForm.compoe_fluxo_caixa,
     };
     try {
       if (empEditId) {
@@ -459,6 +463,12 @@ export function BancosPage() {
                       <td className="px-4 py-3">
                         <div className="font-medium text-stone-800">{c.nome}</div>
                         {c.apelido && <div className="text-stone-400 text-xs">{c.apelido}</div>}
+                        {c.compoe_fluxo_caixa && (
+                          <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700"
+                            title="Soma no Saldo Fluxo de Caixa da Home">
+                            Fluxo de caixa
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-stone-700 text-xs">{c.banco ?? <span className="text-stone-300">—</span>}</td>
                       <td className="px-4 py-3 text-stone-700 text-xs font-mono">{c.agencia ?? <span className="text-stone-300">—</span>}</td>
@@ -753,6 +763,22 @@ export function BancosPage() {
               className="w-4 h-4 rounded text-[#a67c20] focus:ring-[#a67c20]"
             />
             <span className="text-sm text-stone-700">Conta ativa</span>
+          </label>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={empForm.compoe_fluxo_caixa}
+              disabled={!podeEditar}
+              onChange={(e) => setEmpForm({ ...empForm, compoe_fluxo_caixa: e.target.checked })}
+              className="mt-0.5 w-4 h-4 rounded text-[#a67c20] focus:ring-[#a67c20]"
+            />
+            <span className="text-sm text-stone-700">
+              Compõe o Saldo Fluxo de Caixa
+              <span className="block text-xs text-stone-400">
+                Entra no card &quot;Saldo Fluxo de Caixa&quot; da Home e no &quot;Saldo (−) contas do próximo mês&quot;
+                (padrão da planilha: Cora, Sicredi, Sicredinvest, Sicredi Empresarial e Aplicação Automática).
+              </span>
+            </span>
           </label>
 
           <div className="flex gap-3 justify-end pt-2">

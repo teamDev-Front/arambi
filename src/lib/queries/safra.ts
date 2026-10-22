@@ -207,8 +207,56 @@ export async function deletarDeposito(id: string): Promise<SafraDepositoRow> {
 // líquido, taxas, valor de venda) somam apenas o SALDO remanescente de cada
 // nota (colunas *_saldo da view) — volume vendido/retirado sai da projeção,
 // como a Adriane pediu. kg/sc bruto seguem sendo o total DEPOSITADO.
+//
+// Sacas viraram a unidade principal da tela (reunião de 20-out): tudo é
+// derivado das colunas sc_* da view (kg ÷ kg por saca do parâmetro salvo).
+// Sem parâmetro salvo para a cultura × safra, a view devolve kg_por_saca e as
+// sacas nulos — aqui contam como 0 e `disponivel` sai false (a tela mostra "—").
+
+/** Quantidades em SACAS de uma nota, derivadas das colunas da view. */
+export interface SacasDeposito {
+  /** false = cultura × safra sem parâmetros salvos (kg por saca nulo). */
+  disponivel: boolean;
+  /** Bruto depositado — referência fixa, não muda com vendas e saídas. */
+  inicial: number;
+  /** Saídas (vendas, retiradas, perdas, quebra técnica) = sc_bruto − sc_saldo. */
+  baixadas: number;
+  /** Saldo remanescente da nota. */
+  saldo: number;
+  /** Quebra técnica do saldo — venda a terceiros (sc_saldo − sc_liquida_saldo). */
+  quebra: number;
+  /** Saldo líquido — venda a terceiros. */
+  liquida: number;
+  /** Quebra técnica do saldo — venda ao próprio armazém. */
+  quebraArmazem: number;
+  /** Saldo líquido — venda ao próprio armazém. */
+  liquidaArmazem: number;
+}
+
+export function sacasDoDeposito(r: SafraDepositoCalculadoRow): SacasDeposito {
+  const n = (v: number | null | undefined): number => Number(v ?? 0) || 0;
+  // Fallbacks: colunas totais, caso a migration 0043 ainda não esteja aplicada.
+  const inicial = n(r.sc_bruto);
+  const saldo = n(r.sc_saldo ?? r.sc_bruto);
+  const liquida = n(r.sc_liquida_saldo ?? r.sc_liquida);
+  const liquidaArmazem = n(r.sc_liquida_saldo_armazem ?? r.sc_liquida_armazem);
+  return {
+    disponivel: n(r.kg_por_saca) > 0,
+    inicial,
+    // max(…, 0): as sacas vêm arredondadas por nota na view (4 casas).
+    baixadas: Math.max(inicial - saldo, 0),
+    saldo,
+    quebra: Math.max(saldo - liquida, 0),
+    liquida,
+    quebraArmazem: Math.max(saldo - liquidaArmazem, 0),
+    liquidaArmazem,
+  };
+}
+
 export interface SafraResumo {
   qtd_depositos: number;
+  /** Notas sem parâmetros salvos (kg por saca nulo) — ficam fora das somas em sacas. */
+  qtd_sem_parametro: number;
   total_kg_bruto: number;
   total_kg_liquido: number;
   total_sc_bruto: number;
@@ -216,7 +264,11 @@ export interface SafraResumo {
   total_kg_baixado: number;
   total_kg_saldo: number;
   total_sc_saldo: number;
+  /** Sacas que saíram do estoque (vendas e baixas) = Σ(sc_bruto − sc_saldo). */
+  total_sc_baixado: number;
   total_quebra_kg: number;
+  /** Quebra técnica do saldo em sacas — venda a terceiros. */
+  total_quebra_sc: number;
   total_taxa_armazenagem: number;
   total_taxa_devolucao: number;
   total_taxa_recepcao: number;
@@ -227,19 +279,23 @@ export interface SafraResumo {
   armazem_total_kg_liquido: number;
   armazem_total_sc_liquida: number;
   armazem_total_quebra_kg: number;
+  /** Quebra técnica do saldo em sacas — venda ao próprio armazém. */
+  armazem_total_quebra_sc: number;
   armazem_total_taxa_armazenagem: number;
   armazem_total_a_descontar: number;
   armazem_total_valor_venda: number;
   armazem_saldo_a_receber: number;
-  por_data_deposito: Array<{ data: string; kg_bruto: number; kg_liquido: number }>;
+  /** Sacas depositadas por data (bruto e líquido do depósito — gráfico da tela). */
+  por_data_deposito: Array<{ data: string; sc_bruto: number; sc_liquido: number }>;
 }
 
 export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraResumo {
   let kg_bruto = 0, kg_liquido = 0, sc_bruto = 0, sc_liquida = 0;
   let kg_baixado = 0, kg_saldo = 0, sc_saldo = 0;
+  let sc_baixado = 0, quebra_sc = 0, a_quebra_sc = 0, sem_parametro = 0;
   let quebra_kg = 0, taxa_armaz = 0, taxa_dev = 0, taxa_recep = 0, descontar = 0, venda = 0;
   let a_kg_liq = 0, a_sc_liq = 0, a_quebra = 0, a_armaz = 0, a_descontar = 0, a_venda = 0;
-  const aggDay = new Map<string, { kg_bruto: number; kg_liquido: number }>();
+  const aggDay = new Map<string, { sc_bruto: number; sc_liquido: number }>();
 
   for (const r of rows) {
     kg_bruto += Number(r.kg_bruto);
@@ -247,6 +303,12 @@ export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraRes
     kg_baixado += Number(r.kg_baixado ?? 0);
     kg_saldo += Number(r.kg_saldo ?? r.kg_bruto);
     sc_saldo += Number(r.sc_saldo ?? r.sc_bruto);
+
+    const sc = sacasDoDeposito(r);
+    if (!sc.disponivel) sem_parametro++;
+    sc_baixado += sc.baixadas;
+    quebra_sc += sc.quebra;
+    a_quebra_sc += sc.quebraArmazem;
 
     // Projeção sobre o saldo remanescente (fallback: colunas totais, caso a
     // migration 0043 ainda não esteja aplicada — comporta-se como antes).
@@ -267,14 +329,15 @@ export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraRes
     a_venda += Number(r.valor_venda_saldo_armazem ?? r.valor_venda_armazem ?? 0);
 
     const k = r.data_deposito;
-    const ex = aggDay.get(k) ?? { kg_bruto: 0, kg_liquido: 0 };
-    ex.kg_bruto += Number(r.kg_bruto);
-    ex.kg_liquido += Number(r.kg_liquido);
+    const ex = aggDay.get(k) ?? { sc_bruto: 0, sc_liquido: 0 };
+    ex.sc_bruto += Number(r.sc_bruto ?? 0);
+    ex.sc_liquido += Number(r.sc_liquida ?? 0);
     aggDay.set(k, ex);
   }
 
   return {
     qtd_depositos: rows.length,
+    qtd_sem_parametro: sem_parametro,
     total_kg_bruto: kg_bruto,
     total_kg_liquido: kg_liquido,
     total_sc_bruto: sc_bruto,
@@ -282,7 +345,9 @@ export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraRes
     total_kg_baixado: kg_baixado,
     total_kg_saldo: kg_saldo,
     total_sc_saldo: sc_saldo,
+    total_sc_baixado: sc_baixado,
     total_quebra_kg: quebra_kg,
+    total_quebra_sc: quebra_sc,
     total_taxa_armazenagem: taxa_armaz,
     total_taxa_devolucao: taxa_dev,
     total_taxa_recepcao: taxa_recep,
@@ -292,6 +357,7 @@ export function calcularResumoSafra(rows: SafraDepositoCalculadoRow[]): SafraRes
     armazem_total_kg_liquido: a_kg_liq,
     armazem_total_sc_liquida: a_sc_liq,
     armazem_total_quebra_kg: a_quebra,
+    armazem_total_quebra_sc: a_quebra_sc,
     armazem_total_taxa_armazenagem: a_armaz,
     armazem_total_a_descontar: a_descontar,
     armazem_total_valor_venda: a_venda,

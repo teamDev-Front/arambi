@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Lock, ArrowRight } from "lucide-react";
 import { exigirUsuarioAtivo } from "@/lib/acessos/servidor";
 import { MODULOS, MODULO_POR_KEY, type ModuloKey } from "@/lib/acessos/modulos";
-import { ehSuperAdmin, podeEditar, podeVer, rotaInicial } from "@/lib/acessos/permissoes";
+import { podeVer, rotaInicial } from "@/lib/acessos/permissoes";
 
 export const metadata = { title: "Sem acesso – AramBI" };
 
@@ -45,9 +45,6 @@ export default async function Page({ searchParams }: Props) {
                   className="inline-flex items-center gap-1.5 rounded-full border border-stone-200 bg-stone-50 px-3 py-1 text-xs font-medium text-stone-700 transition hover:border-accent-300 hover:bg-accent-50 hover:text-accent-700"
                 >
                   {m.label}
-                  {!ehSuperAdmin(acesso) && !podeEditar(acesso, m.key) && (
-                    <span className="text-[10px] font-normal text-stone-400">· leitura</span>
-                  )}
                 </Link>
               ))}
             </div>

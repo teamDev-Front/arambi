@@ -37,6 +37,7 @@ import {
 import { exportDistribuicaoPdf, exportDistribuicaoXlsx } from "@/lib/export/distribuicao-export";
 import { CamposExportDlModal, type CamposExportDlEscolha } from "./CamposExportDlModal";
 import { SeloCapaFields } from "@/components/relatorios/SeloCapaFields";
+import { ObservacoesCapaField, observacoesDoTexto } from "@/components/relatorios/ObservacoesCapaField";
 import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
 import {
   STATUS_DL_LABEL, STATUS_DL_COLOR,
@@ -393,6 +394,8 @@ export function DistribuicaoPage() {
   // Selo dourado (out-2026): número da capa no mês + mês de referência; vazios = automático.
   const [capaNumero, setCapaNumero] = useState("");
   const [capaMesLabel, setCapaMesLabel] = useState("");
+  // Observações da capa (21-out) — uma por linha; vazio = nenhuma.
+  const [capaObs, setCapaObs] = useState("");
   const [capaGerando, setCapaGerando] = useState(false);
 
   // ---- lookups (uma vez) ----
@@ -879,6 +882,7 @@ export function DistribuicaoPage() {
     setCapaSoTagueados(tags.size > 0);
     setCapaNumero("");
     setCapaMesLabel("");
+    setCapaObs("");
     setCapaOpen(true);
   }
 
@@ -896,6 +900,7 @@ export function DistribuicaoPage() {
         scope,
         numero_lote: capaNumero.trim() || undefined,
         mes_referencia_label: capaMesLabel.trim() || undefined,
+        observacoes: observacoesDoTexto(capaObs),
       });
       if (res.status === "success" && res.download_url) {
         toast.success("Capa do repasse gerada", "O PDF abriu em outra aba e fica no histórico da tela Relatórios.");
@@ -2069,6 +2074,8 @@ export function DistribuicaoPage() {
             mes={capaMesLabel}
             onMesChange={setCapaMesLabel}
           />
+
+          <ObservacoesCapaField value={capaObs} onChange={setCapaObs} />
 
           <label className={`flex items-start gap-2 text-sm ${tags.size > 0 ? "text-stone-700 cursor-pointer" : "text-stone-400"}`}>
             <input

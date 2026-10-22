@@ -18,7 +18,7 @@ import {
 import {
   Plus, Search, Edit2, Trash2, Loader2, Sprout,
   Wallet, CalendarClock, ArrowDownToLine, HandCoins, PackageCheck,
-  Link2, Eye,
+  Link2, Eye, FileDown,
 } from "lucide-react";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
@@ -39,6 +39,9 @@ import {
 } from "@/lib/queries/financeiro";
 import { criarDetalhado, listarClassificacoesPessoais } from "@/lib/queries/distribuicao";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
+import { exportVendasPdf, exportVendasXlsx, mesHumano } from "@/lib/export/vendas-export";
+import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
+import { CamposExportVendasModal, type CamposExportVendasEscolha } from "./CamposExportVendasModal";
 import {
   CULTURA_LABEL, CULTURA_EMOJI, VENDA_STATUS_LABEL,
   type VendaProvisionadaRichRow, type SocioRow,
@@ -160,6 +163,10 @@ export function VendasFuturasPage() {
   const [bancosEmpresa, setBancosEmpresa] = useState<ContaBancariaEmpresaRow[]>([]);
   const [fornecedores, setFornecedores] = useState<FornecedorRow[]>([]);
   const [classifsPessoais, setClassifsPessoais] = useState<ClassificacaoPessoalRow[]>([]);
+
+  // ---- exportação PDF/XLSX (reunião 20-out-2026) ----
+  const [camposExportOpen, setCamposExportOpen] = useState(false);
+  const [exportando, setExportando] = useState<"pdf" | "xlsx" | null>(null);
 
   // ---- load ----
   const fetchData = useCallback(async () => {
@@ -671,6 +678,51 @@ export function VendasFuturasPage() {
     }
   }
 
+  // ---- exportação PDF/XLSX do recorte da tela (reunião 20-out-2026) ----
+  // Mesmo padrão da DL: o botão abre a tela de campos e o formato (PDF ou
+  // XLSX) é escolhido lá dentro.
+  function montarFiltrosExport(): string[] {
+    const f: string[] = [];
+    // Nenhuma competência marcada = todas: aí não vale uma linha no cabeçalho.
+    if (filterCompetencias.length) f.push(`Competência: ${[...filterCompetencias].sort().map(mesHumano).join(", ")}`);
+    if (filterExercicios.length) f.push(`Exercício: ${[...filterExercicios].sort().join(", ")}`);
+    if (search) f.push(`Busca: "${search}"`);
+    if (filterStatus) f.push(`Status: ${VENDA_STATUS_LABEL[filterStatus]}`);
+    if (filterCultura) f.push(`Cultura: ${CULTURA_LABEL[filterCultura]}`);
+    if (filterSafra) f.push(`Safra: ${filterSafra}`);
+    if (filterDestino) f.push(`Destino: ${filterDestino === "empresa" ? "Empresa Aramburu" : "Sócios (direto)"}`);
+    return f;
+  }
+
+  async function handleExport(formato: "pdf" | "xlsx", escolha: CamposExportVendasEscolha) {
+    // Seleção manual tem precedência sobre os filtros (idem à DL). Sem seleção
+    // vai o recorte filtrado INTEIRO — não só a página da tabela.
+    const selecionadas = rows.filter((r) => selectedIds.has(r.id));
+    const alvo = selecionadas.length > 0 ? selecionadas : rowsFiltradas;
+    if (alvo.length === 0) {
+      toast.info("Nada para exportar", "Nenhuma venda no recorte atual.");
+      return;
+    }
+    setExportando(formato);
+    try {
+      const meta = {
+        filtros: selecionadas.length > 0 ? [] : montarFiltrosExport(),
+        campos: escolha.campos,
+        incluirFiltros: escolha.incluirFiltros,
+        incluirTotais: escolha.incluirTotais,
+        emitidoPor: linhaEmissao(await getNomeUsuarioAtual()),
+      };
+      if (formato === "pdf") await exportVendasPdf(alvo, meta);
+      else exportVendasXlsx(alvo, meta);
+      setCamposExportOpen(false);
+      toast.success("Exportação concluída", `Arquivo ${formato.toUpperCase()} gerado (${alvo.length} venda${alvo.length === 1 ? "" : "s"}).`);
+    } catch (e: unknown) {
+      toast.error("Falha na exportação", (e as Error).message ?? String(e));
+    } finally {
+      setExportando(null);
+    }
+  }
+
   // ---- render ----
   return (
     <div className="space-y-6">
@@ -693,6 +745,13 @@ export function VendasFuturasPage() {
               onChange={(v) => { setFilterCompetencias(v); setPage(1); }}
             />
           </label>
+          {/* Exportar (reunião 20-out-2026) — fora do podeEditar: o modo
+              leitura também exporta. Campos e formato no CamposExportVendasModal. */}
+          <Button variant="outline" size="sm" onClick={() => setCamposExportOpen(true)}
+            loading={!!exportando} disabled={!!exportando}
+            title="Escolhe os campos e o formato (PDF ou XLSX) das vendas selecionadas ou filtradas">
+            <FileDown size={14} /> {selectedIds.size > 0 ? `Exportar (${selectedIds.size})` : "Exportar"}
+          </Button>
           {podeEditar && <Button size="sm" onClick={openNova}><Plus size={14} /> Nova Venda</Button>}
         </div>
       </div>
@@ -1271,6 +1330,16 @@ export function VendasFuturasPage() {
         </div>
       </Modal>
       <UnsavedChangesDialog open={guard.confirmOpen} onStay={guard.stay} onDiscard={guard.discard} />
+
+      {/* Tela de seleção de campos da exportação (reunião 20-out-2026 — idem à DL) */}
+      <CamposExportVendasModal
+        open={camposExportOpen}
+        onClose={() => setCamposExportOpen(false)}
+        totalLinhas={selectedIds.size > 0 ? selectedIds.size : rowsFiltradas.length}
+        escopo={selectedIds.size > 0 ? "Seleção manual" : "Recorte pelos filtros da tela"}
+        exportando={exportando}
+        onExportar={handleExport}
+      />
     </div>
   );
 }

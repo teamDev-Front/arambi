@@ -182,7 +182,10 @@ const parametrosSafra: ToolDefinition = {
       cultura:                     r.cultura,
       safra:                       r.safra,
       quebra_quinzena_pct:         num(r.quebra_quinzena_pct),
-      armazenagem_por_kg_quinzena: num(r.armazenagem_por_kg_quinzena),
+      // A coluna se chama "por_kg", mas a taxa é R$ por SACA por quinzena (a
+      // fórmula da 0051 divide o kg pelo kg_por_saca) — o nome aqui evita que
+      // o assistente leia como R$/kg.
+      armazenagem_rs_por_saca_quinzena: num(r.armazenagem_por_kg_quinzena),
       devolucao_por_saca:          num(r.devolucao_por_saca),
       carencia_dias:               r.carencia_dias,
       kg_por_saca:                 num(r.kg_por_saca),

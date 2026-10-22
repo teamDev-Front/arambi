@@ -546,7 +546,7 @@ export function FinanceiroPage() {
         labelClass: "text-red-700",
         valorClass: "text-red-600",
         ...indicadores.emAtraso,
-        help: `Tudo em aberto (programação bancária e provisionados) vencido antes de hoje (${hojeFmt}). Só o lado que SAI: num resgate, a linha negativa do Sicredi Invest. Clique para ver esses lançamentos na tabela.`,
+        help: `Tudo em aberto (programação bancária e provisionados) vencido antes de hoje (${hojeFmt}). Só o lado que SAI: num resgate, a linha negativa da conta de investimento. Clique para ver esses lançamentos na tabela.`,
       },
       {
         key: "hoje" as IndicadorKey,
@@ -557,7 +557,7 @@ export function FinanceiroPage() {
         labelClass: "text-orange-700",
         valorClass: "text-orange-600",
         ...indicadores.vencemHoje,
-        help: `Tudo em aberto que vence hoje (${hojeFmt}) — inclui os A resgatar do dia, pelo valor NEGATIVO do Sicredi Invest (marcar o resgate lá atualiza sozinho o lado positivo do Sicredi). Clique para ver na tabela.`,
+        help: `Tudo em aberto que vence hoje (${hojeFmt}) — inclui os A resgatar do dia, pelo valor NEGATIVO da conta de investimento (marcar o resgate lá atualiza sozinho o lado positivo do Sicredi). Clique para ver na tabela.`,
       },
       {
         key: "programacao" as IndicadorKey,
@@ -568,7 +568,7 @@ export function FinanceiroPage() {
         labelClass: "text-red-700",
         valorClass: "text-red-600",
         ...indicadores.programacaoBancariaAteFimDoMes,
-        help: `O que já foi ao banco e vence de hoje até ${fimFmt}: A pagar, A repassar, A aplicar e A resgatar (o negativo do Sicredi Invest). As atrasadas ficam no card "Contas em atraso". Clique para ver na tabela.`,
+        help: `O que já foi ao banco e vence de hoje até ${fimFmt}: A pagar, A repassar, A aplicar e A resgatar (o negativo da conta de investimento). As atrasadas ficam no card "Contas em atraso". Clique para ver na tabela.`,
       },
       {
         key: "provisionado" as IndicadorKey,
@@ -590,7 +590,7 @@ export function FinanceiroPage() {
         labelClass: "text-emerald-700",
         valorClass: "text-emerald-600",
         ...indicadores.aReceberAteFimDoMes,
-        help: `Apenas os A RECEBER com vencimento até ${fimFmt} — inclui os atrasados. Os A resgatar saíram daqui (17-ago): eles aparecem em "Vencem hoje" e "Programação bancária", pelo valor negativo do Sicredi Invest. Clique para ver na tabela.`,
+        help: `Apenas os A RECEBER com vencimento até ${fimFmt} — inclui os atrasados. Os A resgatar saíram daqui (17-ago): eles aparecem em "Vencem hoje" e "Programação bancária", pelo valor negativo da conta de investimento. Clique para ver na tabela.`,
       },
     ];
   }, [indicadores]);
@@ -1890,7 +1890,7 @@ export function FinanceiroPage() {
             {filterSoNegativos && (
               <span
                 className="h-8 inline-flex items-center gap-1.5 rounded-lg bg-red-50 border border-red-200 px-2 text-xs font-medium text-red-700"
-                title="Mostrando apenas os valores negativos. Num par de resgate isso deixa só a linha do SICREDINVEST — a do SICREDI é o mesmo dinheiro entrando."
+                title="Mostrando apenas os valores negativos. Num par de resgate isso deixa só a linha da conta de investimento — a do SICREDI é o mesmo dinheiro entrando."
               >
                 Só o lado que sai
                 <button
@@ -2535,7 +2535,7 @@ export function FinanceiroPage() {
       <Modal
         open={!!confirmInvest}
         onClose={() => { if (!confirmInvestBusy) setConfirmInvest(null); }}
-        title="Saldo insuficiente no Sicredi Invest"
+        title="Saldo insuficiente na conta de investimento"
         size="sm"
       >
         <div className="p-6 space-y-3">
@@ -2545,7 +2545,7 @@ export function FinanceiroPage() {
           </div>
           <p className="text-xs text-stone-500 leading-relaxed">
             Você pode <b>executar mesmo assim</b>: a operação será gravada e o resgate agendado ficará
-            acima do saldo disponível do Invest — ajuste o saldo (ou os valores) depois. A regra continua
+            acima do saldo disponível da conta de investimento — ajuste o saldo (ou os valores) depois. A regra continua
             valendo: esta confirmação vale só para esta operação; na próxima o sistema alerta de novo.
           </p>
         </div>

@@ -181,6 +181,56 @@ export type ContaBancariaEmpresaRow = WithTimestamps & {
   digito: string | null;
   ativa: boolean;
   ordem: number | null;
+  /** Soma no "Saldo Fluxo de Caixa" da Home (migration 0060). */
+  compoe_fluxo_caixa: boolean;
+};
+
+/** v_fluxo_caixa_planilha — linhas da aba "Saldo Disponível" da VS4 (0060). */
+export type FluxoPlanilhaRow = {
+  mes_referencia: string;
+  saldo_inicial: number;
+  vendas: number;
+  resgates_entrada: number;
+  outras_entradas: number;
+  entradas: number;
+  despesas_aramburu: number;
+  distribuicao_lucro: number;
+  despesas_obra: number;
+  aplicacoes: number;
+  resgates_saida: number;
+  transferencias: number;
+  saidas: number;
+  resultado: number;
+  saldo_contas_fluxo: number;
+  saldo_menos_proximo_mes: number;
+  saldo_todas_contas: number;
+  dv_limite: number;
+  dv_utilizado: number;
+  dv_provisionado: number;
+  dv_saldo: number;
+  /** Realizado × provisionado (0061). Ausentes enquanto a 0061 não for aplicada. */
+  entradas_realizadas?: number;
+  entradas_provisionadas?: number;
+  saidas_realizadas?: number;
+  saidas_provisionadas?: number;
+};
+
+/** v_fluxo_caixa_contas — saldo projetado por conta e mês (0060). */
+export type FluxoContaRow = {
+  mes_referencia: string;
+  conta_bancaria_id: string;
+  banco_nome: string;
+  banco_apelido: string | null;
+  banco_instituicao: string | null;
+  banco_numero: string | null;
+  banco_tipo_instituicao: string | null;
+  banco_tipo: string | null;
+  banco_ordem: number | null;
+  ativa: boolean;
+  compoe_fluxo_caixa: boolean;
+  saldo_inicial: number;
+  movimento_mes: number;
+  saldo_final: number;
 };
 
 export type ContaBancariaSocioRow = WithTimestamps & {
@@ -1007,8 +1057,8 @@ export interface Database {
       contas_bancarias_empresa: {
         Row: ContaBancariaEmpresaRow;
         // numero_banco é nullable e tipo_instituicao tem default 'banco' no banco → opcionais no insert.
-        Insert: Omit<ContaBancariaEmpresaRow, "id" | "created_at" | "updated_at" | "numero_banco" | "tipo_instituicao">
-          & { numero_banco?: string | null; tipo_instituicao?: string };
+        Insert: Omit<ContaBancariaEmpresaRow, "id" | "created_at" | "updated_at" | "numero_banco" | "tipo_instituicao" | "compoe_fluxo_caixa">
+          & { numero_banco?: string | null; tipo_instituicao?: string; compoe_fluxo_caixa?: boolean };
         Update: Partial<Omit<ContaBancariaEmpresaRow, "id" | "created_at" | "updated_at">>;
         Relationships: EmptyRels;
       };
@@ -1309,6 +1359,16 @@ export interface Database {
           entradas_garantidas_proximo_mes: number;
           saldo_menos_proximo_mes: number;
         };
+        Relationships: EmptyRels;
+      };
+      // Fluxo de Caixa no formato da aba "Saldo Disponível" da VS4 (migration 0060).
+      v_fluxo_caixa_planilha: {
+        Row: FluxoPlanilhaRow;
+        Relationships: EmptyRels;
+      };
+      // Saldo inicial/final PROJETADO por conta e mês (migration 0060).
+      v_fluxo_caixa_contas: {
+        Row: FluxoContaRow;
         Relationships: EmptyRels;
       };
       // Saldo inicial/final realizado por banco por mês (migration 0044).

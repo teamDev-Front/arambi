@@ -1,5 +1,6 @@
 // Queries que alimentam o dashboard (Home) — todas batem nas views.
 import { createClient } from "@/lib/supabase/client";
+import type { FluxoContaRow, FluxoPlanilhaRow } from "@/types/database";
 
 export interface KpiMensalRow {
   mes_referencia: string;
@@ -94,52 +95,32 @@ export async function getSaldoAtualPorBanco(): Promise<SaldoAtualBanco[]> {
   return (data ?? []) as SaldoAtualBanco[];
 }
 
-// Fluxo de caixa mensal (aba "Saldo Disponível") — com o indicador
-// "Saldo − contas do próximo mês" (passa o mês tranquila sem depender de vendas?).
-export interface FluxoCaixaMes {
-  mes_referencia: string;
-  saldo_final_acumulado: number;          // saldo acumulado no fim do mês
-  saidas_mes: number;
-  resgate_mes: number;
-  outros_entradas_mes: number;
-  vendas_mes: number;
-  saidas_proximo_mes: number;             // saídas do mês seguinte (negativo)
-  entradas_garantidas_proximo_mes: number; // resgates + outras entradas do mês seguinte (sem vendas)
-  saldo_menos_proximo_mes: number;        // indicador: verde (>=0) ou vermelho (<0)
-}
+// Fluxo de Caixa no formato da aba "Saldo Disponível" da planilha VS4
+// (migration 0060): entradas, saídas, resultado, "saldo (−) contas do próximo
+// mês" e despesa variável — mês a mês. Conferido linha a linha com a planilha.
+export type FluxoPlanilhaMes = FluxoPlanilhaRow;
 
-export async function getFluxoCaixaMensal(): Promise<FluxoCaixaMes[]> {
+export async function getFluxoPlanilha(): Promise<FluxoPlanilhaMes[]> {
   const supabase = createClient();
   const { data, error } = await supabase
-    .from("v_fluxo_caixa_mensal")
+    .from("v_fluxo_caixa_planilha")
     .select("*")
     .order("mes_referencia");
   if (error) throw error;
-  return (data ?? []) as FluxoCaixaMes[];
+  return (data ?? []) as FluxoPlanilhaMes[];
 }
 
-// Saldo inicial/final REALIZADO por banco por mês (contas correntes ativas:
-// CORA, SICREDI 0913, INTER) — conferência com os extratos bancários no
-// fechamento de cada período (ajuste 23-jul, view v_fluxo_caixa_bancos).
-export interface FluxoCaixaBancoMes {
-  mes_referencia: string;
-  conta_bancaria_id: string;
-  banco_nome: string;
-  banco_apelido: string | null;
-  banco_instituicao: string | null;
-  banco_ordem: number | null;
-  saldo_inicial: number;
-  movimento_mes: number;
-  saldo_final: number;
-}
+// Saldo inicial/final PROJETADO (todos os status, como a planilha) de cada
+// conta em cada mês — cards de "Saldos bancários" do Fluxo de Caixa.
+export type FluxoContaMes = FluxoContaRow;
 
-export async function getFluxoCaixaBancos(): Promise<FluxoCaixaBancoMes[]> {
+export async function getFluxoContas(): Promise<FluxoContaMes[]> {
   const supabase = createClient();
   const { data, error } = await supabase
-    .from("v_fluxo_caixa_bancos")
+    .from("v_fluxo_caixa_contas")
     .select("*")
     .order("mes_referencia")
     .order("banco_ordem");
   if (error) throw error;
-  return (data ?? []) as FluxoCaixaBancoMes[];
+  return (data ?? []) as FluxoContaMes[];
 }

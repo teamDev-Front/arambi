@@ -1,7 +1,18 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Search } from "lucide-react";
+import { Check, ChevronDown, Minus, Search } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
+
+const anoDe = (m: string) => (/^\d{4}-\d{2}$/.test(m) ? m.slice(0, 4) : "");
+
+/** "2026" quando a seleção é exatamente o ano inteiro (todos os meses dele na lista). */
+function anoCompleto(sel: string[], lista: string[]): string | null {
+  if (sel.length < 2) return null;
+  const ano = anoDe(sel[0]);
+  if (!ano || sel.some((m) => anoDe(m) !== ano)) return null;
+  const doAno = lista.filter((m) => anoDe(m) === ano);
+  return doAno.length === sel.length && doAno.every((m) => sel.includes(m)) ? ano : null;
+}
 
 interface CompetenciaMultiSelectProps {
   /** Competências disponíveis, em "AAAA-MM". */
@@ -36,6 +47,9 @@ interface CompetenciaMultiSelectProps {
  *   • VAZIO = TODAS. Não existe estado "nenhuma competência": desmarcar tudo é
  *     a forma de pedir a visão completa, que é como o seletor antigo de uma
  *     competência só funcionava com a opção "Todas".
+ *
+ * Ano inteiro (21-out-2026): os meses vêm agrupados por ano, e o cabeçalho de
+ * cada ano marca/desmarca todos os meses dele de uma vez.
  */
 export function CompetenciaMultiSelect({
   options,
@@ -101,18 +115,38 @@ export function CompetenciaMultiSelect({
     });
   }
 
+  // Meses visíveis agrupados por ano, na ordem em que aparecem.
+  const grupos: { ano: string; meses: string[] }[] = [];
+  for (const m of filtradas) {
+    const ano = anoDe(m);
+    const g = grupos.find((x) => x.ano === ano);
+    if (g) g.meses.push(m); else grupos.push({ ano, meses: [m] });
+  }
+
+  function toggleAno(meses: string[]) {
+    setDraft((prev) =>
+      meses.every((m) => prev.includes(m))
+        ? prev.filter((m) => !meses.includes(m))
+        : Array.from(new Set([...prev, ...meses])),
+    );
+  }
+
   function aplicar() {
     // Marcou tudo = sem recorte (mesma coisa, e mantém o rótulo "Todas").
     onChange(draft.length === lista.length ? [] : [...draft].sort());
     setOpen(false);
   }
 
+  const anoAplicado = anoCompleto(value, lista);
+  const anoRascunho = anoCompleto(draft, lista);
   const rotulo =
     value.length === 0
       ? todasLabel
-      : value.length === 1
-        ? value[0]
-        : `${value.length} selecionadas`;
+      : anoAplicado
+        ? `Ano ${anoAplicado}`
+        : value.length === 1
+          ? value[0]
+          : `${value.length} selecionadas`;
 
   return (
     <div ref={ref} className={cn("relative", className)}>
@@ -169,27 +203,54 @@ export function CompetenciaMultiSelect({
             {filtradas.length === 0 && (
               <p className="px-3 py-4 text-center text-xs text-stone-400">Nenhuma competência</p>
             )}
-            {filtradas.map((m) => {
-              const sel = draftSet.has(m);
+            {grupos.map(({ ano, meses }) => {
+              const marcados = meses.filter((m) => draftSet.has(m)).length;
+              const anoTodo = marcados === meses.length;
               return (
-                <button
-                  key={m}
-                  type="button"
-                  role="option"
-                  aria-selected={sel}
-                  onClick={() => toggle(m)}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-stone-50"
-                >
-                  <span
-                    className={cn(
-                      "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors",
-                      sel ? "bg-accent-500 border-accent-500 text-white" : "border-stone-300",
-                    )}
-                  >
-                    {sel && <Check size={11} />}
-                  </span>
-                  <span className="text-stone-700 tabular-nums">{m}</span>
-                </button>
+                <div key={ano || "outras"}>
+                  {ano && (
+                    <button
+                      type="button"
+                      onClick={() => toggleAno(meses)}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs bg-stone-50 hover:bg-stone-100"
+                      title={`Marca ou desmarca todos os meses de ${ano}${q ? " mostrados pela busca" : ""}`}
+                    >
+                      <span
+                        className={cn(
+                          "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+                          marcados > 0 ? "bg-accent-500 border-accent-500 text-white" : "border-stone-300 bg-white",
+                        )}
+                      >
+                        {anoTodo ? <Check size={11} /> : marcados > 0 && <Minus size={11} />}
+                      </span>
+                      <span className="font-semibold text-stone-700 tabular-nums">{ano}</span>
+                      <span className="text-stone-400">ano inteiro</span>
+                    </button>
+                  )}
+                  {meses.map((m) => {
+                    const sel = draftSet.has(m);
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        role="option"
+                        aria-selected={sel}
+                        onClick={() => toggle(m)}
+                        className={cn("w-full flex items-center gap-2 pr-3 py-1.5 text-left text-xs hover:bg-stone-50", ano ? "pl-6" : "pl-3")}
+                      >
+                        <span
+                          className={cn(
+                            "w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+                            sel ? "bg-accent-500 border-accent-500 text-white" : "border-stone-300",
+                          )}
+                        >
+                          {sel && <Check size={11} />}
+                        </span>
+                        <span className="text-stone-700 tabular-nums">{m}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               );
             })}
           </div>
@@ -198,7 +259,9 @@ export function CompetenciaMultiSelect({
             <span className="text-[10px] text-stone-400">
               {draft.length === 0 || draft.length === lista.length
                 ? "Todas as competências"
-                : `${draft.length} selecionada${draft.length === 1 ? "" : "s"}`}
+                : anoRascunho
+                  ? `Ano ${anoRascunho} inteiro`
+                  : `${draft.length} selecionada${draft.length === 1 ? "" : "s"}`}
             </span>
             <span className="flex gap-1.5">
               <button

@@ -1,6 +1,5 @@
 "use client";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { KpiCard } from "@/components/ui/KpiCard";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -9,17 +8,17 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, Package, FileText, Bot,
-  DollarSign, ArrowUpRight, Download, LayoutDashboard, Loader2,
-  ChevronDown, ChevronRight, Landmark,
+  TrendingUp, Package, FileText, Bot,
+  ArrowUpRight, Download, LayoutDashboard, Loader2, Database,
 } from "lucide-react";
 import Link from "next/link";
-import { LinkModulo } from "@/components/acessos/LinkModulo";
 import { formatCurrency } from "@/lib/utils/format";
 import {
-  getKpiMensal, getPorContaContabil, getSaldoAtualPorBanco, getFluxoCaixaMensal, getFluxoCaixaBancos,
-  type KpiMensalRow, type PorContaContabilRow, type SaldoAtualBanco, type FluxoCaixaMes, type FluxoCaixaBancoMes,
+  getKpiMensal, getPorContaContabil, getSaldoAtualPorBanco, getFluxoPlanilha, getFluxoContas,
+  type KpiMensalRow, type PorContaContabilRow, type SaldoAtualBanco, type FluxoPlanilhaMes, type FluxoContaMes,
 } from "@/lib/queries/dashboard";
+import { IndicadoresFluxo } from "@/components/dashboard/IndicadoresFluxo";
+import { FluxoCaixaTabela } from "@/components/dashboard/FluxoCaixaTabela";
 import { listarTransacoesEmpresa, type TransacaoEmpresaRich } from "@/lib/queries/financeiro";
 import { STATUS_ARAMBURU_LABEL } from "@/types";
 import { BancoDetalheModal } from "@/components/dashboard/BancoDetalheModal";
@@ -62,9 +61,9 @@ export function DashboardHome() {
   const [kpiAll, setKpiAll]     = useState<KpiMensalRow[]>([]);
   const [byConta, setByConta]   = useState<PorContaContabilRow[]>([]);
   const [saldosBanco, setSaldosBanco] = useState<SaldoAtualBanco[]>([]);
-  const [fluxo, setFluxo]       = useState<FluxoCaixaMes[]>([]);
-  const [fluxoBancos, setFluxoBancos] = useState<FluxoCaixaBancoMes[]>([]);
-  const [mesesAbertos, setMesesAbertos] = useState<Set<string>>(new Set());
+  // Fluxo de Caixa da planilha VS4 (migration 0060); null = views ainda não criadas.
+  const [fluxo, setFluxo]       = useState<FluxoPlanilhaMes[] | null>([]);
+  const [fluxoContas, setFluxoContas] = useState<FluxoContaMes[]>([]);
   const [recent, setRecent]     = useState<TransacaoEmpresaRich[]>([]);
   const [loading, setLoading]   = useState(true);
 
@@ -77,20 +76,21 @@ export function DashboardHome() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [k, c, sb, fx, fxb, r] = await Promise.all([
+      const [k, c, sb, fx, fxc, r] = await Promise.all([
         getKpiMensal(),
         getPorContaContabil(mesesFiltro),
         getSaldoAtualPorBanco(),
-        getFluxoCaixaMensal(),
-        // View da migration 0044 — se ainda não aplicada, degrada sem quebrar.
-        getFluxoCaixaBancos().catch(() => [] as FluxoCaixaBancoMes[]),
-        listarTransacoesEmpresa(mesesFiltro.length ? { mesReferencia: mesesFiltro } : {}, 1, 5),
+        // Views da migration 0060 — se ainda não aplicada, a Home avisa e segue.
+        getFluxoPlanilha().catch(() => null),
+        getFluxoContas().catch(() => [] as FluxoContaMes[]),
+        // Últimos REGISTRADOS (reunião 20-out: "está puxando de janeiro").
+        listarTransacoesEmpresa(mesesFiltro.length ? { mesReferencia: mesesFiltro } : {}, 1, 5, "desc", "registro"),
       ]);
       setKpiAll(k);
       setByConta(c);
       setSaldosBanco(sb);
       setFluxo(fx);
-      setFluxoBancos(fxb);
+      setFluxoContas(fxc);
       setRecent(r.rows);
     } catch (e: unknown) {
       toast.error("Erro carregando dashboard", (e as Error).message ?? String(e));
@@ -100,21 +100,6 @@ export function DashboardHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mesesFiltro]);
   useEffect(() => { if (verFinanceiro) fetchAll(); }, [fetchAll, verFinanceiro]);
-
-  // KPI consolidado: usa o mês filtrado ou totaliza tudo.
-  const kpiAtual = useMemo(() => {
-    const base = mesesFiltro.length ? kpiAll.filter((r) => mesesFiltro.includes(r.mes_referencia)) : kpiAll;
-    return base.reduce(
-      (acc, r) => {
-        acc.entradas += Number(r.entradas_realizadas ?? 0);
-        acc.saidas   += Number(r.saidas_realizadas ?? 0);
-        acc.aPagar   += Number(r.saidas_a_pagar ?? 0);
-        acc.provis   += Number(r.saidas_provisionadas ?? 0);
-        return acc;
-      },
-      { entradas: 0, saidas: 0, aPagar: 0, provis: 0 },
-    );
-  }, [kpiAll, mesesFiltro]);
 
   // BarChart: receita vs despesa mensal
   const barData = useMemo(() => kpiAll.map((r) => ({
@@ -143,29 +128,21 @@ export function DashboardHome() {
   // "39,1%" — 1 casa decimal, vírgula PT-BR
   const fmtPct = (n: number) => `${n.toFixed(1).replace(".", ",")}%`;
 
-  // mês corrente "YYYY-MM" — para destacar a linha atual no fluxo de caixa
-  const mesAtual = new Date().toISOString().slice(0, 7);
+  // mês corrente "YYYY-MM" (data local) — linha atual do fluxo e saldos dos indicadores
+  const hoje = new Date();
+  const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
 
   const meses = useMemo(() => kpiAll.map((r) => r.mes_referencia), [kpiAll]);
 
-  // Saldos por banco de cada mês (conferência com extrato — RF 23-jul).
-  const bancosPorMes = useMemo(() => {
-    const m = new Map<string, FluxoCaixaBancoMes[]>();
-    for (const b of fluxoBancos) {
-      const arr = m.get(b.mes_referencia) ?? [];
-      arr.push(b);
-      m.set(b.mes_referencia, arr);
-    }
-    return m;
-  }, [fluxoBancos]);
-
-  const toggleMesAberto = (mes: string) => {
-    setMesesAbertos((prev) => {
-      const next = new Set(prev);
-      if (next.has(mes)) next.delete(mes); else next.add(mes);
-      return next;
-    });
-  };
+  const avisoMigration = (
+    <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <Database size={18} className="mt-0.5 shrink-0 text-amber-600" />
+      <span>
+        Indicadores e Fluxo de Caixa no formato da planilha VS4 dependem da migration{" "}
+        <code className="rounded bg-amber-100 px-1.5 py-0.5 text-xs">0060_fluxo_caixa_vs4.sql</code> — aplique no SQL Editor do Supabase.
+      </span>
+    </div>
+  );
 
   const atalhosJsx = atalhos.length > 0 && (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -207,7 +184,7 @@ export function DashboardHome() {
         <div className="flex items-center gap-2">
           {/* Competência multi-seleção — mesmo padrão do Financeiro (17-ago) */}
           <label className="flex items-center gap-1.5 text-xs text-stone-500"
-            title="Competência dos indicadores e do gráfico de despesa por conta. Nenhuma marcada = todos os meses.">
+            title="Competência dos indicadores e do gráfico de despesa por conta. Nenhuma marcada = todos os meses (os saldos de Fluxo de Caixa e Despesas Variáveis usam o mês atual).">
             Competência
             <CompetenciaMultiSelect
               className="w-40"
@@ -240,36 +217,10 @@ export function DashboardHome() {
       {/* Quick access */}
       {atalhosJsx}
 
-      {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard
-          label="Entradas realizadas"
-          value={formatCurrency(kpiAtual.entradas)}
-          icon={<TrendingUp size={16}/>}
-          trend="up"
-          helpText="Soma de tudo que efetivamente entrou na conta no período (Recebido, Resgatado, Aplicação)."
-        />
-        <KpiCard
-          label="Saídas realizadas"
-          value={formatCurrency(kpiAtual.saidas)}
-          icon={<TrendingDown size={16}/>}
-          trend="down"
-          helpText="Soma de tudo que efetivamente saiu da conta no período (Pago, Repassado, Aplicado, Resgate)."
-        />
-        <KpiCard
-          label="A pagar"
-          value={formatCurrency(Math.abs(kpiAtual.aPagar))}
-          icon={<DollarSign size={16}/>}
-          helpText="Lançamentos confirmados que ainda não foram pagos. Saídas previstas."
-        />
-        <KpiCard
-          label="Provisionado"
-          value={formatCurrency(Math.abs(kpiAtual.provis))}
-          icon={<DollarSign size={16}/>}
-          trend="neutral"
-          helpText="Previsões de saída ainda sem confirmação (estimativas, recorrências futuras). Não afeta o saldo atual."
-        />
-      </div>
+      {/* Indicadores no formato do painel "FLUXO DE CAIXA" da planilha VS4 (reunião 20-out) */}
+      {fluxo === null
+        ? avisoMigration
+        : <IndicadoresFluxo linhas={fluxo} meses={mesesFiltro} mesAtual={mesAtual} />}
 
       {/* Gráficos */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -374,102 +325,10 @@ export function DashboardHome() {
         </Card>
       </div>
 
-      {/* Fluxo de Caixa — Saldo vs. próximo mês (espelha aba "Saldo Disponível") */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Fluxo de Caixa — Saldo vs. Próximo Mês</CardTitle>
-          <LinkModulo href="/dashboard/saldos" semAcesso="ocultar" className="text-xs text-accent-600 hover:underline">Saldos mensais</LinkModulo>
-        </CardHeader>
-        <CardContent className="p-0">
-          {fluxo.length === 0 && !loading && (
-            <p className="text-xs text-stone-400 text-center py-8">Sem dados de fluxo de caixa.</p>
-          )}
-          {fluxo.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-stone-50 border-b border-stone-100">
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-stone-500 uppercase tracking-wide">Mês</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">Saldo no fim do mês</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">Saídas do próx. mês</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">Entradas garantidas (sem vendas)</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-stone-500 uppercase tracking-wide whitespace-nowrap">Saldo após o próximo mês</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fluxo.map((f) => {
-                    const ind = Number(f.saldo_menos_proximo_mes);
-                    const ok = ind >= 0;
-                    const atual = f.mes_referencia === mesAtual;
-                    const entradas = Number(f.entradas_garantidas_proximo_mes);
-                    const bancosMes = bancosPorMes.get(f.mes_referencia) ?? [];
-                    const aberto = mesesAbertos.has(f.mes_referencia);
-                    return (
-                      <Fragment key={f.mes_referencia}>
-                      <tr className={`border-b border-stone-50 hover:bg-stone-50 ${atual ? "bg-accent-50/40" : ""}`}>
-                        <td className="px-4 py-2.5 text-stone-700 font-medium whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1">
-                            {bancosMes.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => toggleMesAberto(f.mes_referencia)}
-                                className="p-0.5 rounded hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition"
-                                title="Saldos por banco (conferência com os extratos)"
-                                aria-label={`${aberto ? "Ocultar" : "Ver"} saldos por banco de ${mesShort(f.mes_referencia)}`}
-                              >
-                                {aberto ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                              </button>
-                            )}
-                            {mesShort(f.mes_referencia)}
-                            {atual && <span className="ml-1.5 text-[9px] text-accent-600 font-semibold uppercase">atual</span>}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-right tabular-nums text-stone-700 whitespace-nowrap">{formatCurrency(Number(f.saldo_final_acumulado))}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums text-red-600 whitespace-nowrap">{formatCurrency(Number(f.saidas_proximo_mes))}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700 whitespace-nowrap">{entradas > 0 ? `+${formatCurrency(entradas)}` : formatCurrency(entradas)}</td>
-                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold tabular-nums ${ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
-                            {formatCurrency(ind)}
-                          </span>
-                        </td>
-                      </tr>
-                      {/* Saldos por banco do mês — conferência com os extratos (RF 23-jul) */}
-                      {aberto && bancosMes.length > 0 && (
-                        <tr className="border-b border-stone-100 bg-stone-50/60">
-                          <td colSpan={5} className="px-4 py-2.5">
-                            <div className="flex flex-wrap gap-x-8 gap-y-1.5 pl-5">
-                              {bancosMes.map((b) => (
-                                <div key={b.conta_bancaria_id} className="flex items-center gap-2 text-xs">
-                                  <Landmark size={12} className="text-stone-400 shrink-0" />
-                                  <span className="font-semibold text-stone-600">{b.banco_apelido ?? b.banco_nome}</span>
-                                  <span className="text-stone-400">inicial</span>
-                                  <span className="tabular-nums font-medium text-stone-700">{formatCurrency(Number(b.saldo_inicial))}</span>
-                                  <span className="text-stone-300">→</span>
-                                  <span className="text-stone-400">final</span>
-                                  <span className={`tabular-nums font-semibold ${Number(b.saldo_final) < 0 ? "text-red-600" : "text-emerald-700"}`}>
-                                    {formatCurrency(Number(b.saldo_final))}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <p className="text-[11px] text-stone-400 px-4 py-3 border-t border-stone-100 leading-relaxed">
-            <strong className="text-stone-500">Saldo após o próximo mês</strong> = saldo no fim do mês + saídas e entradas garantidas (resgates/outras) do mês seguinte, <strong className="text-stone-500">sem contar vendas</strong>. Verde = passa o mês tranquila; vermelho = vai precisar de vendas ou resgates pra cobrir.
-            {fluxoBancos.length > 0 && (
-              <> Clique na setinha do mês para ver o <strong className="text-stone-500">saldo inicial e final de cada banco</strong> (CORA, SICREDI e INTER) — valores realizados, para bater com os extratos no fechamento.</>
-            )}
-          </p>
-        </CardContent>
-      </Card>
+      {/* Fluxo de Caixa — mesmo cálculo da aba "Saldo Disponível" da planilha VS4 (reunião 20-out) */}
+      {fluxo !== null && (
+        <FluxoCaixaTabela linhas={fluxo} contas={fluxoContas} loading={loading} mesAtual={mesAtual} />
+      )}
 
       {/* Últimos Lançamentos — full width */}
       <Card>

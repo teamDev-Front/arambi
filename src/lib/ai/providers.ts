@@ -9,9 +9,18 @@ import OpenAI from "openai";
 import type { ChatRole, IAProvider } from "@/types";
 import type { ToolDefinition } from "@/lib/ai/tools";
 
+/** Arquivo que vai junto com uma mensagem do usuário (PDF ou imagem). */
+export interface AIAnexo {
+  nome:   string;       // nome original — vira o filename do PDF na OpenAI
+  mime:   string;       // application/pdf | image/png | image/jpeg | image/webp
+  base64: string;       // conteúdo cru em base64, sem o prefixo "data:"
+}
+
 export interface AIMensagem {
   role: ChatRole;       // "user" | "assistant" | "system"
   content: string;
+  /** Só em mensagens do usuário. Vai ao modelo antes do texto. */
+  anexos?: AIAnexo[];
 }
 
 export interface AICallOptions {
@@ -53,6 +62,7 @@ interface GeminiContent {
   role: "user" | "model";
   parts: Array<
     | { text: string }
+    | { inlineData: { mimeType: string; data: string } }
     | { functionCall: { name: string; args?: Record<string, unknown>; id?: string } }
     | { functionResponse: { name: string; response: Record<string, unknown>; id?: string } }
   >;
@@ -66,11 +76,17 @@ async function callGemini(
   const ai = new GoogleGenAI({ apiKey });
 
   // History: só user/assistant. System vai como systemInstruction.
+  // Anexos (PDF/imagem) entram como inlineData ANTES do texto da mensagem.
   const contents: GeminiContent[] = msgs
     .filter(m => m.role === "user" || m.role === "assistant")
     .map(m => ({
       role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
+      parts: [
+        ...(m.role === "user" ? m.anexos ?? [] : []).map(a => ({
+          inlineData: { mimeType: a.mime, data: a.base64 },
+        })),
+        { text: m.content },
+      ],
     }));
 
   const tools = opts.tools && opts.tools.length
@@ -169,6 +185,10 @@ async function callOpenAI(
   if (opts.systemPrompt) messages.push({ role: "system", content: opts.systemPrompt });
   for (const m of msgs) {
     if (m.role === "system") continue;
+    if (m.role === "user" && m.anexos?.length) {
+      messages.push({ role: "user", content: [...m.anexos.map(parteOpenAI), { type: "text", text: m.content }] });
+      continue;
+    }
     messages.push({ role: m.role, content: m.content });
   }
 
@@ -253,6 +273,16 @@ async function callOpenAI(
     tokens_input: tokensIn,
     tokens_output: tokensOut,
   };
+}
+
+// PDF vai como `file` (base64 em data URL, com filename); imagem como `image_url`.
+function parteOpenAI(a: AIAnexo): OpenAI.Chat.Completions.ChatCompletionContentPart {
+  const dataUrl = `data:${a.mime};base64,${a.base64}`;
+  if (a.mime === "application/pdf") {
+    const filename = /\.pdf$/i.test(a.nome) ? a.nome : `${a.nome}.pdf`;
+    return { type: "file", file: { filename, file_data: dataUrl } };
+  }
+  return { type: "image_url", image_url: { url: dataUrl } };
 }
 
 // ===========================================================================

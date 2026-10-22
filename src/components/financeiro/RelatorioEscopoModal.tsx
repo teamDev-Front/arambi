@@ -17,6 +17,7 @@ import {
 import { gerarPdfBloqueante } from "@/lib/pdfmonkey/frontend";
 import type { ReportScope } from "@/lib/pdfmonkey/types";
 import { STATUS_ARAMBURU_LABEL, type StatusAramburu, type PdfMonkeySlug } from "@/types";
+import { ObservacoesCapaField, observacoesDoTexto } from "@/components/relatorios/ObservacoesCapaField";
 
 interface Props {
   open: boolean;
@@ -64,6 +65,8 @@ export function RelatorioEscopoModal({
   // CAPAS (4.3): número do lote e mês de referência informados manualmente.
   const [numeroLote, setNumeroLote] = useState("");
   const [mesRefLabel, setMesRefLabel] = useState("");
+  // Observações (21-out): uma por linha — capa e relatório contábil.
+  const [observacoes, setObservacoes] = useState("");
   const [gerando, setGerando] = useState(false);
   const [resultado, setResultado] = useState<{ status: string; url: string | null } | null>(null);
 
@@ -91,6 +94,7 @@ export function RelatorioEscopoModal({
     setCompetencia(mesReferenciaDefault);
     setNumeroLote("");
     setMesRefLabel("");
+    setObservacoes("");
     /* eslint-enable react-hooks/set-state-in-effect */
     carregarResumo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -164,6 +168,8 @@ export function RelatorioEscopoModal({
         ...(slug === "capa_empresa"
           ? { numero_lote: numeroLote.trim() || undefined, mes_referencia_label: mesRefLabel.trim() || undefined }
           : {}),
+        // Vazio = undefined: a requisição sai igual à de antes.
+        observacoes: observacoesDoTexto(observacoes),
       });
       setResultado({ status: res.status, url: res.download_url });
       if (res.status === "success") toast.success("Relatório gerado", "O PDF está pronto para download.");
@@ -257,6 +263,9 @@ export function RelatorioEscopoModal({
         </div>
         <p className="text-[11px] text-stone-400 -mt-2">
           A capa inclui somente as contas com movimento. Os filtros/seleção usados ficam registrados na geração.
+          {slug === "capa_empresa" && (
+            <> Compras no cartão de crédito aparecem na capa só para conferência e não somam no total — a fatura entra pelo resgate &ldquo;Fatura Cartão&rdquo;.</>
+          )}
         </p>
 
         {/* CAPAS (4.3): lote + mês de referência manuais (apenas Capa Empresa). */}
@@ -282,6 +291,15 @@ export function RelatorioEscopoModal({
             </div>
           </div>
         )}
+
+        {/* Observações (21-out) — capa: campo `observacoes`; contábil: cartões. */}
+        <ObservacoesCapaField
+          value={observacoes}
+          onChange={setObservacoes}
+          ajuda={slug === "relatorio_contabil"
+            ? "Cada linha vira um cartão de observação no Relatório Contábil."
+            : undefined}
+        />
 
         {/* Resultado */}
         {resultado && (

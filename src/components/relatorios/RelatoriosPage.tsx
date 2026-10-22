@@ -22,6 +22,7 @@ import {
 import { ContabilObservacoesModal } from "./ContabilObservacoesModal";
 import { SociosOverridesModal } from "./SociosOverridesModal";
 import { SeloCapaFields } from "./SeloCapaFields";
+import { ObservacoesCapaField, observacoesDoTexto } from "./ObservacoesCapaField";
 
 const TEMPLATES: Array<{
   slug: PdfMonkeySlug;
@@ -65,6 +66,8 @@ export function RelatoriosPage() {
   // Selo dourado da Capa do sócio (out-2026) — vazios = automático.
   const [capaNumero, setCapaNumero] = useState("");
   const [capaMesLabel, setCapaMesLabel] = useState("");
+  // Observações da Capa do sócio (21-out) — uma por linha; vazio = nenhuma.
+  const [capaObs, setCapaObs] = useState("");
 
   const [modalSocioOpen, setModalSocioOpen] = useState(false);
   const [modalObsOpen, setModalObsOpen] = useState(false);
@@ -111,6 +114,7 @@ export function RelatoriosPage() {
       setSocioId(socios[0]?.id ?? "");
       setCapaNumero("");
       setCapaMesLabel("");
+      setCapaObs("");
       setModalSocioOpen(true);
       return;
     }
@@ -325,6 +329,7 @@ export function RelatoriosPage() {
             mes={capaMesLabel}
             onMesChange={setCapaMesLabel}
           />
+          <ObservacoesCapaField value={capaObs} onChange={setCapaObs} />
           <div className="flex gap-3 justify-end pt-2">
             <Button variant="ghost" onClick={() => setModalSocioOpen(false)}>Cancelar</Button>
             <Button
@@ -332,6 +337,7 @@ export function RelatoriosPage() {
                 socio_id: socioId,
                 numero_lote: capaNumero.trim() || undefined,
                 mes_referencia_label: capaMesLabel.trim() || undefined,
+                observacoes: observacoesDoTexto(capaObs),
               })}
               disabled={!socioId || gerando !== null} loading={gerando !== null}>
               <FileText size={13}/> Gerar

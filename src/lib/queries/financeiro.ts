@@ -132,17 +132,20 @@ export async function listarTransacoesEmpresa(
   page = 1,
   pageSize = 25,
   sortDir: "asc" | "desc" = "asc",
+  /** "registro" = mais recentes por criação (Últimos Lançamentos da Home, 20-out). */
+  ordenarPor: "vencimento" | "registro" = "vencimento",
 ): Promise<ListarTransacoesResult> {
   const supabase = createClient();
 
   // Ordem por vencimento — default CRESCENTE (UX-03), invertível pelo clique
   // no cabeçalho "Vencimento" da tela. created_at desempata de forma estável.
   const asc = sortDir === "asc";
+  const [primeira, segunda] = ordenarPor === "registro" ? ["created_at", "data"] : ["data", "created_at"];
   let q = supabase
     .from("transacoes_empresa")
     .select(TRANS_SELECT, { count: "exact" })
-    .order("data", { ascending: asc })
-    .order("created_at", { ascending: asc });
+    .order(primeira, { ascending: asc })
+    .order(segunda, { ascending: asc });
 
   q = aplicarFiltros(q, filtros);
 
@@ -735,9 +738,15 @@ export async function deletarTransacoesEmpresaEmMassa(ids: string[]): Promise<nu
 // seguinte volta a validar normalmente.
 // ----------------------------------------------------------------------------
 
-/** Detecta o erro da validação de saldo do Invest (0044). */
+/**
+ * Detecta o erro da validação de saldo do Invest (0044). Desde a 0064 o resgate
+ * pode sair de outra conta de investimento (Configurações → Automações) — aí a
+ * mensagem é "Saldo insuficiente na conta de investimento <APELIDO>: …". A da
+ * SICREDINVEST continua a mesma de sempre.
+ */
 export function isErroSaldoInvest(msg: string): boolean {
-  return msg.includes("Saldo insuficiente na conta Sicredi Invest");
+  return msg.includes("Saldo insuficiente na conta Sicredi Invest")
+    || msg.includes("Saldo insuficiente na conta de investimento");
 }
 
 export async function criarTransacoesSemSaldoInvest(payloads: TransacaoEmpresaInsert[]): Promise<void> {

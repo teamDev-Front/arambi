@@ -48,6 +48,7 @@ export function CredenciaisModal({ dados, onClose }: { dados: CredenciaisExibida
       onClose={onClose}
       title={contexto === "novo" ? "Acesso criado" : "Nova senha provisória"}
       size="md"
+      className="max-w-lg"
       closeOnBackdrop={false}
     >
       <div className="p-6 space-y-5">
@@ -76,7 +77,7 @@ export function CredenciaisModal({ dados, onClose }: { dados: CredenciaisExibida
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <Button variant="outline" onClick={() => void copiar(mensagem, "tudo")}>
+          <Button variant="outline" className="whitespace-nowrap px-3" onClick={() => void copiar(mensagem, "tudo")}>
             {copiado === "tudo" ? <Check size={14} /> : <Copy size={14} />}
             {copiado === "tudo" ? "Mensagem copiada" : "Copiar mensagem"}
           </Button>
@@ -84,9 +85,9 @@ export function CredenciaisModal({ dados, onClose }: { dados: CredenciaisExibida
             href={`https://wa.me/?text=${encodeURIComponent(mensagem)}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[#25D366] px-4 text-sm font-medium text-white shadow-sm transition hover:bg-[#1ebe5b]"
+            className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-[#25D366] px-3 text-sm font-medium text-white shadow-sm transition hover:bg-[#1ebe5b]"
           >
-            <MessageCircle size={15} /> Enviar pelo WhatsApp
+            <MessageCircle size={15} className="shrink-0" /> Enviar pelo WhatsApp
           </a>
         </div>
 

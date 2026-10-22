@@ -7,7 +7,7 @@ export interface GerarPdfArgs {
   slug: PdfMonkeySlug;
   mes_referencia: string;        // "YYYY-MM"
   socio_id?: string;             // só p/ capa_socio
-  observacoes?: ContabilObservacao[];        // só p/ relatorio_contabil
+  observacoes?: ContabilObservacao[];        // relatorio_contabil, capa_empresa e capa_socio (21-out)
   socios_overrides?: RelatorioSociosOverrides; // só p/ relatorio_socios
   /** Recorte (RF-FIN-09): capa_empresa e relatorio_contabil respeitam filtros/seleção. */
   scope?: ReportScope;

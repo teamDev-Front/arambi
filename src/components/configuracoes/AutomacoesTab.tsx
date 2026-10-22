@@ -1,12 +1,15 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
 import { Landmark, Loader2, SlidersHorizontal } from "lucide-react";
 import {
-  obterConfigApp, salvarConfigApp, CONFIG_RESGATES_SICREDI,
-  CONFIG_LIMITE_DV, CONFIG_FATURA_CARTAO_DIA,
+  obterConfigApp, obterConfigAppSeExistir, salvarConfigApp, CONFIG_RESGATES_SICREDI,
+  CONFIG_LIMITE_DV, CONFIG_FATURA_CARTAO_DIA, CONFIG_RESGATE_CONTA_ORIGEM,
 } from "@/lib/queries/configuracoes";
+import { listarContasEmpresa } from "@/lib/queries/bancos";
+import type { ContaBancariaEmpresaRow } from "@/types";
 
 /**
  * Configurações → Automações (ajuste 27-jul).
@@ -16,6 +19,10 @@ import {
  * cobrir o pagamento. Quando a operação passar a ser direto na conta corrente,
  * basta DESLIGAR aqui — sem reconfigurar nada no sistema (pedido da Lola:
  * "como podemos deixar no sistema, para não ter que reconfigurar futuramente?").
+ *
+ * Desde a 0064 (reunião 20-out) dá para escolher DE QUAL conta de investimento
+ * os resgates saem (SICREDINVEST, SICREDI EMPRESARIAL, SICREDI APLICAÇÃO
+ * AUTOMÁTICA…) — ver ContaOrigemResgates.
  */
 export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
   const toast = useToast();
@@ -42,7 +49,7 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
       toast.success(
         novo ? "Resgates automáticos LIGADOS" : "Resgates automáticos DESLIGADOS",
         novo
-          ? "Despesas na conta Sicredi voltam a gerar o resgate automático do Invest."
+          ? "Despesas na conta Sicredi voltam a gerar o resgate automático da conta de investimento."
           : "Novos lançamentos na conta Sicredi NÃO geram mais resgate automático. Os resgates já existentes não foram alterados.",
       );
     } catch (e: unknown) {
@@ -56,7 +63,7 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
     <div className="space-y-4 max-w-3xl">
       <Card>
         <CardHeader>
-          <CardTitle>Resgates automáticos — Sicredi Invest</CardTitle>
+          <CardTitle>Resgates automáticos — Sicredi</CardTitle>
           <Landmark size={16} className="text-stone-400" />
         </CardHeader>
         <CardContent className="space-y-4">
@@ -64,8 +71,8 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
             <div className="text-sm text-stone-600 space-y-2 max-w-xl">
               <p>
                 <b className="text-stone-800">Como funciona hoje:</b> ao lançar uma despesa vinculada à conta
-                Sicredi (0913), o sistema gera automaticamente um <b>resgate da conta Invest</b> no dia útil
-                anterior ao vencimento, para suprir o pagamento.
+                Sicredi (0913), o sistema gera automaticamente um <b>resgate da conta de investimento</b>{" "}
+                (escolhida abaixo) no dia útil anterior ao vencimento, para suprir o pagamento.
               </p>
               <p>
                 Quando vocês deixarem de trabalhar com essa sistemática e passarem a operar direto na{" "}
@@ -102,6 +109,8 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
               </button>
             )}
           </div>
+
+          <ContaOrigemResgates canEdit={canEdit} />
         </CardContent>
       </Card>
       {/* Parâmetros numéricos (RF 31-jul) — limite de DV e vencimento da fatura */}
@@ -155,8 +164,163 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
       </Card>
 
       <p className="text-xs text-stone-400">
-        As automações valem para todo o sistema. Alterações exigem as migrations 0047 e 0048 aplicadas no banco.
+        As automações valem para todo o sistema. Alterações exigem as migrations 0047 e 0048 aplicadas no banco
+        (a conta de origem dos resgates, a 0064).
       </p>
+    </div>
+  );
+}
+
+/** Mesma regra de fn_conta_sicredi_invest_padrao() no banco (0044/0064). */
+function ehSicredInvest(c: ContaBancariaEmpresaRow): boolean {
+  return c.nome === "Cooperativa Sicredi Investimento (0913)" || c.apelido === "SICREDINVEST";
+}
+
+function rotuloConta(c: ContaBancariaEmpresaRow): string {
+  return c.apelido?.trim() || c.nome;
+}
+
+/** Valor do <select> enquanto a conta gravada for inválida (força o onChange). */
+const OPCAO_INVALIDA = "__invalida__";
+
+/**
+ * Conta de origem dos resgates automáticos (migration 0064, reunião 20-out).
+ *
+ * Grava em app_config `resgate_conta_origem` o id da conta de investimento;
+ * vazio = SICREDINVEST (padrão). O banco só aceita conta ATIVA de tipo
+ * investimento — qualquer outra coisa cai na SICREDINVEST, e a tela avisa.
+ * Vale para os resgates criados a partir da troca: os que já existem continuam
+ * na conta deles (o banco nunca muda a conta de um par já criado).
+ */
+function ContaOrigemResgates({ canEdit }: { canEdit: boolean }) {
+  const toast = useToast();
+  const [contas, setContas] = useState<ContaBancariaEmpresaRow[]>([]);
+  // null = a chave não existe → migration 0064 ainda não aplicada.
+  const [gravado, setGravado] = useState<string | null>(null);
+  const [carregado, setCarregado] = useState(false);
+  const [erroCarga, setErroCarga] = useState(false);
+  const [pendente, setPendente] = useState<string | null>(null); // escolha aguardando confirmação
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    Promise.all([listarContasEmpresa(), obterConfigAppSeExistir(CONFIG_RESGATE_CONTA_ORIGEM)])
+      .then(([cs, v]) => {
+        setContas(cs);
+        setGravado(v);
+      })
+      .catch((e: unknown) => {
+        setErroCarga(true);
+        toast.error("Erro carregando a conta de origem dos resgates", (e as Error).message ?? String(e));
+      })
+      .finally(() => setCarregado(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const migrationAplicada = gravado !== null;
+  const investimentos = contas.filter((c) => c.ativa && c.tipo === "investimento");
+  const padrao = contas.filter(ehSicredInvest).sort((a, b) => Number(b.ativa) - Number(a.ativa))[0];
+  const nomePadrao = padrao ? rotuloConta(padrao) : "SICREDINVEST";
+  const idGravado = (gravado ?? "").trim().toLowerCase();
+  const configurada = idGravado ? investimentos.find((c) => c.id.toLowerCase() === idGravado) : undefined;
+  const invalida = idGravado !== "" && !configurada;
+  const efetiva = configurada ?? padrao;
+  const valorSelect = invalida
+    ? OPCAO_INVALIDA
+    : configurada && configurada.id !== padrao?.id ? configurada.id : "";
+
+  // A SICREDINVEST é gravada como vazio ("sem configuração" = comportamento de sempre).
+  const opcoes = investimentos.map((c) => ({
+    value: c.id === padrao?.id ? "" : c.id,
+    label: c.id === padrao?.id ? `${rotuloConta(c)} (padrão)` : rotuloConta(c),
+  }));
+  if (!opcoes.some((o) => o.value === "")) opcoes.unshift({ value: "", label: `${nomePadrao} (padrão)` });
+
+  function nomeDe(v: string): string {
+    if (v === "") return nomePadrao;
+    const c = investimentos.find((x) => x.id === v);
+    return c ? rotuloConta(c) : "escolhida";
+  }
+
+  async function confirmar() {
+    if (pendente === null || salvando) return;
+    setSalvando(true);
+    try {
+      await salvarConfigApp(CONFIG_RESGATE_CONTA_ORIGEM, pendente);
+      setGravado(pendente);
+      toast.success(
+        `Resgates novos saem da conta ${nomeDe(pendente)}`,
+        "Os resgates já criados continuam na conta em que foram lançados.",
+      );
+      setPendente(null);
+    } catch (e: unknown) {
+      toast.error("Não foi possível salvar", (e as Error).message ?? String(e));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div className="flex items-start justify-between gap-4 flex-wrap border-t border-stone-100 pt-4">
+      <div className="text-sm text-stone-600 max-w-xl space-y-1">
+        <p><b className="text-stone-800">Conta de origem dos resgates automáticos</b></p>
+        <p className="text-xs leading-relaxed">
+          Conta de investimento de onde sai o dinheiro de cada resgate (a linha negativa do par; a
+          positiva continua na conta Sicredi). Vale para os resgates criados a partir da troca — os que
+          já existem, inclusive a linha amarela (provisionados) de um mês que já tenha uma, continuam na
+          conta em que foram lançados.
+        </p>
+        {carregado && !erroCarga && !migrationAplicada && (
+          <p className="text-xs text-amber-700">
+            Disponível depois que a migration 0064 for aplicada no banco. Até lá, os resgates saem da{" "}
+            {nomePadrao}.
+          </p>
+        )}
+        {invalida && (
+          <p className="text-xs text-amber-700">
+            A conta escolhida está inativa ou não é de investimento — os resgates novos estão saindo da{" "}
+            {nomePadrao}. Escolha uma conta na lista.
+          </p>
+        )}
+        {migrationAplicada && efetiva?.compoe_fluxo_caixa === false && (
+          <p className="text-xs text-stone-400">
+            {rotuloConta(efetiva)} não entra no Saldo Fluxo de Caixa (Bancos): no Fluxo de Caixa da Home, o
+            resgate aparece só como entrada na conta Sicredi.
+          </p>
+        )}
+      </div>
+      {!carregado ? (
+        <span className="inline-flex items-center gap-2 text-sm text-stone-400">
+          <Loader2 size={16} className="animate-spin" /> Carregando…
+        </span>
+      ) : (
+        <select
+          value={valorSelect}
+          onChange={(e) => { if (e.target.value !== valorSelect) setPendente(e.target.value); }}
+          disabled={!canEdit || !migrationAplicada || erroCarga || salvando}
+          title={!canEdit
+            ? "Apenas administradores podem alterar"
+            : migrationAplicada ? "Conta de investimento dos resgates automáticos novos" : "Aplique a migration 0064 no banco"}
+          className="h-9 max-w-[18rem] rounded-lg border border-stone-200 bg-white px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-400 disabled:opacity-50"
+        >
+          {invalida && <option value={OPCAO_INVALIDA} disabled>Conta inválida — usando {nomePadrao}</option>}
+          {opcoes.map((o) => (
+            <option key={o.value || "padrao"} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      )}
+
+      <ConfirmDialog
+        open={pendente !== null}
+        title={`Resgates novos vão sair da conta ${nomeDe(pendente ?? "")}`}
+        description={
+          "Vale só para os resgates criados a partir de agora. Os que já existem continuam na conta em que foram lançados.\n\n" +
+          "A validação de saldo dos resgates novos passa a olhar o saldo dessa conta — confira se o saldo inicial dela está lançado no Financeiro."
+        }
+        confirmText="Trocar a conta"
+        busy={salvando}
+        onConfirm={confirmar}
+        onCancel={() => { if (!salvando) setPendente(null); }}
+      />
     </div>
   );
 }
