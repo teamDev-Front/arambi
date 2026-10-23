@@ -3,6 +3,10 @@
 // policy *_admin com fn_is_admin() em classificacao_financeira).
 
 import { createClient } from "@/lib/supabase/client";
+import {
+  PAPEIS, PAPEIS_PADRAO, carregarPapeisDetalhado, ehOuDentroDe, papelDoCodigo,
+  type MapaPapeis, type Papel,
+} from "@/lib/plano/papeis";
 import type { ClassificacaoFinanceiraRow, NaturezaConta, StatusConfigRow } from "@/types";
 
 // ----------------------------------------------------------------------------
@@ -47,11 +51,13 @@ export function validarCodigo(codigo: string): string | null {
 }
 
 /**
- * Códigos que automações do banco e relatórios PDF procuram PELO NÚMERO — não
- * mudam de código. Espelho de fn_classificacao_codigos_sistema() (migrations
- * 0057/0063) — as duas listas precisam ficar iguais.
- * Plano alinhado à VS4 (0063): 1.9/2.9 = Transferências Entre Contas,
- * 1.10/2.10 = Outros Recebimentos / Outras Saídas.
+ * RESERVA da lista de códigos travados — a de verdade vem do banco
+ * (fn_classificacao_codigos_sistema, ver carregarCodigosSistema). É a lista
+ * das migrations 0057/0063 (os 28 códigos que automações e relatórios
+ * procuravam PELO NÚMERO): vale só se a RPC falhar, para a tela nunca
+ * destravar antes da 0066. Com a 0066, o sistema procura essas contas pelo
+ * PAPEL (src/lib/plano/papeis.ts), a RPC passa a devolver só as raízes 1 e 2
+ * e esses códigos podem mudar.
  */
 export const CODIGOS_DO_SISTEMA: ReadonlySet<string> = new Set([
   // automações do banco: resgate do Invest (1.8), DL (2.8), par de
@@ -63,18 +69,96 @@ export const CODIGOS_DO_SISTEMA: ReadonlySet<string> = new Set([
   "2.5", "2.6", "2.7", "2.7.2", "2.10",
 ]);
 
-/** Contas com automação pela CONTA: centro de custo não entra nem sai delas trocando o código. */
-const CONTAS_COM_AUTOMACAO = new Set(["1.8", "2.8"]);
+/**
+ * O que a tela do Plano de Contas usa para travar/avisar — lido do BANCO ao
+ * abrir (carregarTravasPlano). O servidor (fn_classificacao_trocar_codigo)
+ * confere tudo de novo: a tela só reflete.
+ */
+export interface TravasPlano {
+  /** fn_classificacao_codigos_sistema() — com a 0066, só as raízes 1 e 2. */
+  codigosSistema: ReadonlySet<string>;
+  /** Papel → código (classificacao_papel, 0066; sem ela, o padrão). */
+  papeis: MapaPapeis;
+  /** Descrição de cada papel, quando a tabela tem. */
+  descricoesPapel: Partial<Record<Papel, string>>;
+}
+
+/** Antes de o banco responder (ou se ele falhar): tudo travado como hoje. */
+export const TRAVAS_RESERVA: TravasPlano = {
+  codigosSistema: CODIGOS_DO_SISTEMA,
+  papeis: PAPEIS_PADRAO,
+  descricoesPapel: {},
+};
+
+/** Contas com automação pela CONTA (papéis resgate e DL): centro de custo não entra nem sai delas trocando o código. */
+function contasComAutomacao(papeis: MapaPapeis): string[] {
+  return [papeis.resgate, papeis.dl];
+}
 
 /** Por que o código desta classificação não pode mudar (null = pode). */
-export function motivoCodigoTravado(c: Pick<ClassificacaoFinanceiraRow, "codigo" | "nivel">): string | null {
+export function motivoCodigoTravado(
+  c: Pick<ClassificacaoFinanceiraRow, "codigo" | "nivel">,
+  codigosSistema: ReadonlySet<string> = CODIGOS_DO_SISTEMA,
+): string | null {
   if (c.nivel === 1) return "Os grupos raiz (1 Entradas e 2 Saídas) não mudam de código.";
-  if (CODIGOS_DO_SISTEMA.has(c.codigo)) {
+  if (codigosSistema.has(c.codigo)) {
     return "Código usado pelas automações e relatórios do sistema — não pode ser alterado.";
   }
-  const filho = [...CODIGOS_DO_SISTEMA].find((s) => s.startsWith(c.codigo + "."));
+  const filho = [...codigosSistema].find((s) => s.startsWith(c.codigo + "."));
   if (filho) return `Contém ${filho}, usado pelas automações e relatórios do sistema — não pode ser alterado.`;
   return null;
+}
+
+const FIM_DICA_PAPEL = " — ao trocar o código, as automações e os relatórios acompanham.";
+
+/**
+ * Dica do modal para classificação com papel (não trava): o sistema a procura
+ * pelo papel, então a troca de código não quebra automação nem relatório.
+ * Conta sem papel próprio, mas com subcategoria que tem, avisa pela
+ * subcategoria. null = nenhum papel envolvido.
+ */
+export function dicaPapelClassificacao(
+  c: Pick<ClassificacaoFinanceiraRow, "codigo">,
+  travas: Pick<TravasPlano, "papeis" | "descricoesPapel"> = TRAVAS_RESERVA,
+): string | null {
+  const proprio = papelDoCodigo(c.codigo, travas.papeis);
+  if (proprio) {
+    const desc = travas.descricoesPapel[proprio];
+    return `Usado pelo sistema${desc ? `: ${desc}` : ""}${FIM_DICA_PAPEL}`;
+  }
+  const filho = PAPEIS
+    .filter((p) => ehOuDentroDe(travas.papeis[p], c.codigo))
+    .sort((a, b) => compararCodigo(travas.papeis[a], travas.papeis[b]))[0];
+  if (!filho) return null;
+  const desc = travas.descricoesPapel[filho];
+  return `Contém ${travas.papeis[filho]}${desc ? ` (${desc})` : ""}, usado pelo sistema${FIM_DICA_PAPEL}`;
+}
+
+/**
+ * Códigos travados, lidos do banco (fn_classificacao_codigos_sistema). Se a
+ * RPC falhar ou responder algo inesperado, a reserva CODIGOS_DO_SISTEMA —
+ * nunca destrava por engano.
+ */
+export async function carregarCodigosSistema(): Promise<ReadonlySet<string>> {
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase.rpc("fn_classificacao_codigos_sistema" as never);
+    if (error) return CODIGOS_DO_SISTEMA;
+    const lista = data as unknown;
+    if (!Array.isArray(lista) || !lista.every((c) => typeof c === "string")) return CODIGOS_DO_SISTEMA;
+    return new Set(lista as string[]);
+  } catch {
+    return CODIGOS_DO_SISTEMA;
+  }
+}
+
+/** Travas + papéis para a tela do Plano de Contas. Nunca lança (cai na reserva). */
+export async function carregarTravasPlano(): Promise<TravasPlano> {
+  const [codigosSistema, p] = await Promise.all([
+    carregarCodigosSistema(),
+    carregarPapeisDetalhado(createClient()),
+  ]);
+  return { codigosSistema, papeis: p.papeis, descricoesPapel: p.descricoes };
 }
 
 /** Confere a troca de código antes de ir ao banco (a RPC confere tudo de novo). */
@@ -82,9 +166,10 @@ export function validarTrocaCodigo(
   atual: ClassificacaoFinanceiraRow,
   novoCodigo: string,
   todas: ClassificacaoFinanceiraRow[],
+  travas: Pick<TravasPlano, "codigosSistema" | "papeis"> = TRAVAS_RESERVA,
 ): string | null {
   const novo = novoCodigo.trim();
-  const trava = motivoCodigoTravado(atual);
+  const trava = motivoCodigoTravado(atual, travas.codigosSistema);
   if (trava) return trava;
   const erroFormato = validarCodigo(novo);
   if (erroFormato) return erroFormato;
@@ -100,9 +185,10 @@ export function validarTrocaCodigo(
   }
   if (todas.some((r) => r.codigo === novo)) return `O código ${novo} já existe.`;
   if (parent && !todas.some((r) => r.codigo === parent)) return `A conta ${parent} não existe. Crie-a antes.`;
+  const automacao = contasComAutomacao(travas.papeis);
   if (atual.nivel === 3 && parent !== atual.parent_codigo
-      && (CONTAS_COM_AUTOMACAO.has(atual.parent_codigo ?? "") || CONTAS_COM_AUTOMACAO.has(parent ?? ""))) {
-    return "Centro de custo não entra nem sai de 1.8 (Resgate) ou 2.8 (DL) trocando o código — essas contas têm automações.";
+      && (automacao.includes(atual.parent_codigo ?? "") || automacao.includes(parent ?? ""))) {
+    return `Centro de custo não entra nem sai de ${travas.papeis.resgate} (Resgate) ou ${travas.papeis.dl} (DL) trocando o código — essas contas têm automações.`;
   }
   return null;
 }
@@ -242,7 +328,13 @@ export async function excluirClassificacao(codigo: string): Promise<void> {
     .eq("codigo", codigo)
     .select("codigo");
   if (error) {
-    if (error.code === "23503") throw new Error("Em uso por lançamentos ou subcategorias — inative em vez de excluir.");
+    if (error.code === "23503") {
+      // FK da classificacao_papel (0066): o item é usado pelas automações/relatórios.
+      if (/classificacao_papel/.test(`${error.message} ${error.details ?? ""}`)) {
+        throw new Error("Usado pelo sistema (automações e relatórios) — não pode ser excluído. Troque o código ou o nome, ou inative.");
+      }
+      throw new Error("Em uso por lançamentos ou subcategorias — inative em vez de excluir.");
+    }
     throw error;
   }
   if (!data || data.length === 0) throw new Error("Não foi possível excluir — em uso ou sem permissão de admin.");

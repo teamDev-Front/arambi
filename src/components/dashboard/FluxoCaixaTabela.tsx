@@ -6,10 +6,12 @@
 //   Resultado = entradas − saídas
 //   Saldo (−) contas do próximo mês = saldo final das contas do fluxo
 //                                     + saídas, outras entradas e resgates do mês seguinte
+//                                     (dezembro fecha o ano: só o saldo final — 0065)
 // Ao abrir um mês: saldo inicial/final de cada conta (projetado, como a planilha).
-// Realizado × provisionado (call de 20-out, migration 0061): indicadores do ano
-// no topo e a divisão embaixo de Entradas/Saídas de cada mês. Sem a 0061 as
-// colunas não vêm e essa parte simplesmente não aparece.
+// Realizado × provisionado (call de 20-out, migration 0061): a divisão embaixo
+// de Entradas/Saídas de cada mês. Os indicadores do ano que ficavam no topo
+// saíram a pedido da Adri (22-out: "aqui quero apenas acompanhar a movimentação
+// mês a mês, de forma mais objetiva").
 
 import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, ChartNoAxesColumnIncreasing, TrendingDown, Equal, Coins, Loader2 } from "lucide-react";
@@ -22,11 +24,8 @@ import type { FluxoContaMes, FluxoPlanilhaMes } from "@/lib/queries/dashboard";
 
 const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 const nomeMes = (ym: string) => `${MESES[Number(ym.slice(5, 7)) - 1] ?? ym} / ${ym.slice(0, 4)}`;
-const mesCurto = (ym: string) => `${(MESES[Number(ym.slice(5, 7)) - 1] ?? ym).slice(0, 3).toLowerCase()}/${ym.slice(2, 4)}`;
 const n = (v: unknown) => Number(v ?? 0);
 
-const AJUDA_REALIZADO = "Realizado: Recebido, Pago, Repassado, Aplicado e Resgatado (nas entradas, também o saldo inicial).";
-const AJUDA_PROVISIONADO = "Provisionado: A receber, A pagar, Provisionado (inclusive DL e DV), A repassar, A aplicar, Aplicação, Resgate e A resgatar.";
 
 interface Props {
   linhas: FluxoPlanilhaMes[];
@@ -55,7 +54,6 @@ export function FluxoCaixaTabela({ linhas, contas, loading, mesAtual }: Props) {
       saiReal: soma("saidas_realizadas"), saiProv: soma("saidas_provisionadas"),
     };
   }, [doAno]);
-  const ultimoDoAno = doAno.at(-1);
 
   const contasPorMes = useMemo(() => {
     const m = new Map<string, FluxoContaMes[]>();
@@ -99,21 +97,6 @@ export function FluxoCaixaTabela({ linhas, contas, loading, mesAtual }: Props) {
           )}
         </div>
       </div>
-
-      {temSplit && ultimoDoAno && (
-        <div className="grid grid-cols-2 gap-3 border-b border-stone-100 bg-stone-50/50 px-5 py-3 sm:grid-cols-3 xl:grid-cols-5">
-          <Indicador rotulo={`Entradas realizadas · ${ano}`} valor={totalAno.entReal} cor="text-emerald-700" ajuda={AJUDA_REALIZADO} />
-          <Indicador rotulo={`Entradas provisionadas · ${ano}`} valor={totalAno.entProv} cor="text-emerald-600" ajuda={AJUDA_PROVISIONADO} />
-          <Indicador rotulo={`Saídas realizadas · ${ano}`} valor={totalAno.saiReal} cor="text-red-600" ajuda={AJUDA_REALIZADO} />
-          <Indicador rotulo={`Saídas provisionadas · ${ano}`} valor={totalAno.saiProv} cor="text-red-500" ajuda={AJUDA_PROVISIONADO} />
-          <Indicador
-            rotulo={`Saldo projetado · fim de ${mesCurto(ultimoDoAno.mes_referencia)}`}
-            valor={n(ultimoDoAno.saldo_contas_fluxo)}
-            cor="text-blue-700"
-            ajuda="Saldo das contas do fluxo de caixa no fim do último mês do ano, contando tudo o que está provisionado (a receber, a pagar e provisionado)."
-          />
-        </div>
-      )}
 
       {doAno.length === 0 && !loading ? (
         <p className="py-10 text-center text-xs text-stone-400">Sem dados de fluxo de caixa.</p>
@@ -266,16 +249,6 @@ export function FluxoCaixaTabela({ linhas, contas, loading, mesAtual }: Props) {
   );
 }
 
-function Indicador({ rotulo, valor, cor, ajuda }: { rotulo: string; valor: number; cor: string; ajuda: string }) {
-  return (
-    <div className="min-w-0" title={ajuda}>
-      <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-stone-500">{rotulo}</p>
-      <p className={cn("text-sm font-bold tabular-nums", valor < 0 && cor.includes("blue") ? "text-red-600" : cor)}>
-        {formatCurrency(valor)}
-      </p>
-    </div>
-  );
-}
 
 /** Linha miúda "real. X · prov. Y" embaixo de Entradas/Saídas. */
 function Divisao({ realizado, provisionado }: { realizado: number; provisionado: number }) {

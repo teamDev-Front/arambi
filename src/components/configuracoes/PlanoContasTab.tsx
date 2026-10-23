@@ -23,8 +23,13 @@ import {
   validarTrocaCodigo,
   deParaTrocaCodigo,
   trocarCodigoClassificacao,
+  carregarTravasPlano,
+  dicaPapelClassificacao,
+  TRAVAS_RESERVA,
+  type TravasPlano,
   type UsoClassificacao,
 } from "@/lib/queries/configuracoes";
+import { recarregarPapeis } from "@/lib/plano/papeis-client";
 import type { ClassificacaoFinanceiraRow, NaturezaConta } from "@/types";
 
 const TIPO_NIVEL: Record<number, string> = { 1: "Grupo", 2: "Conta contábil", 3: "Centro de custo" };
@@ -52,11 +57,16 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
   const guard = useUnsavedGuard(modalOpen, form, () => setModalOpen(false));
   const [saving, setSaving] = useState(false);
   const [busyCodigo, setBusyCodigo] = useState<string | null>(null);
+  // O que trava a troca de código vem do BANCO (RPC + papéis da 0066); até ele
+  // responder — ou se falhar —, a reserva trava como antes.
+  const [travas, setTravas] = useState<TravasPlano>(TRAVAS_RESERVA);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      setRows(await listarClassificacoesAdmin());
+      const [lista, t] = await Promise.all([listarClassificacoesAdmin(), carregarTravasPlano()]);
+      setRows(lista);
+      setTravas(t);
     } catch (e) {
       toast.error("Erro carregando classificações", (e as Error).message);
     } finally {
@@ -79,12 +89,15 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
 
   const { nivel: nivelForm, parent: parentForm } = derivarNivelParent(form.codigo.trim());
 
-  // Edição: o código pode mudar (RPC 0057), menos os que o sistema procura pelo número.
+  // Edição: o código pode mudar (RPC 0057), menos os que o banco ainda trava
+  // (fn_classificacao_codigos_sistema — com a 0066, só as raízes 1 e 2).
   const editRow = editCodigo ? rows.find((r) => r.codigo === editCodigo) ?? null : null;
-  const travaCodigo = editRow ? motivoCodigoTravado(editRow) : null;
+  const travaCodigo = editRow ? motivoCodigoTravado(editRow, travas.codigosSistema) : null;
+  // Item com papel (0066): não trava — só avisa que o sistema acompanha a troca.
+  const dicaPapel = editRow && !travaCodigo ? dicaPapelClassificacao(editRow, travas) : null;
   const codigoNovo = form.codigo.trim();
   const trocandoCodigo = !!editRow && codigoNovo !== editRow.codigo;
-  const erroTroca = editRow && trocandoCodigo ? validarTrocaCodigo(editRow, codigoNovo, rows) : null;
+  const erroTroca = editRow && trocandoCodigo ? validarTrocaCodigo(editRow, codigoNovo, rows, travas) : null;
   const deParaTroca = editRow && trocandoCodigo && !erroTroca ? deParaTrocaCodigo(editRow.codigo, codigoNovo, rows) : [];
   const mudaConta = !!editRow && editRow.nivel === 3 && deParaTroca.length > 0 && parentForm !== editRow.parent_codigo;
 
@@ -148,6 +161,9 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
           codigo = codigoNovo;
           // Se o resto falhar, a próxima tentativa já parte do código novo.
           setEditCodigo(codigoNovo);
+          // Os papéis acompanham a troca no banco (cascade) — as outras telas
+          // desta sessão passam a procurar a conta no código novo.
+          void recarregarPapeis();
           resumoTroca = r.codigos.map((d) => `${d.de} → ${d.para}`).join(", ") +
             (r.lancamentos > 0 ? ` · ${r.lancamentos} lançamento${r.lancamentos === 1 ? "" : "s"} atualizado${r.lancamentos === 1 ? "" : "s"}` : "");
         }
@@ -349,6 +365,10 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
               Ativa (aparece nos filtros e seleções)
             </label>
           </div>
+
+          {dicaPapel && (
+            <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] text-sky-800">{dicaPapel}</p>
+          )}
 
           {editRow && (
             travaCodigo ? (

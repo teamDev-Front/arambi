@@ -11,6 +11,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { FORMA_PGTO_LABEL, type Database, type FormaPgto } from "@/types";
 import { formatDataCurta } from "@/lib/pdf/helpers";
+import { carregarPapeisDetalhado, ehOuDentroDe, type Papel } from "@/lib/plano/papeis";
 import type {
   BancoTotalBox, CapaEmpresaPayload, CapaSocioPayload, ContabilObservacao,
   RelatorioContabilPayload, RelatorioSociosPayload,
@@ -248,7 +249,12 @@ export async function buildCapaEmpresa(
   const { numero_mes } = mesReferenciaToHuman(args.mesReferencia);
   const escopado = !!args.scope && args.scope.scope_type !== "por_mes";
 
-  const perfilEmpresa = await lerPerfilEmpresa(supabase);
+  // Contas da DL e do resgate pelo PAPEL (0066) — acompanham a troca de código
+  // no Plano de Contas; sem a 0066, os códigos de hoje (2.8 e 1.8).
+  const [perfilEmpresa, { papeis: P }] = await Promise.all([
+    lerPerfilEmpresa(supabase),
+    carregarPapeisDetalhado(supabase),
+  ]);
 
   // Transações do recorte (ou do mês inteiro), com banco, tipo_despesa e os
   // campos que compõem a descrição completa (4.4): ref (NF), parcelas e o
@@ -289,23 +295,24 @@ export async function buildCapaEmpresa(
   // fixa/variavel/eventual → as três tabelas de despesas, como sempre. Sem um
   // desses tipos, a linha ainda entra se for (seção 10 do DOCUMENTACAO_JSON,
   // out-2026 — sem elas a capa fechava abaixo do relatório da tela):
-  //   • Distribuição de Lucro — conta 2.8, ou perna do repasse consolidado /
-  //     provisionado automático da DL (etiquetas dl_repasse:/dl_auto:), como a
-  //     "Transf. Entre Contas_Distribuição de Lucro" que sai da CORA. O centro
-  //     dessa perna é 2.9.3 hoje e vira 2.9.1 com a 0063 (plano alinhado à
-  //     VS4) — a regra olha a ETIQUETA, não o centro, e vale para os dois;
-  //   • Resgate — conta 1.8.
+  //   • Distribuição de Lucro — conta do papel `dl` (2.8 hoje), ou perna do
+  //     repasse consolidado / provisionado automático da DL (etiquetas
+  //     dl_repasse:/dl_auto:), como a "Transf. Entre Contas_Distribuição de
+  //     Lucro" que sai da CORA. O centro dessa perna é 2.9.3 no plano antigo e
+  //     2.9.1 com a 0063 (plano alinhado à VS4) — a regra olha a ETIQUETA, não
+  //     o centro, e vale para os dois;
+  //   • Resgate — conta do papel `resgate` (1.8 hoje).
   // Nas duas, só o lado que SAI: o resgate tem o crédito na corrente SICREDI e
-  // a saída no Invest, e o repasse da DL tem a entrada 1.9.1 no INTER — somar
-  // as duas pernas zeraria o total.
+  // a saída no Invest, e o repasse da DL tem a entrada (transferência
+  // recebida) no INTER — somar as duas pernas zeraria o total.
   type Secao = "fixa" | "variavel" | "eventual" | "dl" | "resgate";
   const secaoDaCapa = (t: TransacaoComConta): Secao | null => {
     const tipo = t.tipo_despesa;
     if (tipo === "fixa" || tipo === "variavel" || tipo === "eventual") return tipo;
     if (Number(t.valor) >= 0) return null;
     const origem = t.origem_planilha ?? "";
-    if (t.conta_contabil_cod === "2.8" || origem.startsWith("dl_repasse:") || origem.startsWith("dl_auto:")) return "dl";
-    if (t.conta_contabil_cod === "1.8") return "resgate";
+    if (t.conta_contabil_cod === P.dl || origem.startsWith("dl_repasse:") || origem.startsWith("dl_auto:")) return "dl";
+    if (t.conta_contabil_cod === P.resgate) return "resgate";
     return null; // periódica / sem tipo: o template não tem seção para ela
   };
 
@@ -778,39 +785,52 @@ export interface BuildRelatorioSociosArgs {
   };
 }
 
-// Paleta usada pelo template (idêntica ao JSON-exemplo aprovado). "outras" =
-// Outras Saídas: a conta muda com o plano (2.9 hoje, 2.10 depois da 0063) e é
-// resolvida dentro do builder — rótulo e cor acompanham a conta certa.
-const CORES_SAIDA: Record<string, { classe: string; hex: string }> = {
-  "2.1": { classe: "verde",     hex: "#4ade80" },
-  "2.2": { classe: "verdeEsc",  hex: "#22c55e" },
-  "2.3": { classe: "azul",      hex: "#60a5fa" },
-  "2.4": { classe: "azul",      hex: "#3b82f6" },
-  "2.5": { classe: "azul",      hex: "#1d4ed8" },
-  "2.6": { classe: "roxo",      hex: "#8b5cf6" },
-  "2.7": { classe: "roxoClaro", hex: "#c084fc" },
-  outras: { classe: "rosa",     hex: "#ec4899" },
+// As 7 categorias de saída do gráfico, pelo PAPEL da conta (0066) — os códigos
+// (2.1…2.7 hoje) vêm do mapa de papéis da geração, então rótulo e cor
+// acompanham uma troca de código no Plano de Contas. A 8ª é "outras" (Outras
+// Saídas), resolvida dentro do builder.
+const CATEGORIAS_SAIDA = [
+  "desp_administrativas",
+  "desp_pessoal",
+  "operacao",
+  "servicos_terceiros",
+  "financeiras",
+  "investimento_capital",
+  "imobilizado",
+] as const satisfies readonly Papel[];
+type CategoriaSaida = (typeof CATEGORIAS_SAIDA)[number] | "outras";
+
+// Paleta usada pelo template (idêntica ao JSON-exemplo aprovado).
+const CORES_SAIDA: Record<CategoriaSaida, { classe: string; hex: string }> = {
+  desp_administrativas: { classe: "verde",     hex: "#4ade80" },
+  desp_pessoal:         { classe: "verdeEsc",  hex: "#22c55e" },
+  operacao:             { classe: "azul",      hex: "#60a5fa" },
+  servicos_terceiros:   { classe: "azul",      hex: "#3b82f6" },
+  financeiras:          { classe: "azul",      hex: "#1d4ed8" },
+  investimento_capital: { classe: "roxo",      hex: "#8b5cf6" },
+  imobilizado:          { classe: "roxoClaro", hex: "#c084fc" },
+  outras:               { classe: "rosa",      hex: "#ec4899" },
 };
 
-const NOMES_SAIDA: Record<string, string> = {
-  "2.1": "Despesas Administrativas",
-  "2.2": "Despesas com Pessoal",
-  "2.3": "Operação da Propriedade",
-  "2.4": "Serviços Terceirizados",
-  "2.5": "Financeiras e Bancárias",
-  "2.6": "Investimentos em Capital (aplicações)",
-  "2.7": "Investimentos em Imobilizado Operacional (obra da sede)",
-  outras: "Outras Saídas",
+const NOMES_SAIDA: Record<CategoriaSaida, string> = {
+  desp_administrativas: "Despesas Administrativas",
+  desp_pessoal:         "Despesas com Pessoal",
+  operacao:             "Operação da Propriedade",
+  servicos_terceiros:   "Serviços Terceirizados",
+  financeiras:          "Financeiras e Bancárias",
+  investimento_capital: "Investimentos em Capital (aplicações)",
+  imobilizado:          "Investimentos em Imobilizado Operacional (obra da sede)",
+  outras:               "Outras Saídas",
 };
 
-// Plano de contas alinhado à VS4 (migration 0063): "Transferências Entre
-// Contas" e "Outras Saídas"/"Outros Recebimentos" trocam de código — antes,
-// 2.9 Outras Saídas (com as transferências dentro, em 2.9.3) e 1.9 Outros
-// Recebimentos; depois, 2.9/1.9 Transferências Entre Contas e 2.10/1.10 Outras
-// Saídas/Outros Recebimentos. O relatório precisa valer nas duas estruturas
-// (o deploy pode ir antes do SQL), então o NOME da conta decide o papel dela.
-const CONTAS_OUTRAS_SAIDAS = ["2.9", "2.10"];
-const CONTAS_OUTROS_RECEBIMENTOS = ["1.9", "1.10"];
+// Transferências Entre Contas × Outras Saídas/Outros Recebimentos. Com a 0066
+// aplicada, os papéis dizem quem é quem (transf_enviadas_conta/
+// transf_recebidas_conta = transferências; outras_saidas/outros_recebimentos =
+// o resto). Sem ela (mapa padrão), vale a regra de antes, pelo NOME da conta —
+// o relatório segue certo nas duas estruturas do plano (antes da 0063: 2.9
+// Outras Saídas com as transferências dentro, 1.9 Outros Recebimentos; depois:
+// 2.9/1.9 Transferências Entre Contas e 2.10/1.10 Outras Saídas/Outros
+// Recebimentos).
 
 /** "transfer" no nome = transferência entre contas (par que soma zero) — nunca é despesa. */
 function ehContaTransferencia(nome: string | null | undefined): boolean {
@@ -842,6 +862,13 @@ export async function buildRelatorioSocios(
   const [ano, mesNumStr] = args.mesReferencia.split("-");
   const mesNum = parseInt(mesNumStr, 10);
 
+  // ─── Papéis do Plano de Contas (0066) ─────────────────────────────────────
+  // Um mapa por geração, usado em tudo abaixo: as contas são procuradas pelo
+  // papel, não pelo número. Sem a 0066 é o mapa padrão (os códigos de hoje).
+  const papeisCarregados = await carregarPapeisDetalhado(supabase);
+  const P = papeisCarregados.papeis;
+  const papeisDoBanco = papeisCarregados.origem === "banco";
+
   // ─── Queries paralelas ────────────────────────────────────────────────────
   const [
     porContaRes,
@@ -861,7 +888,7 @@ export async function buildRelatorioSocios(
     supabase.from("transacoes_empresa")
       .select("obs_obra, valor")
       .eq("mes_referencia", args.mesReferencia)
-      .eq("centro_custo_cod", "2.7.2"),
+      .eq("centro_custo_cod", P.obra),
     supabase.from("transacoes_empresa")
       .select("tipo_despesa, valor, conta_contabil_cod")
       .eq("mes_referencia", args.mesReferencia)
@@ -869,7 +896,7 @@ export async function buildRelatorioSocios(
     supabase.from("v_por_centro_custo_mensal")
       .select("*")
       .eq("mes_referencia", args.mesReferencia)
-      .in("centro_custo_cod", ["2.1.6", "2.2.2"]),
+      .in("centro_custo_cod", [P.taxas_impostos, P.encargos_sociais]),
     // Saldo (0043), não o volume total da nota — ver "Armazenagem" abaixo.
     supabase.from("v_safra_depositos_calculado")
       .select("cultura, sc_liquida_saldo")
@@ -878,16 +905,17 @@ export async function buildRelatorioSocios(
       .select("classificacao_pessoal, valor_total, mes_referencia")
       .gte("mes_referencia", `${ano}-01`)
       .lte("mes_referencia", args.mesReferencia),
-    // Nomes das contas nível 2 — decidem quem é transferência (ver CONTAS_OUTRAS_SAIDAS).
+    // Nomes das contas nível 2 — sem a 0066, decidem quem é transferência
+    // (ver ehContaTransferencia).
     supabase.from("classificacao_financeira")
       .select("codigo, nome")
       .eq("nivel", 2),
     // Resgate: só a ENTRADA na corrente — o par (saída do Invest + entrada na
-    // corrente) fica todo no 1.8 e soma zero no total por conta.
+    // corrente) fica todo na conta do resgate e soma zero no total por conta.
     supabase.from("transacoes_empresa")
       .select("valor")
       .eq("mes_referencia", args.mesReferencia)
-      .eq("conta_contabil_cod", "1.8")
+      .eq("conta_contabil_cod", P.resgate)
       .gt("valor", 0),
   ]);
 
@@ -899,31 +927,40 @@ export async function buildRelatorioSocios(
   const get = (c: string) => totByConta[c] ?? 0;
 
   // ─── Estrutura do plano: transferências × Outras Saídas ──────────────────
-  // Nome da conta pelo plano; a view (que já traz o nome) cobre a falta.
+  // Com a 0066, os papéis dizem quais contas são de transferência. Sem ela
+  // (mapa padrão), o NOME da conta decide — pelo plano; a view (que já traz o
+  // nome) cobre a falta.
   const nomeConta = new Map<string, string>();
   for (const r of planoNivel2Res.data ?? []) nomeConta.set(r.codigo, r.nome);
   for (const r of porContaRes.data ?? []) {
     if (!nomeConta.has(r.conta_contabil_cod)) nomeConta.set(r.conta_contabil_cod, r.conta_contabil_nome);
   }
-  const ehTransferencia = (cod: string) => ehContaTransferencia(nomeConta.get(cod));
-  // Outras Saídas = a conta (2.9 ou 2.10) que NÃO é de transferência. Antes da
-  // 0063 é o 2.9 (com as transferências dentro — o plano ainda não separa);
-  // depois, o 2.10, e o 2.9 de transferências fica fora das despesas (achado
-  // de 20-out: ele somava nas despesas da fazenda).
-  const outras_saidas = CONTAS_OUTRAS_SAIDAS
-    .filter((c) => !ehTransferencia(c))
-    .reduce((s, c) => s + get(c), 0);
+  const contasTransferencia = new Set([P.transf_enviadas_conta, P.transf_recebidas_conta]);
+  const ehTransferencia = (cod: string) =>
+    papeisDoBanco ? contasTransferencia.has(cod) : ehContaTransferencia(nomeConta.get(cod));
+  // Outras Saídas: com a 0066, a conta do papel outras_saidas (2.10). Sem ela,
+  // a conta (2.9 ou 2.10) que NÃO é de transferência — antes da 0063 é o 2.9
+  // (com as transferências dentro — o plano ainda não separa); depois, o 2.10,
+  // e o 2.9 de transferências fica fora das despesas (achado de 20-out: ele
+  // somava nas despesas da fazenda).
+  const outras_saidas = papeisDoBanco
+    ? get(P.outras_saidas)
+    : [P.transf_enviadas_conta, P.outras_saidas]
+        .filter((c) => !ehTransferencia(c))
+        .reduce((s, c) => s + get(c), 0);
 
   // ─── Visão geral ──────────────────────────────────────────────────────────
-  const receita        = get("1.2") + get("1.3");
-  // Era get("1.8"): o par de resgate se anula e o card saía "-" (achado de 21-out).
+  const receita        = get(P.receita_parceria) + get(P.receita_subprodutos);
+  // Era o total da conta do resgate: o par de resgate se anula e o card saía
+  // "-" (achado de 21-out).
   const resgate        = (resgateEntradaRes.data ?? []).reduce((s, r) => s + Number(r.valor ?? 0), 0);
-  // "Outros Recebimentos *" = 1.9 + 1.10: transferências recebidas + recebimentos
-  // diversos — o mesmo valor de sempre, antes ou depois da troca da 0063.
-  const outros_recb    = CONTAS_OUTROS_RECEBIMENTOS.reduce((s, c) => s + get(c), 0);
-  const distrib_lucro  = get("2.8");
+  // "Outros Recebimentos *" = transferências recebidas (1.9) + recebimentos
+  // diversos (1.10) — o mesmo valor de sempre, antes ou depois da troca da 0063.
+  const outros_recb    = [P.transf_recebidas_conta, P.outros_recebimentos].reduce((s, c) => s + get(c), 0);
+  const distrib_lucro  = get(P.dl);
   const fazenda_total =
-    get("2.1") + get("2.2") + get("2.3") + get("2.4") + get("2.5") + get("2.6") + get("2.7") + outras_saidas;
+    get(P.desp_administrativas) + get(P.desp_pessoal) + get(P.operacao) + get(P.servicos_terceiros) +
+    get(P.financeiras) + get(P.investimento_capital) + get(P.imobilizado) + outras_saidas;
   const total_despesas = fazenda_total + distrib_lucro;
   const pctDistrib = PCT_NUM(distrib_lucro, total_despesas);
   const pctFazenda = PCT_NUM(fazenda_total, total_despesas);
@@ -947,14 +984,15 @@ export async function buildRelatorioSocios(
   }
 
   // ─── Entradas ──────────────────────────────────────────────────────────────
-  // 1.2.1/1.2.2 são CENTROS de custo — o total por conta (get) não os tem e a
-  // receita por cultura saía sempre "-" (achado de 21-out).
+  // Venda de soja/milho (1.2.1/1.2.2 hoje) são CENTROS de custo — o total por
+  // conta (get) não os tem e a receita por cultura saía sempre "-" (achado de
+  // 21-out).
   const totByCentro = new Map(
     (porCentroRes.data ?? []).map((r) => [r.centro_custo_cod, Math.abs(Number(r.valor_total ?? 0))] as const),
   );
-  const receitaSoja  = totByCentro.get("1.2.1") ?? 0;
-  const receitaMilho = totByCentro.get("1.2.2") ?? 0;
-  const estorno      = get("1.6");
+  const receitaSoja  = totByCentro.get(P.venda_soja) ?? 0;
+  const receitaMilho = totByCentro.get(P.venda_milho) ?? 0;
+  const estorno      = get(P.estorno);
 
   // Altura: proporção ao maior valor de entrada (até 95)
   const maxEntrada = Math.max(receitaSoja, receitaMilho, estorno, resgate, outros_recb);
@@ -1007,8 +1045,8 @@ export async function buildRelatorioSocios(
   // ─── Saídas (8 categorias) ─────────────────────────────────────────────────
   // A 8ª é Outras Saídas (conta resolvida acima) — transferências entre contas
   // não entram (antes era o 2.9 inteiro).
-  const valoresSaida: Array<[string, number]> = [
-    ...["2.1","2.2","2.3","2.4","2.5","2.6","2.7"].map((c): [string, number] => [c, get(c)]),
+  const valoresSaida: Array<[CategoriaSaida, number]> = [
+    ...CATEGORIAS_SAIDA.map((p): [CategoriaSaida, number] => [p, get(P[p])]),
     ["outras", outras_saidas],
   ];
   const totalSaida = valoresSaida.reduce((acc, [, v]) => acc + v, 0);
@@ -1020,7 +1058,7 @@ export async function buildRelatorioSocios(
     rotAcc += dash * 3.6;
     const cores = CORES_SAIDA[c];
     return {
-      label: NOMES_SAIDA[c] ?? c,
+      label: NOMES_SAIDA[c],
       valor: valor > 0 ? fmt(valor) : "-",
       pct: pct < 0.5 && pct > 0 ? "-" : pct.toFixed(1).replace(/\.0$/, ""),
       cor_classe: cores.classe,
@@ -1066,15 +1104,14 @@ export async function buildRelatorioSocios(
   type DespTipoRow = { tipo_despesa: string; valor: number; conta_contabil_cod: string };
   const tipos = { fixa: 0, variavel: 0, eventual: 0, periodica: 0 };
   for (const r of (despesasTipoRes.data ?? []) as DespTipoRow[]) {
-    // Excluímos investimentos (2.6, 2.7) e distribuição (2.8) — são movimentações
+    // Aplicações (investimento em capital, 2.6) e distribuição de lucro (2.8)
+    // ficam fora — são movimentações, não despesa. O imobilizado (2.7) fica:
+    // mantém os EVENTUAIS da obra da sede por convenção.
     const cod = r.conta_contabil_cod;
     // Transferência entre contas nunca é despesa, mesmo com tipo marcado (as do
     // sistema já nascem "sem" tipo; vale para alguma digitada/importada).
     if (ehTransferencia(cod)) continue;
-    if (cod.startsWith("2.6") || cod.startsWith("2.7") || cod.startsWith("2.8")) {
-      // Mantém EVENTUAIS de obra da sede (2.7) por convenção — mas exclui aplicações (2.6) e distribuição
-      if (cod.startsWith("2.6") || cod.startsWith("2.8")) continue;
-    }
+    if (ehOuDentroDe(cod, P.investimento_capital) || ehOuDentroDe(cod, P.dl)) continue;
     if (r.tipo_despesa in tipos) {
       (tipos as Record<string, number>)[r.tipo_despesa] += Math.abs(Number(r.valor));
     }
@@ -1108,8 +1145,8 @@ export async function buildRelatorioSocios(
   for (const r of (impostosRes.data ?? []) as ImpostoRow[]) {
     impMap[r.centro_custo_cod] = Math.abs(Number(r.valor_total));
   }
-  const impAdmin = impMap["2.1.6"] ?? 0;
-  const impFolha = impMap["2.2.2"] ?? 0;
+  const impAdmin = impMap[P.taxas_impostos] ?? 0;
+  const impFolha = impMap[P.encargos_sociais] ?? 0;
 
   // ─── Armazenagem ───────────────────────────────────────────────────────────
   // SALDO em armazém, líquido de quebra (achado de 20-out): `sc_liquida` é o
@@ -1128,9 +1165,10 @@ export async function buildRelatorioSocios(
   ];
 
   // ─── Saídas distribuição (4 itens) ─────────────────────────────────────────
-  const aplicacao = get("2.6");
-  const imobOp    = get("2.7");
-  const demaisFazenda = get("2.1") + get("2.2") + get("2.3") + get("2.4") + get("2.5") + outras_saidas;
+  const aplicacao = get(P.investimento_capital);
+  const imobOp    = get(P.imobilizado);
+  const demaisFazenda = get(P.desp_administrativas) + get(P.desp_pessoal) + get(P.operacao) +
+    get(P.servicos_terceiros) + get(P.financeiras) + outras_saidas;
   const totalSaiDist  = distrib_lucro + aplicacao + imobOp + demaisFazenda;
   const itensDist: Array<{ label: string; valor: number; cor: string }> = [
     { label: "Distribuição de Lucro",                           valor: distrib_lucro,  cor: "#3b82f6" },
@@ -1189,9 +1227,9 @@ export async function buildRelatorioSocios(
   });
 
   // ─── Distribuição Aramburu (3 categorias resumindo despesas fazenda) ──────
-  const energia    = (porCentroRes.data ?? []).find((r) => r.centro_custo_cod === "2.3.2")?.valor_total ?? 0;
-  const despPessoal = get("2.2");
-  const despOpDiv  = (get("2.3") + get("2.4") + get("2.5") + get("2.1") + outras_saidas) - Math.abs(Number(energia));
+  const energia    = (porCentroRes.data ?? []).find((r) => r.centro_custo_cod === P.energia)?.valor_total ?? 0;
+  const despPessoal = get(P.desp_pessoal);
+  const despOpDiv  = (get(P.operacao) + get(P.servicos_terceiros) + get(P.financeiras) + get(P.desp_administrativas) + outras_saidas) - Math.abs(Number(energia));
   const totFaz = Math.abs(Number(energia)) + despOpDiv + despPessoal;
   const segsFaz = [
     { label: "Despesa Fixa",                   sub: "Energia Elétrica",                              v: Math.abs(Number(energia)), cor: "#fbbf24" },
@@ -1214,8 +1252,9 @@ export async function buildRelatorioSocios(
   });
 
   // ─── Notas padrão (editáveis via overrides) ────────────────────────────────
-  // Outros Recebimentos = 1.9 + 1.10 (ver outros_recb): o texto vale antes e
-  // depois da 0063 — as transferências e os diversos estão nos dois casos.
+  // Outros Recebimentos = transferências recebidas + diversos (ver
+  // outros_recb): o texto vale antes e depois da 0063 — as transferências e os
+  // diversos estão nos dois casos.
   const notaEntradas = overrides.nota_entradas ?? "Outros Recebimentos: somam as transferências internas entre contas da empresa, sem impacto no resultado operacional, e eventuais recebimentos diversos não classificados nas linhas acima.";
   const notaSaidas   = overrides.nota_saidas   ?? "Distribuição de Lucro não está considerada nesta saída, sendo contabilizadas exclusivamente as movimentações financeiras da empresa Agropecuária Aramburu Ltda.";
   const notaObra     = overrides.nota_obra_sede ?? (obraTotal > 0

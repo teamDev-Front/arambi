@@ -39,6 +39,7 @@ import { CamposExportDlModal, type CamposExportDlEscolha } from "./CamposExportD
 import { SeloCapaFields } from "@/components/relatorios/SeloCapaFields";
 import { ObservacoesCapaField, observacoesDoTexto } from "@/components/relatorios/ObservacoesCapaField";
 import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
+import { usePapeis } from "@/lib/plano/papeis-client";
 import {
   STATUS_DL_LABEL, STATUS_DL_COLOR,
   type StatusDL, type SocioRow, type ClassificacaoPessoalRow,
@@ -158,6 +159,9 @@ export function DistribuicaoPage() {
   // Modo leitura (acessos): consulta, filtros, exportação e capa seguem livres;
   // tudo que grava some da tela e os handlers recusam.
   const { podeEditar } = useModulo("distribuicao");
+  // Códigos mostrados nos textos (conta/centro da DL, transferências) vêm do
+  // mapa de papéis (0066) — acompanham a troca de código no Plano de Contas.
+  const papeis = usePapeis();
 
   // ---- competência (tabela / consolidação) ----
   // Competência multi-seleção (17-ago). Lista vazia = TODAS as competências —
@@ -634,7 +638,7 @@ export function DistribuicaoPage() {
       } else {
         toast.warning(
           "Sincronização religada, mas os valores ainda diferem",
-          `Global ${formatCurrency(r.global_depois)} × detalhado ${formatCurrency(r.soma_detalhado)}. Confira se há outra linha provisionada no centro 2.8.1 do Financeiro.`,
+          `Global ${formatCurrency(r.global_depois)} × detalhado ${formatCurrency(r.soma_detalhado)}. Confira se há outra linha provisionada no centro ${papeis.dl_lucros} do Financeiro.`,
         );
       }
     } catch (e: unknown) {
@@ -1220,7 +1224,7 @@ export function DistribuicaoPage() {
         {([
           {
             key: "glob",
-            label: "Global na empresa (2.8.1)",
+            label: `Global na empresa (${papeis.dl_lucros})`,
             // RF 20-ago: a contagem tem que ser a do DETALHADO — é ele que o
             // clique do card mostra na tabela (e os outros cards já contam
             // assim). Antes vinham as poucas linhas GLOBAIS do 2.8.1 no
@@ -1233,7 +1237,7 @@ export function DistribuicaoPage() {
             iconClass: "bg-blue-50 text-blue-600",
             labelClass: "text-blue-700",
             valorClass: "text-blue-700",
-            help: `Soma dos lançamentos do centro de custo 2.8.1 (Distribuição de Lucros) no Financeiro da empresa ${competenciaGlobalTexto} — provisionado + a repassar + repassado. Segue o filtro Competência: com "Todas", soma todos os meses; com meses marcados, soma esses meses. Deve bater com o detalhado; a contagem é a dos lançamentos detalhados. Clique para ver a tabela com todos os status.`,
+            help: `Soma dos lançamentos do centro de custo ${papeis.dl_lucros} (Distribuição de Lucros) no Financeiro da empresa ${competenciaGlobalTexto} — provisionado + a repassar + repassado. Segue o filtro Competência: com "Todas", soma todos os meses; com meses marcados, soma esses meses. Deve bater com o detalhado; a contagem é a dos lançamentos detalhados. Clique para ver a tabela com todos os status.`,
             filtro: "" as StatusDL | "",
             seguirCompetencia: true,
           },
@@ -1349,7 +1353,7 @@ export function DistribuicaoPage() {
             {podeEditar && (
               <Button size="sm" variant="outline" onClick={handleReligarSync}
                 loading={religando} disabled={religando}
-                title={`Passa a linha provisionada do centro 2.8.1 de ${mesHumano(foco.mes)} para o controle automático e recalcula o global pela soma do detalhado`}>
+                title={`Passa a linha provisionada do centro ${papeis.dl_lucros} de ${mesHumano(foco.mes)} para o controle automático e recalcula o global pela soma do detalhado`}>
                 <RefreshCw size={13} /> Religar sincronização ({mesHumano(foco.mes)})
               </Button>
             )}
@@ -1746,7 +1750,7 @@ export function DistribuicaoPage() {
                 {!loading && rowsVisiveis.length === 0 && (
                   <tr><td colSpan={13} className="px-4 py-12 text-center text-stone-400">
                     Nenhum lançamento detalhado no recorte.{podeEditar && <> Clique em {"“Novo lançamento detalhado”"} para começar
-                    — ou lance pelo Financeiro escolhendo {"“Saída detalhada”"} na conta 2.8.</>}
+                    — ou lance pelo Financeiro escolhendo {"“Saída detalhada”"} na conta {papeis.dl}.</>}
                   </td></tr>
                 )}
                 {!loading && rowsPagina.map((r) => {
@@ -2031,11 +2035,11 @@ export function DistribuicaoPage() {
             <p className="font-semibold text-stone-700">O que será criado no Financeiro:</p>
             {incluirTransferencia && (
               <>
-                <p>• Saída no <b>Cora</b> de {formatCurrency(totalConsolidavel)} (Transf. Entre Contas — 2.9)</p>
-                <p>• Entrada no <b>Inter</b> de {formatCurrency(totalConsolidavel)} (Transf. Entre Contas — 1.9)</p>
+                <p>• Saída no <b>Cora</b> de {formatCurrency(totalConsolidavel)} (Transf. Entre Contas — {papeis.transf_enviadas_conta})</p>
+                <p>• Entrada no <b>Inter</b> de {formatCurrency(totalConsolidavel)} (Transf. Entre Contas — {papeis.transf_recebidas_conta})</p>
               </>
             )}
-            <p>• Saída global no <b>Inter</b> de {formatCurrency(totalConsolidavel)} (Distribuição de Lucro — 2.8), status {"“A repassar”"}</p>
+            <p>• Saída global no <b>Inter</b> de {formatCurrency(totalConsolidavel)} (Distribuição de Lucro — {papeis.dl}), status {"“A repassar”"}</p>
             <p className="text-stone-400 pt-1">
               O global nasce {"“A repassar”"} (é um repasse de distribuição de lucros) e a transferência {"“A pagar/A receber”"}.
               Depois de efetivar o repasse aos sócios, use {"“Dar baixa”"} aqui nesta tela para marcar tudo como

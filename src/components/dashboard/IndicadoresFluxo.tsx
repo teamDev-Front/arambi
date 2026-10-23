@@ -6,14 +6,17 @@
 // "Saldo Disponível".
 //
 // Fluxos (vendas, despesas, DL) somam os meses da competência escolhida; sem
-// competência, todos os meses. Saldos (fluxo de caixa e despesa variável) são
-// de um mês: o último da competência escolhida ou, sem competência, o mês atual.
+// competência, todos os meses. O Saldo Fluxo de Caixa é de um mês: o último da
+// competência escolhida (no ano inteiro — padrão da Home desde 22-out —, o
+// fechamento de dezembro, igual ao "Saldo (−) contas do próximo mês" de
+// dezembro na tabela) ou, sem competência, o mês atual.
 
 import { useMemo } from "react";
 import { ChartNoAxesColumnIncreasing, TrendingDown, Coins, Wallet, Box, HelpCircle } from "lucide-react";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { cn } from "@/lib/utils/cn";
 import { formatCurrency } from "@/lib/utils/format";
+import { usePapeis } from "@/lib/plano/papeis-client";
 import type { FluxoPlanilhaMes } from "@/lib/queries/dashboard";
 
 const MES_CURTO = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
@@ -28,6 +31,8 @@ interface Props {
 }
 
 export function IndicadoresFluxo({ linhas, meses, mesAtual }: Props) {
+  // Códigos atuais do plano (podem ser renumerados — 0066), só para os textos de ajuda.
+  const papeis = usePapeis();
   const ind = useMemo(() => {
     const sel = meses.length ? linhas.filter((l) => meses.includes(l.mes_referencia)) : linhas;
     const soma = (campo: keyof FluxoPlanilhaMes) => sel.reduce((s, l) => s + Number(l[campo] ?? 0), 0);
@@ -44,6 +49,11 @@ export function IndicadoresFluxo({ linhas, meses, mesAtual }: Props) {
     const dvAno = linhas
       .filter((l) => l.mes_referencia.startsWith(ano))
       .reduce((s, l) => s + Number(l.dv_saldo ?? 0), 0);
+    // Com vários meses (ex.: o ano inteiro, padrão da Home), o card de DV mostra
+    // o acumulado e, ao lado, o mês atual — como o painel da planilha ("Saldo |
+    // OUTUBRO" e "Saldo | ANUAL").
+    const linhaMesAtual = sel.find((l) => l.mes_referencia === mesAtual);
+    const dvMesAtual = linhaMesAtual ? Number(linhaMesAtual.dv_saldo ?? 0) : null;
 
     const periodo = sel.length === 0
       ? "—"
@@ -60,6 +70,7 @@ export function IndicadoresFluxo({ linhas, meses, mesAtual }: Props) {
       mesSaldo,
       dv: meses.length ? soma("dv_saldo") : Number(linhaSaldo?.dv_saldo ?? 0),
       dvAno,
+      dvMesAtual,
       ano,
     };
   }, [linhas, meses, mesAtual]);
@@ -69,7 +80,7 @@ export function IndicadoresFluxo({ linhas, meses, mesAtual }: Props) {
       titulo: "Vendas",
       valor: ind.vendas,
       detalhe: ind.periodo,
-      ajuda: "Receita de Parceria Rural (conta 1.2) com status A receber ou Recebido — linha \"Vendas\" do Fluxo de Caixa da planilha.",
+      ajuda: `Receita de Parceria Rural (conta ${papeis.receita_parceria}) com status A receber ou Recebido — linha "Vendas" do Fluxo de Caixa da planilha.`,
       icon: ChartNoAxesColumnIncreasing,
       cor: "text-emerald-700", fundo: "bg-emerald-50", iconeCor: "text-emerald-600",
     },
@@ -77,7 +88,7 @@ export function IndicadoresFluxo({ linhas, meses, mesAtual }: Props) {
       titulo: "Despesas Aramburu",
       valor: ind.despesas,
       detalhe: ind.periodo,
-      ajuda: "Provisionado, A pagar, Pago e Provisionado DV — sem obra (2.7.2), sem DL e sem transferências entre contas (linha \"Despesas Aramburu\" da planilha).",
+      ajuda: `Provisionado, A pagar, Pago e Provisionado DV — sem obra (${papeis.obra}), sem DL e sem transferências entre contas (linha "Despesas Aramburu" da planilha).`,
       icon: TrendingDown,
       cor: "text-red-600", fundo: "bg-red-50", iconeCor: "text-red-500",
     },
@@ -100,7 +111,11 @@ export function IndicadoresFluxo({ linhas, meses, mesAtual }: Props) {
     {
       titulo: "Saldo Despesas Variáveis",
       valor: ind.dv,
-      detalhe: meses.length ? ind.periodo : `${rotuloMes(ind.mesSaldo)} · no ano ${ind.ano}: ${formatCurrency(ind.dvAno)}`,
+      detalhe: meses.length === 0
+        ? `${rotuloMes(ind.mesSaldo)} · no ano ${ind.ano}: ${formatCurrency(ind.dvAno)}`
+        : meses.length > 1 && ind.dvMesAtual !== null
+          ? `${ind.periodo} · ${rotuloMes(mesAtual)}: ${formatCurrency(ind.dvMesAtual)}`
+          : ind.periodo,
       ajuda: "Limite mensal de Despesas Variáveis menos o utilizado (A pagar, Pago, Recebido, A receber) e o provisionado. Negativo = passou do limite.",
       icon: Box,
       cor: "text-violet-700", fundo: "bg-violet-50", iconeCor: "text-violet-600",

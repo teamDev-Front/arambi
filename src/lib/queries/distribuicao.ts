@@ -6,6 +6,7 @@
 // (Cora → Inter → contas pessoais) via fn_consolidar_repasse_dl.
 
 import { createClient } from "@/lib/supabase/client";
+import { obterPapeis } from "@/lib/plano/papeis-client";
 import { semCamposDeOrigem } from "./preservar-origem";
 import { emLotes } from "./lotes";
 import type {
@@ -246,6 +247,8 @@ export async function obterResumoMeses(meses: string[]): Promise<DlMensalResumoR
 }
 
 // Lançamentos globais 2.8 do mês na empresa (para conferência lado a lado).
+// Conta e centro da DL vêm do mapa de papéis (dl / dl_lucros — 0066): os nomes
+// "2.8"/"2.8.1" nos comentários e campos abaixo são os códigos de hoje.
 export interface GlobalEmpresaMes {
   rows: TransacaoEmpresaRow[];  // só o centro 2.8.1 (a DL global)
   provisionadoGlobal: number;   // linhas provisionado/provisionado_dl (valor negativo no banco)
@@ -264,14 +267,15 @@ export interface GlobalEmpresaMes {
 export async function obterGlobalEmpresaMes(mes: string | string[]): Promise<GlobalEmpresaMes> {
   const supabase = createClient();
   const meses = Array.isArray(mes) ? mes : [mes];
+  const papeis = await obterPapeis();
   // Só o centro 2.8.1 — todos os totais abaixo usam apenas ele. O card Global
   // segue a competência e abre em "Todas" (02-out): trazer os demais centros da
   // conta 2.8 (Plano de Saúde etc.) de todos os meses só pesaria a consulta.
   let q = supabase
     .from("transacoes_empresa")
     .select("*")
-    .eq("conta_contabil_cod", "2.8")
-    .eq("centro_custo_cod", "2.8.1")
+    .eq("conta_contabil_cod", papeis.dl)
+    .eq("centro_custo_cod", papeis.dl_lucros)
     .order("data", { ascending: true });
   if (meses.length) q = q.in("mes_referencia", meses);
   const { data, error } = await q;
@@ -283,7 +287,7 @@ export async function obterGlobalEmpresaMes(mes: string | string[]): Promise<Glo
     // Desde a 0047 a DL global vive no CENTRO 2.8.1 — outros centros da conta
     // 2.8 (ex.: 2.8.3 Plano de Saúde) não entram nos totais nem bloqueiam a
     // sincronização automática (mesma regra do trigger SOMASE corrigido).
-    const ehDL = r.centro_custo_cod === "2.8.1";
+    const ehDL = r.centro_custo_cod === papeis.dl_lucros;
     let considerado = false;
     if (r.status === "provisionado" || r.status === "provisionado_dl" || r.status === "provisionado_dv") {
       considerado = true;
@@ -319,10 +323,11 @@ export interface RepasseConsolidado extends TransacaoEmpresaRow {
 export async function listarRepassesDoMes(mes: string | string[]): Promise<RepasseConsolidado[]> {
   const supabase = createClient();
   const meses = Array.isArray(mes) ? mes : [mes];
+  const papeis = await obterPapeis();
   let q = supabase
     .from("transacoes_empresa")
     .select("*")
-    .eq("conta_contabil_cod", "2.8")
+    .eq("conta_contabil_cod", papeis.dl)
     .like("origem_planilha", "dl_repasse:%")
     .order("created_at", { ascending: true });
   if (meses.length) q = q.in("mes_referencia", meses);

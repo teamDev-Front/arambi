@@ -135,6 +135,16 @@ export type ClassificacaoFinanceiraRow = {
   created_at: string;
 };
 
+// Papel de uma classificação no sistema (migration 0066): as automações e os
+// relatórios procuram a conta pelo papel ("dl", "resgate"…), não pelo número.
+// `codigo` acompanha a troca de código (FK com ON UPDATE CASCADE). Chaves e
+// leitura: src/lib/plano/papeis.ts.
+export type ClassificacaoPapelRow = {
+  papel: string;
+  codigo: string;
+  descricao: string | null;
+};
+
 // Apresentação configurável de cada status (Admin → Status & Cores). Espelha o
 // enum status_aramburu; `codigo` é o valor do enum em texto.
 export type StatusConfigRow = {
@@ -1034,6 +1044,12 @@ export interface Database {
         Row: ClassificacaoFinanceiraRow;
         Insert: Omit<ClassificacaoFinanceiraRow, "created_at">;
         Update: Partial<ClassificacaoFinanceiraRow>;
+        Relationships: EmptyRels;
+      };
+      classificacao_papel: {
+        Row: ClassificacaoPapelRow;
+        Insert: Pick<ClassificacaoPapelRow, "papel" | "codigo"> & Partial<Pick<ClassificacaoPapelRow, "descricao">>;
+        Update: Partial<ClassificacaoPapelRow>;
         Relationships: EmptyRels;
       };
       status_config: {

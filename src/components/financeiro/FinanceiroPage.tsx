@@ -19,6 +19,7 @@ import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
 import { ResgateComposicaoModal } from "@/components/financeiro/ResgateComposicaoModal";
 import { ConferenciaSicrediModal } from "@/components/financeiro/ConferenciaSicrediModal";
 import { ehResgateAutomatico } from "@/lib/queries/resgates";
+import { usePapeis } from "@/lib/plano/papeis-client";
 import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
   Plus, FileText, Search, Edit2, Eye, Trash2, Copy,
@@ -247,6 +248,9 @@ export function FinanceiroPage() {
   const toast = useToast();
   // Modo leitura (Acessos): sem edição no módulo, a tela só consulta, filtra e exporta.
   const { podeEditar } = useModulo("financeiro");
+  // Contas pelo papel (0066): DL (2.8 hoje) e resgate (1.8 hoje) acompanham a
+  // troca de código no Plano de Contas.
+  const papeis = usePapeis();
 
   // ---- dados ----
   const [rows, setRows] = useState<TransacaoEmpresaRich[]>([]);
@@ -458,7 +462,7 @@ export function FinanceiroPage() {
   const [dlClassif, setDlClassif] = useState("");
   const [dlContaSocioId, setDlContaSocioId] = useState("");
   const [dlStatus, setDlStatus] = useState<StatusDL>("provisionado");
-  const mostraTipoSaida = form.conta_contabil_cod === "2.8" && !editId;
+  const mostraTipoSaida = form.conta_contabil_cod === papeis.dl && !editId;
   const salvandoDetalhada = mostraTipoSaida && tipoSaida === "detalhada";
 
   // "Pago pelo saldo da conta" (0049) só faz sentido em SAÍDA do Sicredi: é a
@@ -2145,7 +2149,7 @@ export function FinanceiroPage() {
                         <div className="flex items-center gap-1">
                           {/* Composição do resgate / resgate que cobre o título
                               (pedido 04-ago: "não consigo me achar ele fazendo essa soma"). */}
-                          {ehResgateAutomatico(t) ? (
+                          {ehResgateAutomatico(t, papeis.resgate) ? (
                             <button onClick={() => setResgateVerId(t.id)}
                               className="p-1.5 rounded hover:bg-emerald-50 text-emerald-500 hover:text-emerald-700 transition"
                               title="Ver de quais títulos este resgate é formado">

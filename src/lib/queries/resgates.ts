@@ -15,6 +15,7 @@
 //     não fecha é justamente o que ela precisa olhar.
 
 import { createClient } from "@/lib/supabase/client";
+import { obterPapeis } from "@/lib/plano/papeis-client";
 import type { TransacaoEmpresaRich } from "./financeiro";
 
 const SELECT_RICH = `
@@ -24,9 +25,16 @@ const SELECT_RICH = `
   conta_bancaria:contas_bancarias_empresa(id, nome, apelido)
 `;
 
-/** Uma linha é resgate automático do Invest? (diário 0044 ou de fatura 0048) */
-export function ehResgateAutomatico(r: { conta_contabil_cod: string; origem_planilha: string | null }): boolean {
-  return r.conta_contabil_cod === "1.8"
+/**
+ * Uma linha é resgate automático do Invest? (diário 0044 ou de fatura 0048)
+ * `contaResgate` = código da conta do papel `resgate` (1.8 hoje) — vem do mapa
+ * de papéis (usePapeis/obterPapeis), para acompanhar a troca de código.
+ */
+export function ehResgateAutomatico(
+  r: { conta_contabil_cod: string; origem_planilha: string | null },
+  contaResgate: string,
+): boolean {
+  return r.conta_contabil_cod === contaResgate
     && !!r.origem_planilha
     && r.origem_planilha.startsWith("auto:resgate_invest")
     && !r.origem_planilha.startsWith("auto:resgate_invest_saida");
@@ -175,6 +183,8 @@ export async function obterConferenciaSicredi(ano: string): Promise<ConferenciaS
   if (error) throw error;
 
   const rows = (data ?? []) as unknown as TransacaoEmpresaRich[];
+  // Conta do resgate pelo papel (0066) — 1.8 hoje.
+  const contaResgate = (await obterPapeis()).resgate;
   const porMes = new Map<string, LinhaConferenciaSicredi>();
   const linha = (mes: string): LinhaConferenciaSicredi => {
     let l = porMes.get(mes);
@@ -194,13 +204,13 @@ export async function obterConferenciaSicredi(ano: string): Promise<ConferenciaS
     const l = linha(r.mes_referencia);
     const valor = Number(r.valor);
 
-    if (ehResgateAutomatico(r)) {
+    if (ehResgateAutomatico(r, contaResgate)) {
       l.resgates += Math.abs(valor);
       resgates.push(r);
       continue;
     }
-    // Resgate lançado à mão (1.8 sem etiqueta) também é entrada de resgate.
-    if (r.conta_contabil_cod === "1.8" && valor > 0) {
+    // Resgate lançado à mão (conta do resgate sem etiqueta) também é entrada de resgate.
+    if (r.conta_contabil_cod === contaResgate && valor > 0) {
       l.resgates += valor;
       continue;
     }

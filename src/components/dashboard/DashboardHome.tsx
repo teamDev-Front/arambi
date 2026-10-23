@@ -68,7 +68,15 @@ export function DashboardHome() {
   const [loading, setLoading]   = useState(true);
 
   // Competência multi-seleção (17-ago) — lista vazia = todos os meses.
-  const [mesesFiltro, setMesesFiltro] = useState<string[]>([]);
+  // Abre no ANO VIGENTE (Adri, 22-out: "não deve aparecer a soma de 2026 e 2027
+  // somados"); outro recorte, só pelo filtro. Lista vazia continua = todos.
+  const [mesesFiltro, setMesesFiltro] = useState<string[]>(() => {
+    const ano = new Date().getFullYear();
+    return Array.from({ length: 12 }, (_, i) => `${ano}-${String(i + 1).padStart(2, "0")}`);
+  });
+  const anoDoFiltro = mesesFiltro.length === 12 && new Set(mesesFiltro.map((m) => m.slice(0, 4))).size === 1
+    ? mesesFiltro[0].slice(0, 4)
+    : null;
   const [contaSelecionada, setContaSelecionada] = useState<string | null>(null);   // drill no PieChart
   const [bancoModal, setBancoModal] = useState<SaldoAtualBanco | null>(null);
   const [lancModal, setLancModal] = useState<TransacaoEmpresaRich | null>(null);
@@ -83,8 +91,10 @@ export function DashboardHome() {
         // Views da migration 0060 — se ainda não aplicada, a Home avisa e segue.
         getFluxoPlanilha().catch(() => null),
         getFluxoContas().catch(() => [] as FluxoContaMes[]),
-        // Últimos REGISTRADOS (reunião 20-out: "está puxando de janeiro").
-        listarTransacoesEmpresa(mesesFiltro.length ? { mesReferencia: mesesFiltro } : {}, 1, 5, "desc", "registro"),
+        // Últimos REGISTRADOS, de qualquer competência (reunião 20-out: "está
+        // puxando de janeiro"). Não segue o filtro: com a Home abrindo no ano
+        // vigente (22-out), uma venda de 2027 lançada hoje sumiria da lista.
+        listarTransacoesEmpresa({}, 1, 5, "desc", "registro"),
       ]);
       setKpiAll(k);
       setByConta(c);
@@ -184,7 +194,7 @@ export function DashboardHome() {
         <div className="flex items-center gap-2">
           {/* Competência multi-seleção — mesmo padrão do Financeiro (17-ago) */}
           <label className="flex items-center gap-1.5 text-xs text-stone-500"
-            title="Competência dos indicadores e do gráfico de despesa por conta. Nenhuma marcada = todos os meses (os saldos de Fluxo de Caixa e Despesas Variáveis usam o mês atual).">
+            title="Competência dos indicadores e do gráfico de despesa por conta (os últimos lançamentos mostram qualquer competência). Abre no ano vigente; nenhuma marcada = todos os meses. O Saldo Fluxo de Caixa é o do último mês marcado (no ano inteiro, o fechamento de dezembro).">
             Competência
             <CompetenciaMultiSelect
               className="w-40"
@@ -265,9 +275,11 @@ export function DashboardHome() {
               Despesa por Conta Contábil
               {mesesFiltro.length === 1
                 ? ` — ${mesShort(mesesFiltro[0])}`
-                : mesesFiltro.length > 1
-                  ? ` — ${mesesFiltro.length} competências`
-                  : ""}
+                : anoDoFiltro
+                  ? ` — ${anoDoFiltro}`
+                  : mesesFiltro.length > 1
+                    ? ` — ${mesesFiltro.length} competências`
+                    : ""}
             </CardTitle>
             {contaSelecionada && (
               <button onClick={() => setContaSelecionada(null)} className="text-xs text-accent-600 hover:underline">limpar</button>
@@ -333,7 +345,10 @@ export function DashboardHome() {
       {/* Últimos Lançamentos — full width */}
       <Card>
         <CardHeader>
-          <CardTitle>Últimos Lançamentos</CardTitle>
+          <CardTitle>
+            Últimos Lançamentos
+            <span className="ml-2 text-xs font-normal text-stone-400">últimos registrados, de qualquer competência</span>
+          </CardTitle>
           <Link href="/dashboard/financeiro" className="text-xs text-accent-600 hover:underline">Ver todos</Link>
         </CardHeader>
         <CardContent className="p-0">

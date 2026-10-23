@@ -14,6 +14,7 @@
 // exatamente a hora em que ninguém quer descobrir depois.
 
 import { createClient } from "@/lib/supabase/client";
+import { obterPapeis } from "@/lib/plano/papeis-client";
 import type {
   StatusAramburu,
   TipoDespesa,
@@ -33,11 +34,15 @@ export const espelhoTag = (anoDestino: string, origemId: string) =>
 const ORIGEM_AUTOMATICA = /^(auto:|dl_auto:|dl_repasse:|dv_auto:|venda_auto:|venda_taxa_auto:|espelho:)/;
 
 /**
- * Contas que se recriam sozinhas e não devem ser copiadas:
- *   1.8 — Resgate de Aplicações (o gatilho do Invest cria conforme os títulos);
- *   2.8 — Distribuição de Lucro (o SOMASE do detalhado mantém o global).
+ * Contas que se recriam sozinhas e não devem ser copiadas (pelo papel — os
+ * códigos vêm do mapa de papéis, 0066):
+ *   resgate (1.8) — Resgate de Aplicações (o gatilho do Invest cria conforme os títulos);
+ *   dl (2.8)      — Distribuição de Lucro (o SOMASE do detalhado mantém o global).
  */
-const CONTAS_EXCLUIDAS = new Set(["1.8", "2.8"]);
+async function contasExcluidas(): Promise<ReadonlySet<string>> {
+  const papeis = await obterPapeis();
+  return new Set([papeis.resgate, papeis.dl]);
+}
 
 export interface EspelhamentoOpcoes {
   anoOrigem: string;              // "2026"
@@ -74,9 +79,9 @@ export function mesmaDataNoAno(iso: string, anoDestino: string): string {
 }
 
 /** Vale a pena espelhar? (filtros que o servidor não expressa bem). */
-function espelhavel(r: TransacaoEmpresaRich): boolean {
+function espelhavel(r: TransacaoEmpresaRich, excluidas: ReadonlySet<string>): boolean {
   if (r.origem_planilha && ORIGEM_AUTOMATICA.test(r.origem_planilha)) return false;
-  if (CONTAS_EXCLUIDAS.has(r.conta_contabil_cod)) return false;
+  if (excluidas.has(r.conta_contabil_cod)) return false;
   if (r.status === "saldo_inicial") return false;
   return true;
 }
@@ -103,7 +108,8 @@ export async function montarPreviaEspelhamento(opts: EspelhamentoOpcoes): Promis
     .range(0, 4999);
   if (error) throw error;
 
-  const candidatas = ((data ?? []) as TransacaoEmpresaRich[]).filter(espelhavel);
+  const excluidas = await contasExcluidas();
+  const candidatas = ((data ?? []) as TransacaoEmpresaRich[]).filter((r) => espelhavel(r, excluidas));
 
   // O que já foi espelhado numa rodada anterior — é o que torna repetir seguro.
   const { data: jaFeitas, error: e2 } = await supabase

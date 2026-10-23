@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { EspelharAnoModal } from "@/components/provisionamento/EspelharAnoModal";
 import { formatCurrency } from "@/lib/utils/format";
+import { usePapeis } from "@/lib/plano/papeis-client";
 import {
   listarProvisionamentoAnual, listarResumoDlAno, listarVendasPorMesAno, listarAnosDisponiveis,
 } from "@/lib/queries/provisionamento";
@@ -39,6 +40,8 @@ export function ProvisionamentoPage() {
   const toast = useToast();
   // Modo leitura: a grade é só consulta; o que grava aqui é o "Espelhar ano".
   const { podeEditar } = useModulo("provisionamento");
+  // Conta da DL pelo papel (0066) — 2.8 hoje.
+  const papeis = usePapeis();
 
   const anoCorrente = String(new Date().getFullYear());
   const [ano, setAno] = useState(anoCorrente);
@@ -293,7 +296,7 @@ export function ProvisionamentoPage() {
                     <tr key={l.cod} className="border-b border-stone-50 hover:bg-stone-50 transition-colors">
                       <td className="px-3 py-1.5 text-xs text-stone-700 whitespace-nowrap sticky left-0 bg-white">
                         <span className="text-stone-400 mr-1">{l.cod}</span>{l.nome}
-                        {l.cod === "2.8" && (
+                        {l.cod === papeis.dl && (
                           <LinkModulo href="/dashboard/distribuicao" className="ml-1 text-accent-600 hover:underline text-[10px]">
                             ver detalhado →
                           </LinkModulo>
@@ -308,7 +311,7 @@ export function ProvisionamentoPage() {
                   {/* DL detalhado (satélite, conferência) */}
                   <tr className="border-b border-stone-50 hover:bg-stone-50 transition-colors">
                     <td className="px-3 py-1.5 text-xs text-stone-500 whitespace-nowrap sticky left-0 bg-white italic">
-                      <LinkModulo href="/dashboard/distribuicao" className="hover:underline" title="Soma do detalhado por sócio (provisionado + a pagar) — deve bater com a linha 2.8">
+                      <LinkModulo href="/dashboard/distribuicao" className="hover:underline" title={`Soma do detalhado por sócio (provisionado + a pagar) — deve bater com a linha ${papeis.dl}`}>
                         ↳ conferência: DL detalhado por sócio
                       </LinkModulo>
                     </td>

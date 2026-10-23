@@ -22,6 +22,7 @@ export type {
   SolicitacaoSenhaRow,
   LogRow,
   ClassificacaoFinanceiraRow,
+  ClassificacaoPapelRow,
   StatusConfigRow,
   ClassificacaoPessoalRow,
   SocioRow,

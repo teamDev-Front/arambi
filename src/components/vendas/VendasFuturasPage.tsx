@@ -38,6 +38,8 @@ import {
   listarFornecedores, garantirFornecedor,
 } from "@/lib/queries/financeiro";
 import { criarDetalhado, listarClassificacoesPessoais } from "@/lib/queries/distribuicao";
+import { obterPapeis } from "@/lib/plano/papeis-client";
+import type { MapaPapeis } from "@/lib/plano/papeis";
 import { formatCurrency, formatDate } from "@/lib/utils/format";
 import { exportVendasPdf, exportVendasXlsx, mesHumano } from "@/lib/export/vendas-export";
 import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
@@ -274,20 +276,27 @@ export function VendasFuturasPage() {
   const valorTotalForm = (Number(form.kg) / (Number(form.kg_por_saca) || 60)) * Number(form.preco_sc);
   const round2 = (v: number) => Math.round(v * 100) / 100;
 
-  /** Centro de custo da RECEITA da venda (1.2.x — Venda de Soja/Milho…). */
-  function centroReceitaVenda(cultura: CulturaSafra): { conta: string; centro: string } | null {
-    const conta = classificacoesFin.find((c) => c.nivel === 2 && c.codigo === "1.2")
+  /**
+   * Centro de custo da RECEITA da venda (1.2.x — Venda de Soja/Milho…). A
+   * conta e os centros de soja/milho vêm pelo PAPEL (receita_parceria,
+   * venda_soja, venda_milho — 0066), os mesmos que o Relatório Sócios lê;
+   * outra cultura, pelo nome do centro.
+   */
+  function centroReceitaVenda(cultura: CulturaSafra, papeis: MapaPapeis): { conta: string; centro: string } | null {
+    const conta = classificacoesFin.find((c) => c.nivel === 2 && c.codigo === papeis.receita_parceria)
       ?? classificacoesFin.find((c) => c.nivel === 2 && /arrendamento/i.test(c.nome));
     if (!conta) return null;
     const filhos = classificacoesFin.filter((c) => c.nivel === 3 && c.parent_codigo === conta.codigo);
+    const codigoPapel = cultura === "soja" ? papeis.venda_soja : cultura === "milho" ? papeis.venda_milho : null;
+    const porPapel = codigoPapel ? filhos.find((c) => c.codigo === codigoPapel) : undefined;
     const porNome = filhos.find((c) => c.nome.toLowerCase().includes(CULTURA_LABEL[cultura].toLowerCase()));
-    const centro = porNome ?? filhos[0];
+    const centro = porPapel ?? porNome ?? filhos[0];
     return centro ? { conta: conta.codigo, centro: centro.codigo } : null;
   }
 
-  /** Centro de custo da DESPESA da Taxa de Armazenagem (2.4.5). */
-  function centroTaxaArmazenagem(): { conta: string; centro: string } | null {
-    const centro = classificacoesFin.find((c) => c.nivel === 3 && c.codigo === "2.4.5")
+  /** Centro de custo da DESPESA da Taxa de Armazenagem (papel taxa_armazenagem — 2.4.5 hoje). */
+  function centroTaxaArmazenagem(papeis: MapaPapeis): { conta: string; centro: string } | null {
+    const centro = classificacoesFin.find((c) => c.nivel === 3 && c.codigo === papeis.taxa_armazenagem)
       ?? classificacoesFin.find((c) => c.nivel === 3 && /armazenagem/i.test(c.nome));
     if (!centro || !centro.parent_codigo) return null;
     return { conta: centro.parent_codigo, centro: centro.codigo };
@@ -368,11 +377,13 @@ export function VendasFuturasPage() {
     const nf = form.nota_fiscal.trim();
     const socio = form.destino_empresa ? undefined : socios.find((s) => s.id === form.socio_destino_id);
     const nomeSocio = socio?.apelido ?? socio?.nome_completo ?? "";
+    // Contas pelo papel (0066), já carregadas antes de gravar (nunca lança).
+    const papeis = await obterPapeis();
 
     if (gerarFinanceiro) {
       try {
-        const alvo = centroReceitaVenda(form.cultura);
-        if (!alvo) throw new Error('Plano de contas sem a conta 1.2 (Receita de Arrendamento) — cadastre em Configurações → Plano de Contas.');
+        const alvo = centroReceitaVenda(form.cultura, papeis);
+        if (!alvo) throw new Error(`Plano de contas sem a conta ${papeis.receita_parceria} (Receita de Arrendamento) — cadastre em Configurações → Plano de Contas.`);
         let fornecedorId: string | null = null;
         let fornecedorNome: string | null = form.comprador.trim() || null;
         if (fornecedorNome) {
@@ -441,8 +452,8 @@ export function VendasFuturasPage() {
     const taxa = Number(form.taxa_armazenagem) || 0;
     if (gerarTaxaDespesa && taxa > 0) {
       try {
-        const alvo = centroTaxaArmazenagem();
-        if (!alvo) throw new Error('Plano de contas sem o centro "Taxa de Armazenagem" (2.4.5) — cadastre em Configurações → Plano de Contas.');
+        const alvo = centroTaxaArmazenagem(papeis);
+        if (!alvo) throw new Error(`Plano de contas sem o centro "Taxa de Armazenagem" (${papeis.taxa_armazenagem}) — cadastre em Configurações → Plano de Contas.`);
         let fornecedorId: string | null = null;
         let fornecedorNome: string | null = form.comprador.trim() || null;
         if (fornecedorNome) {
