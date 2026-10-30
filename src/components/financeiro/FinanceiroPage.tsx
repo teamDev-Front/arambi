@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
+import { obterConfigApp, CONFIG_RESGATE_CONTA_ORIGEM } from "@/lib/queries/configuracoes";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import { ComboBox } from "@/components/ui/ComboBox";
@@ -52,6 +53,13 @@ import {
   STATUS_PROVISIONADO,
   gerarLinhaSaldoDv,
   isErroSaldoInvest,
+  suportaOrigemRecurso,
+  camposDaOrigem,
+  origemDosCampos,
+  obterOrigensPorIds,
+  aplicarOrigemRecursoEmMassa,
+  restaurarOrigens,
+  ORIGEM_SALDO_DA_CONTA,
   criarTransacoesSemSaldoInvest,
   atualizarTransacaoSemSaldoInvest,
   atualizarStatusEmMassaSemSaldoInvest,
@@ -145,8 +153,13 @@ type FormState = {
   status: StatusAramburu;
   valor: string;
   observacao: string;
-  /** Pago pelo saldo da própria conta — não gera resgate do Invest (0049). */
-  dispensa_resgate: boolean;
+  /**
+   * Origem do recurso (0068) da saída da corrente Sicredi: "" = conta padrão
+   * dos resgates (gera o resgate automático), "saldo" = pago pelo saldo da
+   * própria conta (dispensa_resgate, 0049), id = conta de investimento com
+   * resgate feito à parte (não gera resgate).
+   */
+  origem_recurso: string;
 };
 
 /**
@@ -241,8 +254,11 @@ const EMPTY_FORM: FormState = {
   status: "pago",
   valor: "",
   observacao: "",
-  dispensa_resgate: false,
+  origem_recurso: "",
 };
+
+/** Valor do seletor de origem em massa antes de ela escolher ("" já é "padrão"). */
+const SEM_ORIGEM_ESCOLHIDA = "__escolher__";
 
 export function FinanceiroPage() {
   const toast = useToast();
@@ -260,6 +276,10 @@ export function FinanceiroPage() {
   // ---- lookups (carregados uma vez) ----
   const [classificacoes, setClassificacoes] = useState<ClassificacaoFinanceiraRow[]>([]);
   const [bancos, setBancos] = useState<ContaBancariaEmpresaRow[]>([]);
+  // Origem do recurso (0068): a coluna existe? E a conta padrão dos resgates,
+  // que dá nome à opção "resgate automático".
+  const [suportaOrigem, setSuportaOrigem] = useState(false);
+  const [contaPadraoResgateId, setContaPadraoResgateId] = useState("");
   const [fornecedores, setFornecedores] = useState<FornecedorRow[]>([]);
 
   // ---- resumo dos saldos bancários no cabeçalho (RF 23-jul) ----
@@ -419,6 +439,7 @@ export function FinanceiroPage() {
 
   // ---- status em massa dos selecionados (RF 23-jul) ----
   const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkOrigem, setBulkOrigem] = useState(SEM_ORIGEM_ESCOLHIDA);
   const [bulkBusy, setBulkBusy] = useState(false);
   // ---- exclusão em massa dos selecionados (RF 24-jul) ----
   const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
@@ -465,14 +486,32 @@ export function FinanceiroPage() {
   const mostraTipoSaida = form.conta_contabil_cod === papeis.dl && !editId;
   const salvandoDetalhada = mostraTipoSaida && tipoSaida === "detalhada";
 
-  // "Pago pelo saldo da conta" (0049) só faz sentido em SAÍDA do Sicredi: é a
-  // conta que mantém saldo próprio (transferência de jan/2026) para as tarifas.
-  const ehSaidaSicredi = useMemo(() => {
-    if (!form.conta_bancaria_id) return false;
-    const b = bancos.find((x) => x.id === form.conta_bancaria_id);
-    const nome = `${b?.nome ?? ""} ${b?.apelido ?? ""}`.toLowerCase();
-    return nome.includes("sicredi") && !nome.includes("invest") && Number(form.valor) < 0;
-  }, [form.conta_bancaria_id, form.valor, bancos]);
+  // A origem do recurso (0068) — e o "pago pelo saldo da conta" (0049), que
+  // virou uma das opções — só faz sentido em SAÍDA da corrente Sicredi. Mesma
+  // régua do banco (fn_conta_sicredi_corrente): a conta 0913 pelo nome. Antes,
+  // "nome com sicredi e sem invest" pegava também o Fundo Empresarial.
+  const sicrediCorrente = useMemo(
+    () => bancos.find((b) => b.nome === "Cooperativa Sicredi (0913)"),
+    [bancos],
+  );
+  const ehSaidaSicredi = !!sicrediCorrente
+    && form.conta_bancaria_id === sicrediCorrente.id
+    && Number(form.valor) < 0;
+
+  // Opções da origem do recurso: a conta padrão gera o resgate automático; as
+  // outras contas de investimento = resgate feito à parte; ou o saldo da conta.
+  const opcoesOrigem = useMemo(() => {
+    const nome = (b?: ContaBancariaEmpresaRow) => b?.apelido?.trim() || b?.nome || "conta padrão";
+    const invest = bancos.filter((b) => b.ativa && b.tipo === "investimento");
+    const padrao = invest.find((b) => b.id === contaPadraoResgateId)
+      ?? bancos.find((b) => b.nome === "Cooperativa Sicredi Investimento (0913)" || b.apelido === "SICREDINVEST");
+    return [
+      { value: "", label: `${nome(padrao)} — resgate automático (padrão)` },
+      ...invest.filter((b) => b.id !== padrao?.id)
+        .map((b) => ({ value: b.id, label: `${nome(b)} — resgate feito à parte` })),
+      { value: ORIGEM_SALDO_DA_CONTA, label: "Saldo da própria conta (tarifas) — sem resgate" },
+    ];
+  }, [bancos, contaPadraoResgateId]);
 
   // Lookups da saída detalhada — carregados só quando a opção aparece.
   useEffect(() => {
@@ -937,6 +976,9 @@ export function FinanceiroPage() {
       .catch((e: unknown) =>
         toast.error("Erro carregando cadastros", (e as Error).message ?? String(e))
       );
+    // Origem do recurso (0068): sem a coluna, a tela fica no checkbox antigo.
+    suportaOrigemRecurso().then(setSuportaOrigem).catch(() => setSuportaOrigem(false));
+    obterConfigApp(CONFIG_RESGATE_CONTA_ORIGEM, "").then(setContaPadraoResgateId).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1007,7 +1049,7 @@ export function FinanceiroPage() {
       status: row.status,
       valor: String(row.valor),
       observacao: row.observacao ?? "",
-      dispensa_resgate: row.dispensa_resgate ?? false,
+      origem_recurso: origemDosCampos(row),
     };
   }
   function openEdit(row: TransacaoEmpresaRich) {
@@ -1105,7 +1147,10 @@ export function FinanceiroPage() {
         status: form.status,
         valor: Number(form.valor),
         observacao: form.observacao || null,
-        dispensa_resgate: form.dispensa_resgate,
+        // Origem do recurso (0068): sem a migration, só o "pago pelo saldo".
+        ...(suportaOrigem
+          ? camposDaOrigem(form.origem_recurso)
+          : { dispensa_resgate: form.origem_recurso === ORIGEM_SALDO_DA_CONTA }),
         origem_planilha: null,
         created_by: null,
       };
@@ -1335,6 +1380,41 @@ export function FinanceiroPage() {
       } else {
         toast.error("Não foi possível aplicar o status", msg);
       }
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  // ---- origem do recurso em massa (0068) ----
+  // "Essa identificação deverá funcionar tanto para os lançamentos individuais
+  // quanto para as programações em lote" (Adri, 30-out): no 1º dia útil ela marca
+  // de uma vez os títulos cobertos pelo resgate global do Fundo Empresarial.
+  async function aplicarOrigemEmMassa() {
+    if (!podeEditar || !sicrediCorrente || bulkOrigem === SEM_ORIGEM_ESCOLHIDA || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    const origem = bulkOrigem;
+    const rotulo = opcoesOrigem.find((o) => o.value === origem)?.label ?? "";
+    setBulkBusy(true);
+    try {
+      // Origem de cada linha ANTES — é o que o "Desfazer" restaura.
+      const anteriores = await obterOrigensPorIds(ids);
+      const n = await aplicarOrigemRecursoEmMassa(ids, origem, sicrediCorrente.id);
+      const fora = ids.length - n;
+      if (n === 0) {
+        toast.info("Nada a alterar", "A origem do recurso vale só para saídas da conta Sicredi, fora do cartão.");
+      } else {
+        const resumo = `${n} saída${n === 1 ? "" : "s"} da conta Sicredi com origem "${rotulo}".`
+          + (fora > 0 ? ` ${fora} selecionado${fora === 1 ? "" : "s"} de outra conta, entrada ou cartão não mudou.` : "");
+        toast.desfazer("Origem aplicada", resumo, async () => {
+          await restaurarOrigens(anteriores);
+          await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+          toast.info("Origem revertida", "Os lançamentos voltaram à origem anterior.");
+        });
+      }
+      setBulkOrigem(SEM_ORIGEM_ESCOLHIDA);
+      await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+    } catch (e: unknown) {
+      toast.error("Não foi possível aplicar a origem", (e as Error).message ?? String(e));
     } finally {
       setBulkBusy(false);
     }
@@ -1964,6 +2044,27 @@ export function FinanceiroPage() {
                   title="Aplica o status escolhido em todos os lançamentos selecionados de uma vez">
                   Aplicar status
                 </Button>
+                {/* Origem do recurso em massa (0068) */}
+                {suportaOrigem && sicrediCorrente && (
+                  <>
+                    <select
+                      value={bulkOrigem}
+                      onChange={(e) => setBulkOrigem(e.target.value)}
+                      className="h-7 max-w-[16rem] rounded-lg border border-stone-200 px-2 text-xs bg-white"
+                      title="Origem do recurso das saídas da conta Sicredi selecionadas"
+                    >
+                      <option value={SEM_ORIGEM_ESCOLHIDA}>Origem do recurso…</option>
+                      {opcoesOrigem.map((o) => <option key={o.value || "padrao"} value={o.value}>{o.label}</option>)}
+                    </select>
+                    <Button size="sm" variant="outline"
+                      disabled={bulkOrigem === SEM_ORIGEM_ESCOLHIDA || bulkBusy || bulkDeleteBusy}
+                      loading={bulkBusy}
+                      onClick={aplicarOrigemEmMassa}
+                      title="Aplica a origem do recurso nas saídas da conta Sicredi selecionadas (fora do cartão)">
+                      Aplicar origem
+                    </Button>
+                  </>
+                )}
                 {/* Exclusão em massa (RF 24-jul) */}
                 <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
                   loading={bulkDeleteBusy}
@@ -2383,15 +2484,36 @@ export function FinanceiroPage() {
             </div>
           )}
 
-          {/* Pago pelo saldo da conta (0049) — só faz sentido em saída do Sicredi,
-              que é a conta que mantém saldo próprio para as tarifas. */}
-          {ehSaidaSicredi && (
+          {/* Origem do recurso (0068) — de onde vem o dinheiro da saída da corrente
+              Sicredi. No cartão (fatura tem regra própria) e antes da migration,
+              fica o "pago pelo saldo da conta" (0049), que é uma das opções. */}
+          {ehSaidaSicredi && suportaOrigem && form.forma_pgto !== "cartao_credito" && (
+            <div className="space-y-1">
+              <Select
+                label="Origem do recurso"
+                value={form.origem_recurso}
+                disabled={!podeEditar}
+                onChange={(e) => setForm({ ...form, origem_recurso: e.target.value })}
+              >
+                {opcoesOrigem.map((o) => <option key={o.value || "padrao"} value={o.value}>{o.label}</option>)}
+                {form.origem_recurso && !opcoesOrigem.some((o) => o.value === form.origem_recurso) && (
+                  <option value={form.origem_recurso}>Conta inativa — resgate feito à parte</option>
+                )}
+              </Select>
+              <p className="text-[11px] text-stone-500 leading-relaxed">
+                <b>Padrão:</b> o sistema gera o resgate automático (regras em Configurações → Automações).{" "}
+                <b>Resgate feito à parte</b> (ex.: Fundo Empresarial — o resgate global do 1º dia útil ou o
+                avulso do dia): não gera resgate. <b>Saldo da própria conta:</b> para as tarifas.
+              </p>
+            </div>
+          )}
+          {ehSaidaSicredi && !(suportaOrigem && form.forma_pgto !== "cartao_credito") && (
             <label className="flex items-start gap-2.5 rounded-lg border border-stone-200 px-3 py-2.5 cursor-pointer hover:bg-stone-50 select-none">
               <input
                 type="checkbox"
-                checked={form.dispensa_resgate}
+                checked={form.origem_recurso === ORIGEM_SALDO_DA_CONTA}
                 disabled={!podeEditar}
-                onChange={(e) => setForm({ ...form, dispensa_resgate: e.target.checked })}
+                onChange={(e) => setForm({ ...form, origem_recurso: e.target.checked ? ORIGEM_SALDO_DA_CONTA : "" })}
                 className="h-3.5 w-3.5 mt-0.5 rounded border-stone-300 accent-accent-500 cursor-pointer"
               />
               <span className="text-xs leading-relaxed">

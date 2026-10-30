@@ -233,6 +233,10 @@ export async function obterConferenciaSicredi(ano: string): Promise<ConferenciaS
       l.qtdSaidas += 1;
       if (r.resgate_auto_id) {
         comTitulo.add(r.resgate_auto_id);
+      } else if (r.resgate_origem_id) {
+        // Resgate feito à parte (origem do recurso, 0068 — ex.: o resgate global
+        // do Fundo Empresarial no 1º dia útil): continua sendo saída do mês, que
+        // o resgate lançado à mão cobre; não é pendência.
       } else if (ehHistoricoConferido(r)) {
         // Passado importado da planilha e já batido no extrato — não é pendência.
         qtdHistoricoSemResgate += 1;

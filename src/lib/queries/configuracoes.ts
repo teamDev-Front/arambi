@@ -437,6 +437,29 @@ export const CONFIG_FATURA_CARTAO_DIA = "fatura_cartao_sicredi_dia";
 export const CONFIG_RESGATE_CONTA_ORIGEM = "resgate_conta_origem";
 
 /**
+ * Regras dos resgates automáticos (0068 — Sicredinvest Automático, out-2026).
+ * Padrão de cada chave = comportamento de antes da 0068.
+ */
+export const CONFIG_RESGATE = {
+  /** Conta da linha mensal "Provisionados". Vazio = a mesma dos resgates do dia a dia. */
+  contaProgramacao: "resgate_conta_programacao",
+  /** Conta do resgate da fatura do cartão. Vazio = a mesma dos resgates do dia a dia. */
+  contaFatura: "resgate_conta_fatura",
+  /** "mesmo_dia" | "dia_util_anterior". */
+  dataRegra: "resgate_data_regra",
+  /** "dia" (um por dia) | "agendamento" (um por leva que foi ao banco junta). */
+  agrupamento: "resgate_agrupamento",
+  /** Descrição dos resgates do dia a dia. Vazio = texto antigo (obra da sede). */
+  descricao: "resgate_descricao",
+  /** "on" | "off" — observação automática nas linhas de resgate. */
+  observacaoAtiva: "resgate_observacao_ativa",
+  /** Texto da observação dos resgates do dia a dia. Vazio = texto antigo. */
+  observacao: "resgate_observacao",
+  /** "on" | "off" — aviso quando o resgate passa do saldo da conta de investimento. */
+  validarSaldo: "resgate_validar_saldo",
+} as const;
+
+/**
  * Como `obterConfigApp`, mas devolve `null` quando a chave não existe — é assim
  * que a tela sabe que a migration que cria a chave ainda não foi aplicada.
  */

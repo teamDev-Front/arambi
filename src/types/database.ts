@@ -305,6 +305,13 @@ export type TransacaoEmpresaRow = {
    * janeiro/2026 — exatamente 12 × R$ 156,50 — para bancar as tarifas do ano.
    */
   dispensa_resgate: boolean;
+  /**
+   * Origem do recurso (0068): conta de investimento que cobre esta saída da
+   * corrente Sicredi. null = conta padrão dos resgates (gera o par automático);
+   * outra conta = resgate feito à parte (ex.: Fundo Empresarial), sem par.
+   * Opcional: ausente antes da migration 0068.
+   */
+  resgate_origem_id?: string | null;
   origem_planilha: string | null;
   created_at: string;
   updated_at: string;

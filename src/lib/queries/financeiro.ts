@@ -730,6 +730,111 @@ export async function atualizarStatusEmMassa(ids: string[], status: StatusArambu
   return n;
 }
 
+// ----------------------------------------------------------------------------
+// Origem do recurso (0068) — de onde vem o dinheiro de uma saída da corrente
+// Sicredi. No formulário e em massa o valor é: "" = conta padrão dos resgates
+// (gera o resgate automático), "saldo" = pago pelo saldo da própria conta
+// (dispensa_resgate, 0049), ou o id de uma conta de investimento (resgate feito
+// à parte, ex.: Fundo Empresarial — não gera resgate).
+// ----------------------------------------------------------------------------
+export const ORIGEM_SALDO_DA_CONTA = "saldo";
+
+export function camposDaOrigem(origem: string): { resgate_origem_id: string | null; dispensa_resgate: boolean } {
+  if (origem === ORIGEM_SALDO_DA_CONTA) return { resgate_origem_id: null, dispensa_resgate: true };
+  return { resgate_origem_id: origem || null, dispensa_resgate: false };
+}
+
+export function origemDosCampos(r: { resgate_origem_id?: string | null; dispensa_resgate?: boolean | null }): string {
+  if (r.dispensa_resgate) return ORIGEM_SALDO_DA_CONTA;
+  return r.resgate_origem_id ?? "";
+}
+
+let suportaOrigemCache: Promise<boolean> | null = null;
+
+/**
+ * A coluna resgate_origem_id existe (migration 0068 aplicada)? Testa uma vez
+ * por carga da página: antes da 0068 a tela segue com o checkbox antigo e não
+ * manda a coluna nova (o banco recusaria o lançamento inteiro).
+ */
+export function suportaOrigemRecurso(): Promise<boolean> {
+  suportaOrigemCache ??= (async () => {
+    const { error } = await createClient().from("transacoes_empresa").select("resgate_origem_id").limit(1);
+    return !error;
+  })();
+  return suportaOrigemCache;
+}
+
+export interface OrigemAnterior {
+  id: string;
+  resgate_origem_id: string | null;
+  dispensa_resgate: boolean;
+}
+
+/** Origem atual de cada id — snapshot do "Desfazer" da origem em massa. */
+export async function obterOrigensPorIds(ids: string[]): Promise<OrigemAnterior[]> {
+  if (ids.length === 0) return [];
+  const supabase = createClient();
+  const partes = await emLotes(ids, async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_empresa")
+      .select("id, resgate_origem_id, dispensa_resgate")
+      .in("id", lote);
+    if (error) throw error;
+    return (data ?? []) as OrigemAnterior[];
+  });
+  return partes.flat();
+}
+
+/**
+ * Aplica a origem do recurso nos selecionados. Só mexe no que ela afeta: saída
+ * da conta corrente informada, fora do cartão (a fatura tem regra própria).
+ * Devolve quantos lançamentos mudaram — o resto da seleção fica como estava.
+ */
+export async function aplicarOrigemRecursoEmMassa(
+  ids: string[],
+  origem: string,
+  contaCorrenteId: string,
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  const supabase = createClient();
+  const campos = camposDaOrigem(origem);
+  const partes = await emLotes(ids, async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_empresa")
+      .update(campos)
+      .in("id", lote)
+      .eq("conta_bancaria_id", contaCorrenteId)
+      .lt("valor", 0)
+      .neq("forma_pgto", "cartao_credito")
+      .select("id");
+    if (error) throw error;
+    return data?.length ?? 0;
+  });
+  return partes.reduce((s, x) => s + x, 0);
+}
+
+/** Desfaz a origem em massa: volta cada lançamento à origem que tinha. */
+export async function restaurarOrigens(anteriores: OrigemAnterior[]): Promise<void> {
+  const supabase = createClient();
+  // Agrupa por valor anterior: poucas atualizações, mesmo com milhares de ids.
+  const grupos = new Map<string, OrigemAnterior[]>();
+  for (const a of anteriores) {
+    const k = `${a.resgate_origem_id ?? ""}|${a.dispensa_resgate}`;
+    grupos.set(k, [...(grupos.get(k) ?? []), a]);
+  }
+  for (const lista of grupos.values()) {
+    const { resgate_origem_id, dispensa_resgate } = lista[0];
+    await emLotes(lista.map((a) => a.id), async (lote) => {
+      const { error } = await supabase
+        .from("transacoes_empresa")
+        .update({ resgate_origem_id, dispensa_resgate })
+        .in("id", lote);
+      if (error) throw error;
+      return 0;
+    });
+  }
+}
+
 /**
  * Exclui vários lançamentos de uma vez (ações em lote — RF 24-jul).
  * DELETE único com retorno dos ids: se RLS bloquear tudo, erra; se bloquear

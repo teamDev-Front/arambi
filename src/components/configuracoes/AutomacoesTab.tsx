@@ -6,7 +6,7 @@ import { useToast } from "@/components/ui/Toast";
 import { Landmark, Loader2, SlidersHorizontal } from "lucide-react";
 import {
   obterConfigApp, obterConfigAppSeExistir, salvarConfigApp, CONFIG_RESGATES_SICREDI,
-  CONFIG_LIMITE_DV, CONFIG_FATURA_CARTAO_DIA, CONFIG_RESGATE_CONTA_ORIGEM,
+  CONFIG_LIMITE_DV, CONFIG_FATURA_CARTAO_DIA, CONFIG_RESGATE_CONTA_ORIGEM, CONFIG_RESGATE,
 } from "@/lib/queries/configuracoes";
 import { listarContasEmpresa } from "@/lib/queries/bancos";
 import type { ContaBancariaEmpresaRow } from "@/types";
@@ -72,7 +72,8 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
               <p>
                 <b className="text-stone-800">Como funciona hoje:</b> ao lançar uma despesa vinculada à conta
                 Sicredi (0913), o sistema gera automaticamente um <b>resgate da conta de investimento</b>{" "}
-                (escolhida abaixo) no dia útil anterior ao vencimento, para suprir o pagamento.
+                (escolhida abaixo) para suprir o pagamento, na data e no agrupamento das regras abaixo.
+                No lançamento, a <b>origem do recurso</b> diz se ele gera esse resgate.
               </p>
               <p>
                 Quando vocês deixarem de trabalhar com essa sistemática e passarem a operar direto na{" "}
@@ -111,6 +112,7 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
           </div>
 
           <ContaOrigemResgates canEdit={canEdit} />
+          <RegrasResgates canEdit={canEdit} />
         </CardContent>
       </Card>
       {/* Parâmetros numéricos (RF 31-jul) — limite de DV e vencimento da fatura */}
@@ -145,8 +147,9 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
               <p><b className="text-stone-800">Vencimento da fatura do cartão Sicredi</b></p>
               <p className="text-xs leading-relaxed">
                 Dia do mês em que a fatura vence. Os lançamentos do Sicredi com forma de pagamento
-                <b> Cartão de Crédito</b> geram <b>um único resgate</b> do Invest, programado para o dia
-                útil anterior a esta data. As demais formas de pagamento seguem a regra normal.
+                <b> Cartão de Crédito</b> geram <b>um único resgate</b>, da conta da fatura (Regras dos
+                resgates), nesta data ou no dia útil anterior, conforme a regra de data. As demais formas de
+                pagamento seguem a regra normal.
               </p>
             </div>
             <ParametroNumerico
@@ -165,7 +168,7 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
 
       <p className="text-xs text-stone-400">
         As automações valem para todo o sistema. Alterações exigem as migrations 0047 e 0048 aplicadas no banco
-        (a conta de origem dos resgates, a 0064).
+        (a conta de origem dos resgates, a 0064; as regras dos resgates, a 0068).
       </p>
     </div>
   );
@@ -262,12 +265,12 @@ function ContaOrigemResgates({ canEdit }: { canEdit: boolean }) {
   return (
     <div className="flex items-start justify-between gap-4 flex-wrap border-t border-stone-100 pt-4">
       <div className="text-sm text-stone-600 max-w-xl space-y-1">
-        <p><b className="text-stone-800">Conta de origem dos resgates automáticos</b></p>
+        <p><b className="text-stone-800">Conta padrão dos resgates do dia a dia</b></p>
         <p className="text-xs leading-relaxed">
           Conta de investimento de onde sai o dinheiro de cada resgate (a linha negativa do par; a
           positiva continua na conta Sicredi). Vale para os resgates criados a partir da troca — os que
-          já existem, inclusive a linha amarela (provisionados) de um mês que já tenha uma, continuam na
-          conta em que foram lançados.
+          já existem continuam na conta em que foram lançados. Lançamento com outra <b>origem do
+          recurso</b> (ex.: Fundo Empresarial, resgate feito à parte) não gera resgate.
         </p>
         {carregado && !erroCarga && !migrationAplicada && (
           <p className="text-xs text-amber-700">
@@ -322,6 +325,271 @@ function ContaOrigemResgates({ canEdit }: { canEdit: boolean }) {
         onCancel={() => { if (!salvando) setPendente(null); }}
       />
     </div>
+  );
+}
+
+/**
+ * Regras dos resgates automáticos (migration 0068 — Sicredinvest Automático,
+ * documentos da Adri de 29/30-out): data, agrupamento, conta da programação
+ * mensal e da fatura, descrição, observação e aviso de saldo. "Para que eu
+ * mesma consiga ajustar determinadas regras conforme a necessidade operacional."
+ * Cada campo salva sozinho; vale para os resgates criados dali em diante.
+ */
+function RegrasResgates({ canEdit }: { canEdit: boolean }) {
+  const [contas, setContas] = useState<ContaBancariaEmpresaRow[]>([]);
+  // null = a chave não existe → migration 0068 ainda não aplicada.
+  const [aplicada, setAplicada] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    Promise.all([listarContasEmpresa(), obterConfigAppSeExistir(CONFIG_RESGATE.dataRegra)])
+      .then(([cs, v]) => { setContas(cs); setAplicada(v !== null); })
+      .catch(() => setAplicada(false));
+  }, []);
+
+  const contasInvestimento = [
+    { value: "", label: "Mesma dos resgates do dia a dia" },
+    ...contas.filter((c) => c.ativa && c.tipo === "investimento")
+      .map((c) => ({ value: c.id, label: rotuloConta(c) })),
+  ];
+
+  return (
+    <div className="border-t border-stone-100 pt-4 space-y-4">
+      <div className="text-sm text-stone-600 space-y-1">
+        <p><b className="text-stone-800">Regras dos resgates</b></p>
+        <p className="text-xs leading-relaxed">
+          Valem para os resgates criados a partir da mudança. Os que já existem continuam como estão.
+        </p>
+        {aplicada === false && (
+          <p className="text-xs text-amber-700">Disponível depois que a migration 0068 for aplicada no banco.</p>
+        )}
+      </div>
+      {aplicada === null && (
+        <span className="inline-flex items-center gap-2 text-sm text-stone-400">
+          <Loader2 size={16} className="animate-spin" /> Carregando…
+        </span>
+      )}
+      {aplicada && (
+        <>
+          <LinhaRegra titulo="Data do resgate" ajuda="O Sicredinvest Automático resgata no fim do dia do pagamento.">
+            <ParametroSelect chave={CONFIG_RESGATE.dataRegra} fallback="dia_util_anterior" canEdit={canEdit}
+              rotuloSucesso="Data dos resgates atualizada"
+              opcoes={[
+                { value: "mesmo_dia", label: "No dia do pagamento" },
+                { value: "dia_util_anterior", label: "No dia útil anterior" },
+              ]} />
+          </LinhaRegra>
+          <LinhaRegra titulo="Resgates do mesmo dia"
+            ajuda="Por agendamento: cada leva de títulos que vai ao banco junta gera uma linha própria (como era na obra da sede).">
+            <ParametroSelect chave={CONFIG_RESGATE.agrupamento} fallback="agendamento" canEdit={canEdit}
+              rotuloSucesso="Agrupamento dos resgates atualizado"
+              opcoes={[
+                { value: "dia", label: "Um por dia (total do dia)" },
+                { value: "agendamento", label: "Um por agendamento" },
+              ]} />
+          </LinhaRegra>
+          <LinhaRegra titulo="Conta da programação mensal (Provisionados)"
+            ajuda="Linha amarela que soma, no último dia do mês, o que ainda está provisionado na conta Sicredi.">
+            <ParametroSelect chave={CONFIG_RESGATE.contaProgramacao} fallback="" canEdit={canEdit}
+              rotuloSucesso="Conta da programação mensal atualizada" opcoes={contasInvestimento} />
+          </LinhaRegra>
+          <LinhaRegra titulo="Conta do resgate da fatura do cartão"
+            ajuda="O resgate da fatura sai desta conta, na data da regra acima (dia do vencimento da fatura ou dia útil anterior).">
+            <ParametroSelect chave={CONFIG_RESGATE.contaFatura} fallback="" canEdit={canEdit}
+              rotuloSucesso="Conta do resgate da fatura atualizada" opcoes={contasInvestimento} />
+          </LinhaRegra>
+          <LinhaRegra titulo="Descrição dos resgates"
+            ajuda="Nas duas pernas dos resgates do dia a dia. Vazio = texto antigo (obra da sede). A linha mensal e a fatura levam o nome da conta delas.">
+            <ParametroTexto chave={CONFIG_RESGATE.descricao} canEdit={canEdit}
+              placeholder="Resgate da Conta Investimento Invest - Reserva p/ Construção da Sede"
+              rotuloSucesso="Descrição dos resgates atualizada" />
+          </LinhaRegra>
+          <LinhaRegra titulo="Observação automática"
+            ajuda="Desligada, as linhas de resgate novas saem sem observação. O texto vale para os resgates do dia a dia (vazio = texto padrão).">
+            <div className="flex flex-col items-end gap-2">
+              <ParametroChave chave={CONFIG_RESGATE.observacaoAtiva} canEdit={canEdit}
+                rotuloSucesso={(on) => on ? "Observação automática ligada" : "Observação automática desligada"} />
+              <ParametroTexto chave={CONFIG_RESGATE.observacao} canEdit={canEdit}
+                placeholder="Texto padrão" rotuloSucesso="Texto da observação atualizado" />
+            </div>
+          </LinhaRegra>
+          <LinhaRegra titulo="Aviso de saldo insuficiente"
+            ajuda="Ligado, o sistema avisa quando o resgate passa do saldo lançado da conta de investimento e pede &quot;Executar mesmo assim&quot;.">
+            <ParametroChave chave={CONFIG_RESGATE.validarSaldo} canEdit={canEdit}
+              rotuloSucesso={(on) => on ? "Aviso de saldo ligado" : "Aviso de saldo desligado"} />
+          </LinhaRegra>
+        </>
+      )}
+    </div>
+  );
+}
+
+function LinhaRegra({ titulo, ajuda, children }: { titulo: string; ajuda: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="text-sm text-stone-600 max-w-md space-y-0.5">
+        <p className="text-stone-800 font-medium">{titulo}</p>
+        <p className="text-xs leading-relaxed">{ajuda}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Lista ligada a uma chave do app_config — salva ao escolher. */
+function ParametroSelect({
+  chave, fallback, opcoes, canEdit, rotuloSucesso,
+}: {
+  chave: string;
+  fallback: string;
+  opcoes: { value: string; label: string }[];
+  canEdit: boolean;
+  rotuloSucesso: string;
+}) {
+  const toast = useToast();
+  const [valor, setValor] = useState<string | null>(null);
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    obterConfigApp(chave, fallback).then(setValor).catch(() => setValor(fallback));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chave]);
+
+  async function escolher(novo: string) {
+    if (salvando || novo === valor) return;
+    const anterior = valor;
+    setValor(novo);
+    setSalvando(true);
+    try {
+      await salvarConfigApp(chave, novo);
+      toast.success(rotuloSucesso);
+    } catch (e: unknown) {
+      setValor(anterior);
+      toast.error("Não foi possível salvar", (e as Error).message ?? String(e));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  if (valor === null) return <Loader2 size={16} className="animate-spin text-stone-400" />;
+  // Valor gravado que não está na lista (ex.: conta desativada) continua visível.
+  const lista = opcoes.some((o) => o.value === valor) ? opcoes : [{ value: valor, label: "Conta inválida — usando o padrão" }, ...opcoes];
+  return (
+    <select
+      value={valor}
+      onChange={(e) => escolher(e.target.value)}
+      disabled={!canEdit || salvando}
+      title={canEdit ? undefined : "Apenas administradores podem alterar"}
+      className="h-9 max-w-[18rem] rounded-lg border border-stone-200 bg-white px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-400 disabled:opacity-50"
+    >
+      {lista.map((o) => <option key={o.value || "vazio"} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+
+/** Texto ligado a uma chave do app_config — salva ao sair do campo (ou Enter). */
+function ParametroTexto({
+  chave, placeholder, canEdit, rotuloSucesso,
+}: {
+  chave: string;
+  placeholder: string;
+  canEdit: boolean;
+  rotuloSucesso: string;
+}) {
+  const toast = useToast();
+  const [valor, setValor] = useState<string | null>(null);
+  const [original, setOriginal] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    obterConfigApp(chave, "")
+      .then((v) => { setValor(v); setOriginal(v); })
+      .catch(() => { setValor(""); setOriginal(""); });
+  }, [chave]);
+
+  async function salvar() {
+    if (valor === null || salvando) return;
+    const limpo = valor.trim();
+    if (limpo === original) { setValor(limpo); return; }
+    setSalvando(true);
+    try {
+      await salvarConfigApp(chave, limpo);
+      setOriginal(limpo);
+      setValor(limpo);
+      toast.success(rotuloSucesso);
+    } catch (e: unknown) {
+      toast.error("Não foi possível salvar", (e as Error).message ?? String(e));
+      setValor(original);
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  if (valor === null) return <Loader2 size={16} className="animate-spin text-stone-400" />;
+  return (
+    <input
+      type="text"
+      value={valor}
+      placeholder={placeholder}
+      maxLength={200}
+      disabled={!canEdit || salvando}
+      onChange={(e) => setValor(e.target.value)}
+      onBlur={salvar}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      title={canEdit ? "Digite e saia do campo (ou tecle Enter) para salvar" : "Apenas administradores podem alterar"}
+      className="w-72 h-9 rounded-lg border border-stone-200 px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-400 disabled:opacity-50"
+    />
+  );
+}
+
+/** Chave liga/desliga ("on"/"off") do app_config — salva ao clicar. */
+function ParametroChave({
+  chave, canEdit, rotuloSucesso,
+}: {
+  chave: string;
+  canEdit: boolean;
+  rotuloSucesso: (ligado: boolean) => string;
+}) {
+  const toast = useToast();
+  const [ligado, setLigado] = useState<boolean | null>(null);
+  const [salvando, setSalvando] = useState(false);
+
+  useEffect(() => {
+    obterConfigApp(chave, "on").then((v) => setLigado(v !== "off")).catch(() => setLigado(true));
+  }, [chave]);
+
+  async function alternar() {
+    if (ligado === null || salvando) return;
+    const novo = !ligado;
+    setSalvando(true);
+    try {
+      await salvarConfigApp(chave, novo ? "on" : "off");
+      setLigado(novo);
+      toast.success(rotuloSucesso(novo));
+    } catch (e: unknown) {
+      toast.error("Não foi possível salvar", (e as Error).message ?? String(e));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  if (ligado === null) return <Loader2 size={16} className="animate-spin text-stone-400" />;
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={ligado}
+      disabled={!canEdit || salvando}
+      onClick={alternar}
+      title={canEdit ? undefined : "Apenas administradores podem alterar"}
+      className={`relative inline-flex h-7 w-28 items-center rounded-full transition-colors text-[11px] font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+        ligado ? "bg-emerald-600 text-white" : "bg-stone-300 text-stone-700"
+      }`}
+    >
+      <span className={`absolute h-5 w-5 rounded-full bg-white shadow transition-all ${ligado ? "right-1" : "left-1"}`} />
+      <span className={`w-full ${ligado ? "pr-7 text-right" : "pl-7 text-left"} px-3`}>
+        {salvando ? "…" : ligado ? "LIGADO" : "DESLIGADO"}
+      </span>
+    </button>
   );
 }
 
