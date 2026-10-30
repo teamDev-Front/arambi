@@ -725,6 +725,9 @@ export type ConfigIARow = {
   provider_ativo: IAProvider;
   gemini_api_key: string | null;
   openai_api_key: string | null;
+  /** Modelo escolhido por provedor (0067). Opcional: ausente antes da migration; null = padrão. */
+  openai_model?: string | null;
+  gemini_model?: string | null;
   updated_at: string;
   updated_by: string | null;
 };

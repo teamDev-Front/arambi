@@ -77,9 +77,18 @@ type AnexoChat = { path: string; nome: string; mime: string; tamanho: number };
 
 // Mapeamento de erros conhecidos do SDK para mensagens amigáveis em PT-BR.
 // Roda contra `e.message` (case-insensitive).
-function friendlyProviderError(provider: IAProvider, raw: string, comAnexos = false): string {
+function friendlyProviderError(provider: IAProvider, raw: string, comAnexos = false, modelo = ""): string {
   const m = raw.toLowerCase();
   const nomeProv = provider === "gemini" ? "Google Gemini" : "OpenAI";
+  // Modelo escolhido na engrenagem (0067) que não serve ao chat.
+  const naoSuporta = m.includes("does not support") || m.includes("not supported") || m.includes("unsupported");
+  if (comAnexos && naoSuporta && m.includes("model") && (m.includes("image") || m.includes("file") || m.includes("pdf"))) {
+    return `O modelo ${modelo || "escolhido"} não lê anexos (PDF ou imagem). Escolha outro em Assistentes → engrenagem ou envie sem anexo.`;
+  }
+  // Só roda pela Responses API, não é de conversa ou não aceita as ferramentas do assistente.
+  if (m.includes("v1/responses") || m.includes("not a chat model") || (naoSuporta && m.includes("model") && !comAnexos)) {
+    return `O modelo ${modelo || "escolhido"} não funciona com os assistentes. Escolha outro em Assistentes → engrenagem.`;
+  }
   if (m.includes("api key") || m.includes("invalid_api_key") || m.includes("api_key_invalid") || m.includes("permission") || m.includes("unauthorized") || m.includes("401")) {
     return `A chave de API do ${nomeProv} foi recusada. Abra Assistentes → engrenagem e revise.`;
   }
@@ -92,8 +101,11 @@ function friendlyProviderError(provider: IAProvider, raw: string, comAnexos = fa
   if (m.includes("timeout") || m.includes("etimedout") || m.includes("network") || m.includes("fetch failed")) {
     return `Não foi possível alcançar o ${nomeProv} agora. Verifique a conexão e tente novamente.`;
   }
-  if (m.includes("model") && (m.includes("not found") || m.includes("not_found"))) {
-    return `Modelo configurado para o ${nomeProv} não está disponível. Avise o admin.`;
+  if (m.includes("deprecated")) {
+    return `O modelo ${modelo || "configurado"} foi descontinuado pelo ${nomeProv}. Escolha outro em Assistentes → engrenagem.`;
+  }
+  if (m.includes("model") && (m.includes("not found") || m.includes("not_found") || m.includes("does not exist"))) {
+    return `O modelo ${modelo || "configurado"} não está disponível na conta do ${nomeProv}. Escolha outro em Assistentes → engrenagem.`;
   }
   if (m.includes("safety") || m.includes("blocked")) {
     return `A resposta foi bloqueada pelo filtro de segurança do ${nomeProv}.`;
@@ -156,9 +168,10 @@ export async function POST(req: NextRequest) {
   const admin = createAdminClient();
 
   const [cfgRes, promptRes, userRowRes] = await Promise.all([
+    // select * (0067): com ou sem as colunas de modelo, a leitura não quebra.
     admin
       .from("config_ia")
-      .select("provider_ativo, gemini_api_key, openai_api_key")
+      .select("*")
       .eq("id", 1)
       .maybeSingle(),
     admin
@@ -186,6 +199,8 @@ export async function POST(req: NextRequest) {
 
   const provider: IAProvider = cfg.provider_ativo;
   const apiKey = provider === "gemini" ? cfg.gemini_api_key : cfg.openai_api_key;
+  // Modelo escolhido na engrenagem (0067); vazio ou inválido = padrão do provedor.
+  const modelo = modelForProvider(provider, provider === "gemini" ? cfg.gemini_model : cfg.openai_model);
   if (!apiKey) {
     return NextResponse.json(
       { error: `Provedor ativo é "${provider}" mas a chave correspondente não foi cadastrada. Abra Assistentes → engrenagem.` },
@@ -287,6 +302,7 @@ export async function POST(req: NextRequest) {
     if (req.signal.aborted) throw new DOMException("Request cancelado.", "AbortError");
     resposta = await comPrazo(
       callProvider(provider, apiKey, historico, {
+        model: modelo,
         systemPrompt: (prompt.system_prompt ?? "") + avisoPermissao + avisoAnexos,
         temperatura:  Number(prompt.temperatura ?? 0.3),
         maxOutputTokens: anexosEnviados ? MAX_TOKENS_COM_ANEXO : undefined,
@@ -315,9 +331,9 @@ export async function POST(req: NextRequest) {
       );
     }
     const rawMsg = e instanceof Error ? e.message : String(e);
-    console.error(`[chat] provider ${provider} falhou: ${rawMsg}`);
+    console.error(`[chat] provider ${provider} (${modelo}) falhou: ${rawMsg}`);
     return NextResponse.json(
-      { error: friendlyProviderError(provider, rawMsg, anexosEnviados > 0) },
+      { error: friendlyProviderError(provider, rawMsg, anexosEnviados > 0, modelo) },
       { status: 502 },
     );
   }
@@ -334,9 +350,9 @@ export async function POST(req: NextRequest) {
       tokens:       resposta.tokens_output ?? null,
       tokens_input: resposta.tokens_input  ?? null,
       provider,
-      model:        modelForProvider(provider),
+      model:        modelo,
     })
-    .select("id, session_id, role, conteudo, anexos, created_at")
+    .select("id, session_id, role, conteudo, anexos, model, created_at")
     .single();
 
   if (asstErr || !assistantMsg) {

@@ -39,6 +39,8 @@ interface DisplayMessage {
   created_at: string;
   pendente?: boolean;
   anexos?: AnexoMeta[];
+  /** Modelo que gerou a resposta (chat_mensagens.model) — só nas do assistente. */
+  modelo?: string;
 }
 
 const AGENT_INFO: Record<string, { nome: string; descricao: string; color: string }> = {
@@ -146,7 +148,9 @@ async function subirAnexo(p: AnexoPendente, signal: AbortSignal): Promise<Result
   return { ok: true, anexo: { path: json.path, nome: p.nome, mime: p.mime, tamanho: p.tamanho } };
 }
 
-type RawMsg = Pick<ChatMensagemRow, "id" | "role" | "conteudo" | "anexos" | "created_at">;
+type RawMsg = Pick<ChatMensagemRow, "id" | "role" | "conteudo" | "anexos" | "created_at"> & {
+  model?: ChatMensagemRow["model"];
+};
 
 function isUserOrAssistant(role: RawMsg["role"]): role is "user" | "assistant" {
   return role === "user" || role === "assistant";
@@ -174,6 +178,7 @@ function rowToDisplay(row: RawMsg): DisplayMessage {
     content: row.conteudo,
     created_at: row.created_at,
     anexos: lerAnexosExibicao(row.anexos),
+    modelo: row.role === "assistant" ? row.model ?? undefined : undefined,
   };
 }
 
@@ -278,7 +283,7 @@ export function ChatPage({ agentId }: { agentId: string }) {
     setSessaoFechada(sess.fechada);
     const { data: msgs, error: msgsErr } = await supabase
       .from("chat_mensagens")
-      .select("id, role, conteudo, anexos, created_at")
+      .select("id, role, conteudo, anexos, model, created_at")
       .eq("session_id", sess.id)
       .order("created_at", { ascending: true })
       .limit(500);
@@ -666,7 +671,9 @@ export function ChatPage({ agentId }: { agentId: string }) {
                     )}
                     {msg.content}
                   </div>
-                  <span className="text-[10px] text-stone-400">{formatHora(msg.created_at)}</span>
+                  <span className="text-[10px] text-stone-400">
+                    {formatHora(msg.created_at)}{msg.modelo ? ` · ${msg.modelo}` : ""}
+                  </span>
                 </div>
               </div>
             ))}

@@ -8,6 +8,7 @@ import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 import type { ChatRole, IAProvider } from "@/types";
 import type { ToolDefinition } from "@/lib/ai/tools";
+import { MODELO_PADRAO, ehModeloDeRaciocinioOpenAI, modeloEfetivo } from "@/lib/ai/modelos";
 
 /** Arquivo que vai junto com uma mensagem do usuário (PDF ou imagem). */
 export interface AIAnexo {
@@ -24,6 +25,8 @@ export interface AIMensagem {
 }
 
 export interface AICallOptions {
+  /** Modelo do provedor (config_ia, 0067). Ausente = padrão (MODELO_PADRAO). */
+  model?: string;
   systemPrompt: string;
   temperatura:  number;
   maxOutputTokens?: number;
@@ -41,14 +44,45 @@ export interface AICallResult {
   tokens_output?: number;
 }
 
-// Modelos padrão. Mantém em um lugar só pra trocar facilmente quando precisar.
-export const GEMINI_MODEL = "gemini-2.5-flash";
-export const OPENAI_MODEL = "gpt-4o-mini";
+// Modelos padrão — os de sempre. Desde a 0067 a engrenagem dos Assistentes
+// escolhe outro; a regra (padrão, formato válido) mora em lib/ai/modelos.ts.
+export const GEMINI_MODEL = MODELO_PADRAO.gemini;
+export const OPENAI_MODEL = MODELO_PADRAO.openai;
 const DEFAULT_MAX_TOKENS  = 2048;
 const DEFAULT_MAX_ITERS   = 5;
+// Modelo de raciocínio pensa dentro do mesmo orçamento da resposta: com 2048
+// tokens ele pode gastar tudo pensando e devolver texto vazio. Paga-se só o usado.
+const ORCAMENTO_RACIOCINIO = 16_000;
+// Pensam em esforço "médio" por padrão — lento demais para um chat com
+// consultas ao banco (tools). Os mais novos já vêm rápidos e ficam como estão.
+const RE_ESFORCO_PADRAO_MEDIO = /^(o1|o3|o3-mini|o4-mini|gpt-5|gpt-5-mini|gpt-5-nano)$/i;
+// Na Chat Completions, só aceitam tools com reasoning_effort "none" (testado ao
+// vivo em 29-out-2026: "To use function tools, use /v1/responses or set
+// reasoning_effort to 'none'"). Modelo novo com a mesma regra é pego pela
+// recusa em criarCompletion — esta lista só poupa a primeira chamada perdida.
+const RE_TOOLS_SO_SEM_RACIOCINIO = /^gpt-(6|5\.6)/i;
 
-export function modelForProvider(provider: IAProvider): string {
-  return provider === "gemini" ? GEMINI_MODEL : OPENAI_MODEL;
+/** Modelo que responde: o escolhido em config_ia (0067), se válido, senão o padrão. */
+export function modelForProvider(provider: IAProvider, escolhido?: string | null): string {
+  return modeloEfetivo(provider, escolhido);
+}
+
+/**
+ * Ids dos modelos que a chave enxerga — GET /models do provedor, sem custo.
+ * O filtro do que serve ao chat fica em lib/ai/modelos.ts (catalogo*).
+ */
+export async function listarModelosDoProvedor(provider: IAProvider, apiKey: string): Promise<string[]> {
+  const ids: string[] = [];
+  if (provider === "openai") {
+    for await (const m of new OpenAI({ apiKey }).models.list()) ids.push(m.id);
+    return ids;
+  }
+  const pager = await new GoogleGenAI({ apiKey }).models.list({ config: { pageSize: 200 } });
+  for await (const m of pager) {
+    if (!m.name || (m.supportedActions && !m.supportedActions.includes("generateContent"))) continue;
+    ids.push(m.name.replace(/^models\//, ""));
+  }
+  return ids;
 }
 
 // ===========================================================================
@@ -104,9 +138,9 @@ async function callGemini(
   const maxIters = opts.maxIterations ?? DEFAULT_MAX_ITERS;
 
   for (let iter = 0; iter < maxIters; iter++) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+      model: opts.model || GEMINI_MODEL,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       contents: contents as any,
       config: {
         systemInstruction: opts.systemPrompt || undefined,
@@ -209,15 +243,27 @@ async function callOpenAI(
   let tokensOut = 0;
   const maxIters = opts.maxIterations ?? DEFAULT_MAX_ITERS;
 
+  const model = opts.model || OPENAI_MODEL;
+  const raciocinio = ehModeloDeRaciocinioOpenAI(model);
+  const limite = opts.maxOutputTokens ?? DEFAULT_MAX_TOKENS;
+  // Parâmetros que nem todo modelo aceita (0067): o de raciocínio recusa
+  // temperature; o esforço vai "low" para quem pensa "médio" por padrão e
+  // "none" para quem só aceita tools assim. Se o modelo recusar algum, ele sai
+  // e a chamada é refeita (criarCompletion).
+  const opcionais: Record<string, unknown> = {};
+  if (!raciocinio) opcionais.temperature = opts.temperatura;
+  if (RE_ESFORCO_PADRAO_MEDIO.test(model)) opcionais.reasoning_effort = "low";
+  if (tools && RE_TOOLS_SO_SEM_RACIOCINIO.test(model)) opcionais.reasoning_effort = "none";
+
   for (let iter = 0; iter < maxIters; iter++) {
-    const completion = await client.chat.completions.create({
-      model: OPENAI_MODEL,
-      temperature: opts.temperatura,
-      max_tokens: opts.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
+    const completion = await criarCompletion(client, {
+      model,
+      // max_tokens está obsoleto e os modelos de raciocínio o recusam.
+      max_completion_tokens: raciocinio ? Math.max(limite, ORCAMENTO_RACIOCINIO) : limite,
       messages,
       tools,
       tool_choice: tools ? "auto" : undefined,
-    });
+    }, opcionais);
 
     if (completion.usage) {
       tokensIn  += completion.usage.prompt_tokens     ?? 0;
@@ -273,6 +319,49 @@ async function callOpenAI(
     tokens_input: tokensIn,
     tokens_output: tokensOut,
   };
+}
+
+/**
+ * chat.completions.create com os parâmetros opcionais, adaptando-se ao modelo:
+ *   • pediu reasoning_effort "none" para usar tools (GPT-6 e cia.) → manda e refaz;
+ *   • recusou um opcional (400 que cita o parâmetro — ex.: "Unsupported value:
+ *     'temperature'") → tira e refaz.
+ * `opcionais` guarda o ajuste para as próximas voltas do loop de tools; qualquer
+ * outro erro sobe como antes. No máximo 3 ajustes por chamada.
+ */
+async function criarCompletion(
+  client: OpenAI,
+  base: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+  opcionais: Record<string, unknown>,
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  for (let ajustes = 0; ; ajustes++) {
+    try {
+      return await client.chat.completions.create(
+        { ...base, ...opcionais } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+      );
+    } catch (e) {
+      if (ajustes >= 3) throw e;
+      if (pedeEsforcoNone(e) && opcionais.reasoning_effort !== "none") {
+        opcionais.reasoning_effort = "none";
+        continue;
+      }
+      const recusado = parametroRecusado(e, Object.keys(opcionais));
+      if (!recusado) throw e;
+      delete opcionais[recusado];
+    }
+  }
+}
+
+/** 400 "…use /v1/responses or set reasoning_effort to 'none'" (e não o "does not support 'none'"). */
+function pedeEsforcoNone(e: unknown): boolean {
+  if (!(e instanceof OpenAI.APIError) || e.status !== 400) return false;
+  return (e.message ?? "").toLowerCase().includes("set reasoning_effort to 'none'");
+}
+
+function parametroRecusado(e: unknown, candidatos: string[]): string | null {
+  if (!(e instanceof OpenAI.APIError) || e.status !== 400) return null;
+  const msg = (e.message ?? "").toLowerCase();
+  return candidatos.find((c) => e.param === c || msg.includes(`'${c}'`) || msg.includes(`"${c}"`)) ?? null;
 }
 
 // PDF vai como `file` (base64 em data URL, com filename); imagem como `image_url`.
