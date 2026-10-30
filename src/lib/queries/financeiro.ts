@@ -13,6 +13,7 @@ import type {
   ContaBancariaEmpresaRow,
   FornecedorRow,
   StatusAramburu,
+  TipoDespesa,
 } from "@/types";
 
 // Linha "enriquecida" trazida via select com joins.
@@ -260,6 +261,18 @@ export async function obterStatusPorIds(ids: string[]): Promise<Array<{ id: stri
 // Resumo do escopo (RF-FIN-09) — alimenta o modal de revisão antes de gerar
 // o relatório. Precedência: seleção manual (ids) > filtros aplicados.
 // ----------------------------------------------------------------------------
+/**
+ * Uma linha do recorte, só com o que o modal "Gerar relatório" precisa para
+ * recalcular quantidade e total ao desmarcar (29-out). Sem banco/centro = "".
+ */
+export interface ResumoEscopoLinha {
+  valor: number;
+  status: StatusAramburu;
+  conta: string;
+  centro: string;
+  tipo: TipoDespesa;
+}
+
 export interface ResumoEscopo {
   count: number;                         // total de lançamentos no recorte
   soma: number;                          // soma líquida dos valores (com sinal)
@@ -267,6 +280,7 @@ export interface ResumoEscopo {
   centros: { cod: string; nome: string }[];
   statuses: StatusAramburu[];
   capped: boolean;                       // true se o recorte excedeu o limite de amostragem
+  linhas: ResumoEscopoLinha[];           // as linhas lidas (até o limite de amostragem)
 }
 
 const RESUMO_CAP = 10000;
@@ -278,7 +292,7 @@ export async function resumirEscopoTransacoes(
   let q = supabase
     .from("transacoes_empresa")
     .select(
-      `id, valor, status, conta_bancaria_id,
+      `id, valor, status, conta_bancaria_id, centro_custo_cod, tipo_despesa,
        centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
        conta_bancaria:contas_bancarias_empresa(id, nome, apelido)`,
       { count: "exact" },
@@ -289,6 +303,8 @@ export async function resumirEscopoTransacoes(
     valor: number;
     status: StatusAramburu;
     conta_bancaria_id: string | null;
+    centro_custo_cod: string | null;
+    tipo_despesa: TipoDespesa;
     centro_custo: { codigo: string; nome: string } | null;
     conta_bancaria: { id: string; nome: string; apelido: string | null } | null;
   };
@@ -302,7 +318,7 @@ export async function resumirEscopoTransacoes(
       const { data, error } = await supabase
         .from("transacoes_empresa")
         .select(
-          `id, valor, status, conta_bancaria_id,
+          `id, valor, status, conta_bancaria_id, centro_custo_cod, tipo_despesa,
            centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
            conta_bancaria:contas_bancarias_empresa(id, nome, apelido)`,
         )
@@ -342,6 +358,13 @@ export async function resumirEscopoTransacoes(
     centros: Array.from(centros, ([cod, nome]) => ({ cod, nome })),
     statuses: Array.from(statuses),
     capped: (count ?? 0) > rows.length,
+    linhas: rows.map((r) => ({
+      valor: Number(r.valor) || 0,
+      status: r.status,
+      conta: r.conta_bancaria_id ?? "",
+      centro: r.centro_custo_cod ?? "",
+      tipo: r.tipo_despesa,
+    })),
   };
 }
 

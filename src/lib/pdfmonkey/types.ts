@@ -84,6 +84,19 @@ export interface CapaEmpresaPayload {
   /** Seção 10: resgates do Invest — só a SAÍDA da conta Invest (1.8 negativo). */
   resgates: CapaEmpresaItem[];
   total_resgates: string;
+  /** Tipo de despesa "periódica" (29-out) — até aqui ficava fora da capa. */
+  despesas_periodicas: CapaEmpresaItem[];
+  total_periodicas: string;
+  /**
+   * Transferências entre as contas da empresa (29-out): uma linha por
+   * transferência, pela perna que SAI (2.9), com `banco` "ORIGEM » DESTINO".
+   * Somam na caixa do banco de origem e no total geral, como o resgate.
+   */
+  transferencias: CapaEmpresaItem[];
+  total_transferencias: string;
+  /** Saídas sem tipo de despesa fora de DL, resgate e transferência (29-out) — ex.: aplicações. */
+  outras_saidas: CapaEmpresaItem[];
+  total_outras_saidas: string;
   /**
    * Soma das compras no cartão de crédito listadas nas seções (itens com
    * `informativo: true`) — "R$ 0,00" quando não há. Fica FORA de total_geral.
@@ -323,11 +336,25 @@ export interface ReportScopeFiltros {
   ids?: string[];
 }
 
+/**
+ * Itens DESMARCADOS no modal "Gerar relatório" (29-out): a linha do recorte
+ * que bater em qualquer um deles sai do relatório. Lançamento sem banco ou sem
+ * centro de custo entra como "" (opção "Sem banco"/"Sem centro").
+ */
+export interface ReportScopeDesmarcados {
+  conta_bancaria_id?: string[];
+  centro_custo_cod?: string[];
+  status?: string[];
+  tipo_despesa?: string[];
+}
+
 export interface ReportScope {
   scope_type: ReportScopeType;
   filtros?: ReportScopeFiltros;
   /** Ids dos lançamentos selecionados manualmente (têm precedência sobre filtros). */
   transacao_ids?: string[];
+  /** Refino do modal por cima da seleção/filtros (29-out). Ausente = tudo marcado. */
+  desmarcados?: ReportScopeDesmarcados;
   /** Resumo calculado na revisão (somente para auditoria em scope_applied). */
   totais?: {
     qtd_lancamentos?: number;
@@ -335,6 +362,7 @@ export interface ReportScope {
     contas?: string[];
     centros?: string[];
     status?: string[];
+    tipos?: string[];
   };
 }
 

@@ -15,7 +15,7 @@ import { carregarPapeisDetalhado, ehOuDentroDe, type Papel } from "@/lib/plano/p
 import type {
   BancoTotalBox, CapaEmpresaPayload, CapaSocioPayload, ContabilObservacao,
   RelatorioContabilPayload, RelatorioSociosPayload,
-  ReportScope,
+  ReportScope, ReportScopeDesmarcados,
 } from "./types";
 
 // ----------------------------------------------------------------------------
@@ -78,6 +78,26 @@ function aplicarEscopo<T>(query: T, scope: ReportScope | undefined, mesFallback:
     if (s) r = r.or(`descricao.ilike.%${s}%,fornecedor_nome.ilike.%${s}%,ref.ilike.%${s}%`);
   }
   return r as unknown as T;
+}
+
+/**
+ * Refino do modal "Gerar relatório" (29-out): a linha sai se a conta, o centro
+ * de custo, o status OU o tipo de despesa dela estiver desmarcado. Aplicado
+ * depois da leitura, por cima da seleção/filtros. O corpo da requisição não é
+ * confiável — só listas valem. Sem banco/centro = "".
+ */
+function passaNosDesmarcados(
+  t: { conta_bancaria_id: string | null; centro_custo_cod: string | null; status: string; tipo_despesa: string },
+  d: ReportScopeDesmarcados | undefined,
+): boolean {
+  if (!d) return true;
+  const fora = (lista: unknown, v: string) => Array.isArray(lista) && lista.includes(v);
+  return !(
+    fora(d.conta_bancaria_id, t.conta_bancaria_id ?? "")
+    || fora(d.centro_custo_cod, t.centro_custo_cod ?? "")
+    || fora(d.status, t.status)
+    || fora(d.tipo_despesa, t.tipo_despesa)
+  );
 }
 
 // ----------------------------------------------------------------------------
@@ -263,12 +283,14 @@ export async function buildCapaEmpresa(
     .from("transacoes_empresa")
     .select(`
       conta_bancaria_id, data, descricao, fornecedor_nome, valor, forma_pgto, tipo_despesa, ref, parcelas,
-      conta_contabil_cod, origem_planilha, resgate_auto_id,
+      conta_contabil_cod, centro_custo_cod, status, origem_planilha, resgate_auto_id,
       conta_bancaria:contas_bancarias_empresa(apelido, nome, banco, ordem),
       centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(nome)
     `);
   txQuery = aplicarEscopo(txQuery, args.scope, args.mesReferencia);
-  const { data: tsAll } = await txQuery.order("data");
+  // created_at desempata como no "Exportar PDF" da tela: mesma ordem nas duas
+  // páginas (sem ele, linhas do mesmo dia trocavam de lugar a cada geração).
+  const { data: tsAll } = await txQuery.order("data").order("created_at");
 
   type TransacaoComConta = {
     conta_bancaria_id: string | null;
@@ -281,49 +303,97 @@ export async function buildCapaEmpresa(
     ref: string | null;
     parcelas: string | null;
     conta_contabil_cod: string;
+    centro_custo_cod: string | null;
+    status: string;
     origem_planilha: string | null;
     resgate_auto_id: string | null;
     conta_bancaria: { apelido: string | null; nome: string; banco: string | null; ordem: number | null } | null;
     centro_custo: { nome: string } | null;
   };
-  const txs = (tsAll ?? []) as unknown as TransacaoComConta[];
+  // O que foi desmarcado no modal (29-out) sai antes de montar as seções.
+  const txs = ((tsAll ?? []) as unknown as TransacaoComConta[])
+    .filter((t) => passaNosDesmarcados(t, args.scope?.desmarcados));
 
   const bancoSlug = (banco: string | null, nome: string) =>
     (banco ?? nome ?? "").toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
 
   // ---- Seções da capa ----
-  // fixa/variavel/eventual → as três tabelas de despesas, como sempre. Sem um
-  // desses tipos, a linha ainda entra se for (seção 10 do DOCUMENTACAO_JSON,
-  // out-2026 — sem elas a capa fechava abaixo do relatório da tela):
+  // O tipo de despesa decide primeiro: fixa/variavel/eventual/periodica → a
+  // tabela do tipo (a periódica ganhou seção em 29-out; antes ficava fora).
+  // Sem tipo, a linha entra pelo lado que SAI do banco (valor < 0) em:
   //   • Distribuição de Lucro — conta do papel `dl` (2.8 hoje), ou perna do
   //     repasse consolidado / provisionado automático da DL (etiquetas
   //     dl_repasse:/dl_auto:), como a "Transf. Entre Contas_Distribuição de
   //     Lucro" que sai da CORA. O centro dessa perna é 2.9.3 no plano antigo e
   //     2.9.1 com a 0063 (plano alinhado à VS4) — a regra olha a ETIQUETA, não
-  //     o centro, e vale para os dois;
-  //   • Resgate — conta do papel `resgate` (1.8 hoje).
-  // Nas duas, só o lado que SAI: o resgate tem o crédito na corrente SICREDI e
-  // a saída no Invest, e o repasse da DL tem a entrada (transferência
-  // recebida) no INTER — somar as duas pernas zeraria o total.
-  type Secao = "fixa" | "variavel" | "eventual" | "dl" | "resgate";
+  //     o centro, e vale para os dois. Vem antes da transferência;
+  //   • Resgate — conta do papel `resgate` (1.8 hoje);
+  //   • Transferência entre contas — conta do papel `transf_enviadas_conta`
+  //     (2.9 hoje). Entrou em 29-out: a Adri marcou CORA → SICREDI e a capa
+  //     não trazia ("não está trazendo todas as movimentações");
+  //   • Outras saídas — o resto sem tipo (aplicações 2.6.1, ICMS 2.1.6…).
+  // Só o lado que SAI: o resgate tem o crédito na corrente SICREDI, o repasse
+  // da DL tem a entrada no INTER e a transferência tem a perna 1.9 no destino —
+  // somar as duas pernas zeraria o total. A perna de entrada não vira linha;
+  // na transferência ela só dá o nome do banco de destino.
+  type Secao = "fixa" | "variavel" | "eventual" | "periodica" | "dl" | "resgate" | "transferencia" | "outras";
   const secaoDaCapa = (t: TransacaoComConta): Secao | null => {
     const tipo = t.tipo_despesa;
-    if (tipo === "fixa" || tipo === "variavel" || tipo === "eventual") return tipo;
+    if (tipo === "fixa" || tipo === "variavel" || tipo === "eventual" || tipo === "periodica") return tipo;
     if (Number(t.valor) >= 0) return null;
     const origem = t.origem_planilha ?? "";
     if (t.conta_contabil_cod === P.dl || origem.startsWith("dl_repasse:") || origem.startsWith("dl_auto:")) return "dl";
     if (t.conta_contabil_cod === P.resgate) return "resgate";
-    return null; // periódica / sem tipo: o template não tem seção para ela
+    if (t.conta_contabil_cod === P.transf_enviadas_conta) return "transferencia";
+    return "outras";
   };
 
   type ListItem = { vencimento: string; valor: string; descricao: string; banco: string; pgto: string; informativo?: boolean };
   const buckets: Record<Secao, { items: ListItem[]; total: number }> = {
-    fixa:     { items: [], total: 0 },
-    variavel: { items: [], total: 0 },
-    eventual: { items: [], total: 0 },
-    dl:       { items: [], total: 0 },
-    resgate:  { items: [], total: 0 },
+    fixa:          { items: [], total: 0 },
+    variavel:      { items: [], total: 0 },
+    eventual:      { items: [], total: 0 },
+    periodica:     { items: [], total: 0 },
+    dl:            { items: [], total: 0 },
+    resgate:       { items: [], total: 0 },
+    transferencia: { items: [], total: 0 },
+    outras:        { items: [], total: 0 },
   };
+
+  // Banco de destino de cada transferência: a perna que ENTRA (conta do papel
+  // transf_recebidas_conta, valor > 0) no mesmo dia, com o mesmo valor, em
+  // outro banco. Procura no banco inteiro, não só no recorte — marcando só o
+  // lado da CORA, a linha ainda sai "CORA » SICREDI". Sem par, só a origem.
+  const destinoTransf = new Map<TransacaoComConta, string>();
+  const saidasTransf = txs.filter((t) => secaoDaCapa(t) === "transferencia");
+  if (saidasTransf.length > 0) {
+    const { data: entradas } = await supabase
+      .from("transacoes_empresa")
+      .select("data, valor, conta_bancaria_id, conta_bancaria:contas_bancarias_empresa(apelido, nome)")
+      .eq("conta_contabil_cod", P.transf_recebidas_conta)
+      .gt("valor", 0)
+      .in("data", Array.from(new Set(saidasTransf.map((t) => t.data))));
+    type PernaEntrada = {
+      data: string;
+      valor: number;
+      conta_bancaria_id: string | null;
+      conta_bancaria: { apelido: string | null; nome: string } | null;
+    };
+    const livres = [...((entradas ?? []) as unknown as PernaEntrada[])];
+    for (const s of saidasTransf) {
+      const i = livres.findIndex((e) =>
+        e.data === s.data
+        && Math.abs(Number(e.valor) + Number(s.valor)) < 0.005
+        && e.conta_bancaria_id !== s.conta_bancaria_id);
+      if (i < 0) continue;
+      const [e] = livres.splice(i, 1); // cada entrada fecha uma saída só
+      const destino = e.conta_bancaria?.apelido ?? e.conta_bancaria?.nome;
+      if (destino) destinoTransf.set(s, destino);
+    }
+  }
+  // Na transferência o fornecedor costuma ser a própria empresa — só repetiria.
+  const ehAPropriaEmpresa = (nome: string | null) =>
+    !!nome && nome.trim().toLowerCase() === perfilEmpresa.nome.trim().toLowerCase();
 
   // Totais por banco a partir das MESMAS linhas que entram nas tabelas.
   //
@@ -352,22 +422,27 @@ export async function buildCapaEmpresa(
     if (valor === 0) continue; // o template esconde linha zerada; nem mandamos
     const cartao = t.forma_pgto === "cartao_credito" && !!t.resgate_auto_id;
     const bancoNome = t.conta_bancaria?.apelido ?? t.conta_bancaria?.nome ?? "—";
+    const transf = secao === "transferencia";
+    const destino = transf ? destinoTransf.get(t) : undefined;
     buckets[secao].items.push({
       vencimento: formatDataCurta(t.data),
       valor: brl(valor),
       // Descrição completa (4.4): fornecedor + NF + categoria + descrição + parcela.
-      // Em DL e Resgate o centro de custo fica de fora: o nome dele só repetiria
-      // a seção ("Distribuição de Lucros") ou confundiria (o centro da
-      // transferência do repasse é "Outras Despesas Não Classificadas" hoje e
-      // "Transferências Enviadas" depois da 0063).
+      // Em DL, Resgate e Transferência o centro de custo fica de fora: o nome
+      // dele só repetiria a seção ("Distribuição de Lucros", "Transferências
+      // Enviadas") ou confundiria (o centro da transferência do repasse é
+      // "Outras Despesas Não Classificadas" no plano antigo).
       descricao: montarDescricaoCapa({
-        fornecedor_nome: t.fornecedor_nome,
+        fornecedor_nome: transf && ehAPropriaEmpresa(t.fornecedor_nome) ? null : t.fornecedor_nome,
         ref: t.ref,
         parcelas: t.parcelas,
         descricao: t.descricao,
-        categoria: secao === "dl" || secao === "resgate" ? null : t.centro_custo?.nome ?? null,
+        categoria: secao === "dl" || secao === "resgate" || transf ? null : t.centro_custo?.nome ?? null,
       }),
-      banco: bancoNome,
+      // Transferência: "CORA » SICREDI" (a caixa colorida continua a da origem).
+      // "»" e não "→": a fonte do template (Inter, subconjunto latino do Google
+      // Fonts) não tem a seta, e o PDF do PDFMonkey saía com um quadrado.
+      banco: destino ? `${bancoNome} » ${destino}` : bancoNome,
       // "Pix", "Boleto", "Cartão de Crédito"… (era o código cru "pix"/"boleto").
       pgto: cartao ? PGTO_CARTAO_INFORMATIVO : pgtoLabel(t.forma_pgto),
       ...(cartao ? { informativo: true } : {}),
@@ -402,11 +477,11 @@ export async function buildCapaEmpresa(
   }));
   const bancosNum = lista.map((c) => ({ nome: c.nome, slug: bancoSlug(c.banco, c.nome), total: c.total }));
   const totais_bancos: BancoTotalBox[] = lista.map((c) => ({ label: c.nome, valor: brl(c.total) }));
-  // Soma das cinco seções = soma das caixas de banco. Bate com o TOTAL GERAL do
-  // "Exportar PDF" da tela quando o recorte só tem saídas dessas seções e
-  // nenhuma compra no cartão de crédito (o Exportar soma o cartão; a capa o
-  // deixa só no informativo) — periódica e sem tipo (fora DL/Resgate) seguem
-  // fora: o template não tem seção.
+  // Soma das seções = soma das caixas de banco. Desde 29-out toda SAÍDA do
+  // recorte tem seção, então bate com o TOTAL GERAL do "Exportar PDF" da tela
+  // quando o recorte só tem saídas e nenhuma compra no cartão de crédito (o
+  // Exportar soma o cartão; a capa o deixa só no informativo). Entradas — e a
+  // perna que chega numa transferência — o Exportar desconta e a capa não lista.
   const total_geral = (Object.keys(buckets) as Secao[]).reduce((s, k) => s + buckets[k].total, 0);
 
   // ---- Subtotais por banco (4.6 — template antigo) ----
@@ -454,7 +529,15 @@ export async function buildCapaEmpresa(
     total_distribuicao_lucro: brl(buckets.dl.total),
     resgates: buckets.resgate.items,
     total_resgates: brl(buckets.resgate.total),
-    // Campos novos (21-out) — o template ignora até ganhar o bloco (ver
+    // Seções novas (29-out) — saem no template a partir da versão de 29-out
+    // (ajustes-29-outubro-2026/NOTAS_CAPA_29OUT.md); a anterior ignora.
+    despesas_periodicas: buckets.periodica.items,
+    total_periodicas: brl(buckets.periodica.total),
+    transferencias: buckets.transferencia.items,
+    total_transferencias: brl(buckets.transferencia.total),
+    outras_saidas: buckets.outras.items,
+    total_outras_saidas: brl(buckets.outras.total),
+    // Campos de 21-out — o template ignora até ganhar o bloco (ver
     // ajustes-20-outubro-26/NOTAS_CAPAS_PDFMONKEY.md).
     total_cartao_informativo: brl(totalCartao),
     nota_cartao: totalCartao > 0 ? NOTA_CARTAO : "",
@@ -682,7 +765,7 @@ export async function buildRelatorioContabil(
   let q = supabase
     .from("transacoes_empresa")
     .select(`
-      data, valor, status, descricao, fornecedor_nome,
+      data, valor, status, descricao, fornecedor_nome, conta_bancaria_id, centro_custo_cod, tipo_despesa,
       conta_contabil:classificacao_financeira!transacoes_empresa_conta_contabil_cod_fkey(codigo, nome, natureza),
       centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
       conta_bancaria:contas_bancarias_empresa(nome, apelido, banco)
@@ -696,12 +779,17 @@ export async function buildRelatorioContabil(
     status: string;
     descricao: string | null;
     fornecedor_nome: string | null;
+    conta_bancaria_id: string | null;
+    centro_custo_cod: string | null;
+    tipo_despesa: string;
     conta_contabil: { codigo: string; nome: string; natureza: "entrada" | "saida" } | null;
     centro_custo: { codigo: string; nome: string } | null;
     conta_bancaria: { nome: string; apelido: string | null; banco: string | null } | null;
   };
 
-  const ts = (data ?? []) as unknown as T[];
+  // Mesmo refino do modal que a capa (29-out).
+  const ts = ((data ?? []) as unknown as T[])
+    .filter((t) => passaNosDesmarcados(t, args.scope?.desmarcados));
 
   // Agrupa: tipo_secao (ENTRADAS/SAÍDAS) → banco → conta_contabil → centro_custo → transações
   interface SubAcc { codigo: string; nome: string; total: number; transacoes: T[] }
