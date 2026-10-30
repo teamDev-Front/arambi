@@ -17,6 +17,8 @@
 --     insert: com o código antigo lá dentro, a restauração cairia na FK.
 -- Daí a RPC fn_classificacao_trocar_codigo(de, para): tudo ou nada.
 --
+
+--
 -- Efeitos colaterais conferidos (testado em Postgres local):
 --   • o cascade atualiza os lançamentos de dentro de um gatilho: os BEFORE de
 --     transacoes_empresa rodam com pg_trigger_depth() = 2 (o vínculo do resgate
