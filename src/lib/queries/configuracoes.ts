@@ -435,6 +435,12 @@ export const CONFIG_FATURA_CARTAO_DIA = "fatura_cartao_sicredi_dia";
  * Valor = id da conta em Bancos; vazio = SICREDINVEST (padrão).
  */
 export const CONFIG_RESGATE_CONTA_ORIGEM = "resgate_conta_origem";
+/**
+ * Conta bancária de origem da Distribuição de Lucros (0069): de onde sai a
+ * transferência do repasse para o INTER e onde nasce a linha provisionada do
+ * mês. Valor = id da conta em Bancos; vazio = CORA (como era até out-2026).
+ */
+export const CONFIG_DL_CONTA_ORIGEM = "dl_conta_origem";
 
 /**
  * Regras dos resgates automáticos (0068 — Sicredinvest Automático, out-2026).

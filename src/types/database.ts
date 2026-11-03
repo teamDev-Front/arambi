@@ -312,6 +312,12 @@ export type TransacaoEmpresaRow = {
    * Opcional: ausente antes da migration 0068.
    */
   resgate_origem_id?: string | null;
+  /**
+   * "Aplicar em qual conta?" (0069): conta de investimento que recebe a
+   * aplicação. Na saída em Aplicações Financeiras o banco gera e mantém a
+   * entrada correspondente nessa conta. Opcional: ausente antes da 0069.
+   */
+  aplicacao_destino_id?: string | null;
   origem_planilha: string | null;
   created_at: string;
   updated_at: string;

@@ -764,6 +764,17 @@ export function suportaOrigemRecurso(): Promise<boolean> {
   return suportaOrigemCache;
 }
 
+let suportaAplicacaoCache: Promise<boolean> | null = null;
+
+/** A coluna aplicacao_destino_id existe (migration 0069 aplicada)? */
+export function suportaAplicacaoAutomatica(): Promise<boolean> {
+  suportaAplicacaoCache ??= (async () => {
+    const { error } = await createClient().from("transacoes_empresa").select("aplicacao_destino_id").limit(1);
+    return !error;
+  })();
+  return suportaAplicacaoCache;
+}
+
 export interface OrigemAnterior {
   id: string;
   resgate_origem_id: string | null;
@@ -828,6 +839,87 @@ export async function restaurarOrigens(anteriores: OrigemAnterior[]): Promise<vo
       const { error } = await supabase
         .from("transacoes_empresa")
         .update({ resgate_origem_id, dispensa_resgate })
+        .in("id", lote);
+      if (error) throw error;
+      return 0;
+    });
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Banco / vencimento em massa (Adri, 30-out) — "Alterar…" da barra dos
+// selecionados. Linhas que o sistema mantém sozinho (resgates e espelhos, DV,
+// DL, vendas) ficam de fora: a automação que as criou reescreveria o banco ou a
+// data, e trocar o banco de um espelho quebraria o par.
+// ----------------------------------------------------------------------------
+const PREFIXOS_AUTOMATICOS = ["auto:", "dv_auto", "dl_auto", "dl_repasse", "venda_auto", "venda_taxa_auto"];
+
+export function ehLinhaAutomatica(origem: string | null | undefined): boolean {
+  return !!origem && PREFIXOS_AUTOMATICOS.some((p) => origem.startsWith(p));
+}
+
+export type CampoEmMassa = "conta_bancaria_id" | "data";
+
+export interface CampoAnterior {
+  id: string;
+  valor: string | null;
+}
+
+export interface ResultadoCampoEmMassa {
+  alterados: number;
+  /** Selecionados que o sistema mantém sozinho — ficaram como estavam. */
+  automaticos: number;
+  /** Valor de cada alterado ANTES — o que o "Desfazer" restaura. */
+  anteriores: CampoAnterior[];
+}
+
+/** Aplica o mesmo banco ou o mesmo vencimento em todos os selecionados editáveis. */
+export async function aplicarCampoEmMassa(
+  ids: string[],
+  campo: CampoEmMassa,
+  valor: string,
+): Promise<ResultadoCampoEmMassa> {
+  if (ids.length === 0) return { alterados: 0, automaticos: 0, anteriores: [] };
+  const supabase = createClient();
+  const atuais = (await emLotes(ids, async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_empresa")
+      .select(`id, origem_planilha, ${campo}`)
+      .in("id", lote);
+    if (error) throw error;
+    return (data ?? []) as unknown as Array<Record<string, string | null>>;
+  })).flat();
+
+  const editaveis = atuais.filter((r) => !ehLinhaAutomatica(r.origem_planilha));
+  const mudam = editaveis.filter((r) => r[campo] !== valor);
+  const anteriores = mudam.map((r) => ({ id: r.id as string, valor: r[campo] }));
+
+  const partes = await emLotes(mudam.map((r) => r.id as string), async (lote) => {
+    const { data, error } = await supabase
+      .from("transacoes_empresa")
+      .update({ [campo]: valor } as never)
+      .in("id", lote)
+      .select("id");
+    if (error) throw error;
+    return data?.length ?? 0;
+  });
+  return {
+    alterados: partes.reduce((s, x) => s + x, 0),
+    automaticos: atuais.length - editaveis.length,
+    anteriores,
+  };
+}
+
+/** Desfaz o banco/vencimento em massa: cada lançamento volta ao valor que tinha. */
+export async function restaurarCampoEmMassa(campo: CampoEmMassa, anteriores: CampoAnterior[]): Promise<void> {
+  const supabase = createClient();
+  const grupos = new Map<string | null, string[]>();
+  for (const a of anteriores) grupos.set(a.valor, [...(grupos.get(a.valor) ?? []), a.id]);
+  for (const [valor, lista] of grupos) {
+    await emLotes(lista, async (lote) => {
+      const { error } = await supabase
+        .from("transacoes_empresa")
+        .update({ [campo]: valor } as never)
         .in("id", lote);
       if (error) throw error;
       return 0;

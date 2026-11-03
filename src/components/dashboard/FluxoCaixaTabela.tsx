@@ -42,7 +42,8 @@ export function FluxoCaixaTabela({ linhas, contas, loading, mesAtual }: Props) {
   const anoPadrao = anos.includes(mesAtual.slice(0, 4)) ? mesAtual.slice(0, 4) : anos.at(-1) ?? mesAtual.slice(0, 4);
   const [anoEscolhido, setAnoEscolhido] = useState<string | null>(null);
   const ano = anoEscolhido && anos.includes(anoEscolhido) ? anoEscolhido : anoPadrao;
-  const [abertos, setAbertos] = useState<Set<string>>(() => new Set([mesAtual]));
+  // Todos recolhidos ao abrir (Adri, 30-out): cada mês abre só pelo clique.
+  const [abertos, setAbertos] = useState<Set<string>>(() => new Set());
 
   const doAno = useMemo(() => linhas.filter((l) => l.mes_referencia.startsWith(ano)), [linhas, ano]);
   const temSplit = doAno.some((l) => l.entradas_provisionadas != null);

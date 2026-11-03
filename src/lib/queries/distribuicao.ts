@@ -180,7 +180,8 @@ export async function deletarDetalhadoEmMassa(ids: string[]): Promise<number> {
 // aplica o mesmo vencimento — "1 do 7, 1 do 7, 1 do 7").
 export async function atualizarDetalhadoEmMassa(
   ids: string[],
-  payload: { status?: StatusDL; data_vencimento?: string; data_vencimento_despesa?: string },
+  // data = competência (YYYY-MM-01; mes_referencia deriva dela) — 30-out.
+  payload: { status?: StatusDL; data_vencimento?: string; data_vencimento_despesa?: string; data?: string },
 ): Promise<number> {
   if (ids.length === 0) return 0;
   const supabase = createClient();

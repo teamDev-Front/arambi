@@ -21,6 +21,7 @@ import { ResgateComposicaoModal } from "@/components/financeiro/ResgateComposica
 import { ConferenciaSicrediModal } from "@/components/financeiro/ConferenciaSicrediModal";
 import { ehResgateAutomatico } from "@/lib/queries/resgates";
 import { usePapeis } from "@/lib/plano/papeis-client";
+import { useContaOrigemDL } from "@/lib/hooks/useContaOrigemDL";
 import type { ListarTransacoesFiltros } from "@/lib/queries/financeiro";
 import {
   Plus, FileText, Search, Edit2, Eye, Trash2, Copy,
@@ -55,10 +56,14 @@ import {
   isErroSaldoInvest,
   suportaOrigemRecurso,
   camposDaOrigem,
+  suportaAplicacaoAutomatica,
   origemDosCampos,
   obterOrigensPorIds,
   aplicarOrigemRecursoEmMassa,
   restaurarOrigens,
+  aplicarCampoEmMassa,
+  restaurarCampoEmMassa,
+  type CampoEmMassa,
   ORIGEM_SALDO_DA_CONTA,
   criarTransacoesSemSaldoInvest,
   atualizarTransacaoSemSaldoInvest,
@@ -160,6 +165,8 @@ type FormState = {
    * resgate feito à parte (não gera resgate).
    */
   origem_recurso: string;
+  /** "Aplicar em qual conta?" (0069) — id da conta de investimento, "" = sem. */
+  aplicar_em: string;
 };
 
 /**
@@ -255,6 +262,7 @@ const EMPTY_FORM: FormState = {
   valor: "",
   observacao: "",
   origem_recurso: "",
+  aplicar_em: "",
 };
 
 /** Valor do seletor de origem em massa antes de ela escolher ("" já é "padrão"). */
@@ -267,6 +275,7 @@ export function FinanceiroPage() {
   // Contas pelo papel (0066): DL (2.8 hoje) e resgate (1.8 hoje) acompanham a
   // troca de código no Plano de Contas.
   const papeis = usePapeis();
+  const contaOrigemDL = useContaOrigemDL();
 
   // ---- dados ----
   const [rows, setRows] = useState<TransacaoEmpresaRich[]>([]);
@@ -279,6 +288,7 @@ export function FinanceiroPage() {
   // Origem do recurso (0068): a coluna existe? E a conta padrão dos resgates,
   // que dá nome à opção "resgate automático".
   const [suportaOrigem, setSuportaOrigem] = useState(false);
+  const [suportaAplicacao, setSuportaAplicacao] = useState(false);
   const [contaPadraoResgateId, setContaPadraoResgateId] = useState("");
   const [fornecedores, setFornecedores] = useState<FornecedorRow[]>([]);
 
@@ -438,7 +448,11 @@ export function FinanceiroPage() {
   const [escopoTipo, setEscopoTipo] = useState<"por_filtros" | "por_selecao">("por_filtros");
 
   // ---- status em massa dos selecionados (RF 23-jul) ----
+  // "Alterar…" (Adri, 30-out): escolhe O QUE mudar e só então o valor.
+  const [bulkCampo, setBulkCampo] = useState<"" | "status" | "banco" | "vencimento" | "origem">("");
   const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkBanco, setBulkBanco] = useState("");
+  const [bulkVencimento, setBulkVencimento] = useState("");
   const [bulkOrigem, setBulkOrigem] = useState(SEM_ORIGEM_ESCOLHIDA);
   const [bulkBusy, setBulkBusy] = useState(false);
   // ---- exclusão em massa dos selecionados (RF 24-jul) ----
@@ -492,6 +506,17 @@ export function FinanceiroPage() {
   // "nome com sicredi e sem invest" pegava também o Fundo Empresarial.
   const sicrediCorrente = useMemo(
     () => bancos.find((b) => b.nome === "Cooperativa Sicredi (0913)"),
+    [bancos],
+  );
+  // Aplicação automática (Adri, 30-out): saída da conta corrente em Aplicações
+  // Financeiras pergunta "Aplicar em qual conta?" e o banco gera a entrada.
+  const contaDoForm = bancos.find((b) => b.id === form.conta_bancaria_id);
+  const ehAplicacaoCorrente = suportaAplicacao
+    && form.centro_custo_cod === papeis.aplicacoes_financeiras
+    && Number(form.valor) < 0
+    && contaDoForm?.tipo === "corrente";
+  const contasParaAplicar = useMemo(
+    () => bancos.filter((b) => b.ativa && b.tipo === "investimento"),
     [bancos],
   );
   const ehSaidaSicredi = !!sicrediCorrente
@@ -978,6 +1003,7 @@ export function FinanceiroPage() {
       );
     // Origem do recurso (0068): sem a coluna, a tela fica no checkbox antigo.
     suportaOrigemRecurso().then(setSuportaOrigem).catch(() => setSuportaOrigem(false));
+    suportaAplicacaoAutomatica().then(setSuportaAplicacao).catch(() => setSuportaAplicacao(false));
     obterConfigApp(CONFIG_RESGATE_CONTA_ORIGEM, "").then(setContaPadraoResgateId).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1050,6 +1076,7 @@ export function FinanceiroPage() {
       valor: String(row.valor),
       observacao: row.observacao ?? "",
       origem_recurso: origemDosCampos(row),
+      aplicar_em: row.aplicacao_destino_id ?? "",
     };
   }
   function openEdit(row: TransacaoEmpresaRich) {
@@ -1094,6 +1121,11 @@ export function FinanceiroPage() {
         data_vencimento_despesa: form.data,
         status: dlStatus,
         observacao: form.observacao || null,
+        // Aplicação automática (0069): só na saída da corrente em Aplicações
+        // Financeiras; fora disso o destino é limpo (a entrada some junto).
+        ...(suportaAplicacao
+          ? { aplicacao_destino_id: ehAplicacaoCorrente && form.aplicar_em ? form.aplicar_em : null }
+          : {}),
         origem_planilha: null,
         created_by: null,
       };
@@ -1360,6 +1392,7 @@ export function FinanceiroPage() {
       }
       limparSelecao();
       setBulkStatus("");
+      setBulkCampo("");
       await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     };
     setBulkBusy(true);
@@ -1412,12 +1445,61 @@ export function FinanceiroPage() {
         });
       }
       setBulkOrigem(SEM_ORIGEM_ESCOLHIDA);
+      setBulkCampo("");
       await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
     } catch (e: unknown) {
       toast.error("Não foi possível aplicar a origem", (e as Error).message ?? String(e));
     } finally {
       setBulkBusy(false);
     }
+  }
+
+  // ---- banco / vencimento em massa (Adri, 30-out) ----
+  async function aplicarCampoSelecionados(campo: CampoEmMassa) {
+    if (!podeEditar || selectedIds.size === 0) return;
+    const valor = campo === "data" ? bulkVencimento : bulkBanco;
+    if (!valor) return;
+    const ids = Array.from(selectedIds);
+    const banco = bancos.find((x) => x.id === valor);
+    const rotulo = campo === "data"
+      ? `vencimento ${formatDate(valor)}`
+      : `banco ${banco?.apelido || banco?.nome || ""}`;
+    setBulkBusy(true);
+    try {
+      const r = await aplicarCampoEmMassa(ids, campo, valor);
+      const extra = r.automaticos > 0
+        ? ` ${r.automaticos} lançamento${r.automaticos === 1 ? "" : "s"} automático${r.automaticos === 1 ? "" : "s"} (resgate, DL, venda) ficou como estava — o sistema cuida dele${r.automaticos === 1 ? "" : "s"}.`
+        : "";
+      if (r.alterados === 0) {
+        toast.info("Nada a alterar", `Os selecionados já estavam com ${rotulo}.${extra}`);
+      } else {
+        const resumo = `${r.alterados} lançamento${r.alterados === 1 ? "" : "s"} com ${rotulo}.${extra}`;
+        toast.desfazer(campo === "data" ? "Vencimento aplicado" : "Banco aplicado", resumo, async () => {
+          await restaurarCampoEmMassa(campo, r.anteriores);
+          await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+          toast.info("Alteração revertida", "Os lançamentos voltaram ao valor anterior.");
+        });
+      }
+      limparSelecao();
+      setBulkCampo(""); setBulkBanco(""); setBulkVencimento("");
+      await Promise.all([fetchData(), fetchSaldos(), fetchIndicadores()]);
+    } catch (e: unknown) {
+      toast.error("Não foi possível aplicar a alteração", (e as Error).message ?? String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  const bulkPronto = (bulkCampo === "status" && !!bulkStatus)
+    || (bulkCampo === "banco" && !!bulkBanco)
+    || (bulkCampo === "vencimento" && !!bulkVencimento)
+    || (bulkCampo === "origem" && bulkOrigem !== SEM_ORIGEM_ESCOLHIDA);
+
+  function aplicarAlteracaoEmMassa() {
+    if (bulkCampo === "status") return aplicarStatusEmMassa();
+    if (bulkCampo === "banco") return aplicarCampoSelecionados("conta_bancaria_id");
+    if (bulkCampo === "vencimento") return aplicarCampoSelecionados("data");
+    if (bulkCampo === "origem") return aplicarOrigemEmMassa();
   }
 
   // ---- exclusão em massa dos selecionados (RF 24-jul) ----
@@ -2029,41 +2111,70 @@ export function FinanceiroPage() {
             {/* Em modo leitura a seleção segue servindo à exportação e ao relatório */}
             {podeEditar && (
               <>
+                {/* Alteração em massa (Adri, 30-out): 1º o que mudar, 2º o valor, 3º Aplicar */}
                 <select
-                  value={bulkStatus}
-                  onChange={(e) => setBulkStatus(e.target.value)}
-                  className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
-                  title="Status a aplicar em todos os selecionados"
+                  value={bulkCampo}
+                  onChange={(e) => setBulkCampo(e.target.value as typeof bulkCampo)}
+                  className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white font-medium"
+                  title="O que alterar em todos os selecionados"
                 >
-                  <option value="">Escolher status…</option>
-                  {statusAtivos.map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
+                  <option value="">Alterar…</option>
+                  <option value="status">Status</option>
+                  <option value="banco">Banco</option>
+                  <option value="vencimento">Data de vencimento</option>
+                  {suportaOrigem && sicrediCorrente && <option value="origem">Origem do recurso</option>}
                 </select>
-                <Button size="sm" variant="outline" disabled={!bulkStatus || bulkBusy || bulkDeleteBusy}
-                  loading={bulkBusy}
-                  onClick={aplicarStatusEmMassa}
-                  title="Aplica o status escolhido em todos os lançamentos selecionados de uma vez">
-                  Aplicar status
-                </Button>
-                {/* Origem do recurso em massa (0068) */}
-                {suportaOrigem && sicrediCorrente && (
-                  <>
-                    <select
-                      value={bulkOrigem}
-                      onChange={(e) => setBulkOrigem(e.target.value)}
-                      className="h-7 max-w-[16rem] rounded-lg border border-stone-200 px-2 text-xs bg-white"
-                      title="Origem do recurso das saídas da conta Sicredi selecionadas"
-                    >
-                      <option value={SEM_ORIGEM_ESCOLHIDA}>Origem do recurso…</option>
-                      {opcoesOrigem.map((o) => <option key={o.value || "padrao"} value={o.value}>{o.label}</option>)}
-                    </select>
-                    <Button size="sm" variant="outline"
-                      disabled={bulkOrigem === SEM_ORIGEM_ESCOLHIDA || bulkBusy || bulkDeleteBusy}
-                      loading={bulkBusy}
-                      onClick={aplicarOrigemEmMassa}
-                      title="Aplica a origem do recurso nas saídas da conta Sicredi selecionadas (fora do cartão)">
-                      Aplicar origem
-                    </Button>
-                  </>
+                {bulkCampo === "status" && (
+                  <select
+                    value={bulkStatus}
+                    onChange={(e) => setBulkStatus(e.target.value)}
+                    className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+                    title="Status a aplicar em todos os selecionados"
+                  >
+                    <option value="">Escolher status…</option>
+                    {statusAtivos.map((e) => <option key={e.codigo} value={e.codigo}>{e.label}</option>)}
+                  </select>
+                )}
+                {bulkCampo === "banco" && (
+                  <select
+                    value={bulkBanco}
+                    onChange={(e) => setBulkBanco(e.target.value)}
+                    className="h-7 max-w-[16rem] rounded-lg border border-stone-200 px-2 text-xs bg-white"
+                    title="Banco a aplicar em todos os selecionados"
+                  >
+                    <option value="">Escolher banco…</option>
+                    {bancos.filter((b) => b.ativa).map((b) => (
+                      <option key={b.id} value={b.id}>{b.apelido || b.nome}</option>
+                    ))}
+                  </select>
+                )}
+                {bulkCampo === "vencimento" && (
+                  <input
+                    type="date"
+                    value={bulkVencimento}
+                    onChange={(e) => setBulkVencimento(e.target.value)}
+                    className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+                    title="Nova data de vencimento para todos os selecionados"
+                  />
+                )}
+                {bulkCampo === "origem" && (
+                  <select
+                    value={bulkOrigem}
+                    onChange={(e) => setBulkOrigem(e.target.value)}
+                    className="h-7 max-w-[16rem] rounded-lg border border-stone-200 px-2 text-xs bg-white"
+                    title="Origem do recurso das saídas da conta Sicredi selecionadas (fora do cartão)"
+                  >
+                    <option value={SEM_ORIGEM_ESCOLHIDA}>Escolher origem…</option>
+                    {opcoesOrigem.map((o) => <option key={o.value || "padrao"} value={o.value}>{o.label}</option>)}
+                  </select>
+                )}
+                {bulkCampo && (
+                  <Button size="sm" variant="outline" disabled={!bulkPronto || bulkBusy || bulkDeleteBusy}
+                    loading={bulkBusy}
+                    onClick={aplicarAlteracaoEmMassa}
+                    title="Aplica a alteração em todos os lançamentos selecionados de uma vez">
+                    Aplicar
+                  </Button>
                 )}
                 {/* Exclusão em massa (RF 24-jul) */}
                 <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
@@ -2372,7 +2483,7 @@ export function FinanceiroPage() {
                   <input type="radio" name="tipo-saida" checked={tipoSaida === "global"} disabled={!podeEditar}
                     onChange={() => setTipoSaida("global")}
                     className="h-4 w-4 accent-accent-500" />
-                  Saída global <span className="text-xs text-stone-400">(valor total — Cora → Inter)</span>
+                  Saída global <span className="text-xs text-stone-400">(valor total — {contaOrigemDL} → Inter)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="radio" name="tipo-saida" checked={tipoSaida === "detalhada"} disabled={!podeEditar}
@@ -2481,6 +2592,31 @@ export function FinanceiroPage() {
                   );
                 })()}
               </div>
+            </div>
+          )}
+
+          {/* "Aplicar em qual conta?" (Adri, 30-out — migration 0069) */}
+          {ehAplicacaoCorrente && (
+            <div className="space-y-1">
+              <Select
+                label="Aplicar em qual conta?"
+                value={form.aplicar_em}
+                disabled={!podeEditar}
+                onChange={(e) => setForm({ ...form, aplicar_em: e.target.value })}
+              >
+                <option value="">Não gerar a entrada (lanço à mão)</option>
+                {contasParaAplicar.map((b) => (
+                  <option key={b.id} value={b.id}>{b.apelido || b.nome}</option>
+                ))}
+                {form.aplicar_em && !contasParaAplicar.some((b) => b.id === form.aplicar_em) && (
+                  <option value={form.aplicar_em}>Conta inativa</option>
+                )}
+              </Select>
+              <p className="text-[11px] text-stone-500 leading-relaxed">
+                Ao salvar, o sistema lança sozinho a <b>entrada</b> na conta escolhida ({papeis.outros_recebimentos}
+                {" "}Outros Recebimentos, mesma data, valor e descrição). <b>A aplicar</b> → entrada <b>A receber</b>;{" "}
+                <b>Aplicado</b> → <b>Recebido</b>. Editar ou excluir esta saída atualiza a entrada junto.
+              </p>
             </div>
           )}
 
@@ -2742,6 +2878,27 @@ export function FinanceiroPage() {
                 >
                   {mostrarSoTagueados ? "Mostrar todos" : "Ver só tagueados"}
                 </Button>
+                {/* "Só o lado que sai" junto dos tagueados (Adri, 30-out): mesmo
+                    recorte dos cards de vencimento — só os valores negativos. */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={filterSoNegativos}
+                  onClick={() => { setFilterSoNegativos((v) => !v); setPage(1); }}
+                  className={`h-8 inline-flex items-center gap-1.5 rounded-lg border px-2 text-xs font-medium cursor-pointer ${
+                    filterSoNegativos
+                      ? "bg-red-50 border-red-300 text-red-700"
+                      : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50"
+                  }`}
+                  title={filterSoNegativos
+                    ? "Ligado: mostra só os valores negativos (saídas). Clique para ver também as entradas."
+                    : "Desligado: mostra entradas e saídas. Clique para ver só os valores negativos (saídas)."}
+                >
+                  <span className={`inline-block h-3 w-5 rounded-full relative transition-colors ${filterSoNegativos ? "bg-red-500" : "bg-stone-300"}`}>
+                    <span className={`absolute top-0.5 h-2 w-2 rounded-full bg-white transition-all ${filterSoNegativos ? "left-2.5" : "left-0.5"}`} />
+                  </span>
+                  Só o lado que sai
+                </button>
                 <Button
                   size="sm"
                   variant="outline"

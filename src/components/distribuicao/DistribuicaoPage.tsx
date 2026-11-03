@@ -40,6 +40,7 @@ import { SeloCapaFields } from "@/components/relatorios/SeloCapaFields";
 import { ObservacoesCapaField, observacoesDoTexto } from "@/components/relatorios/ObservacoesCapaField";
 import { getNomeUsuarioAtual, linhaEmissao } from "@/lib/auth/usuario-atual";
 import { usePapeis } from "@/lib/plano/papeis-client";
+import { useContaOrigemDL } from "@/lib/hooks/useContaOrigemDL";
 import {
   STATUS_DL_LABEL, STATUS_DL_COLOR,
   type StatusDL, type SocioRow, type ClassificacaoPessoalRow,
@@ -347,6 +348,8 @@ export function DistribuicaoPage() {
 
   // ---- lookups ----
   const [socios, setSocios] = useState<SocioRow[]>([]);
+  // Conta de onde saem os repasses (Configurações → Automações, 0069).
+  const contaOrigemDL = useContaOrigemDL();
   const [classifs, setClassifs] = useState<ClassificacaoPessoalRow[]>([]);
   const [contasSocio, setContasSocio] = useState<ContaBancariaSocioRow[]>([]);
   // Todas as contas ativas dos sócios — filtro "Conta Destino" (04-set).
@@ -366,7 +369,11 @@ export function DistribuicaoPage() {
 
   // ---- seleção / ações em massa ----
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // "Alterar…" (Adri, 30-out): escolhe O QUE mudar, depois o valor, e Aplicar.
+  const [bulkCampo, setBulkCampo] = useState<"" | "status" | "repasse" | "vencimento" | "competencia">("");
   const [bulkVencimento, setBulkVencimento] = useState("");
+  const [bulkVencDespesa, setBulkVencDespesa] = useState("");
+  const [bulkCompetencia, setBulkCompetencia] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
   // Status genérico + exclusão em lote (ajuste 27-jul — idem ao Financeiro).
   const [bulkStatusSel, setBulkStatusSel] = useState("");
@@ -700,7 +707,10 @@ export function DistribuicaoPage() {
   };
 
   // ---- ações em massa ----
-  async function aplicarEmMassa(payload: { status?: StatusDL; data_vencimento?: string }, rotulo: string) {
+  async function aplicarEmMassa(
+    payload: { status?: StatusDL; data_vencimento?: string; data_vencimento_despesa?: string; data?: string },
+    rotulo: string,
+  ) {
     if (!podeEditar) return;
     if (selectedIds.size === 0) return;
     // Consolidados podem ser SELECIONADOS (17-ago), mas não alterados: mudar
@@ -732,6 +742,7 @@ export function DistribuicaoPage() {
         toast.info("Alteração revertida", `${anteriores.length} lançamento${anteriores.length === 1 ? "" : "s"} voltou como estava.`);
       });
       setSelectedIds(new Set());
+      setBulkCampo(""); setBulkStatusSel(""); setBulkVencimento(""); setBulkVencDespesa(""); setBulkCompetencia("");
       await fetchData();
     } catch (e: unknown) {
       toast.error("Não foi possível atualizar", (e as Error).message ?? String(e));
@@ -1122,10 +1133,10 @@ export function DistribuicaoPage() {
 
   async function handleConcluir(rep: RepasseConsolidado) {
     if (!podeEditar) return;
-    if (!confirm(`Dar baixa no repasse de ${formatCurrency(-rep.valor)}? O global "A repassar" vira "Repassado", a transferência Cora → Inter vira "Pago/Recebido" e o detalhado vinculado vira "Repassado".`)) return;
+    if (!confirm(`Dar baixa no repasse de ${formatCurrency(-rep.valor)}? O global "A repassar" vira "Repassado", a transferência ${contaOrigemDL} → Inter vira "Pago/Recebido" e o detalhado vinculado vira "Repassado".`)) return;
     try {
       await concluirRepasse(rep.id);
-      toast.success("Baixa registrada", "Repasse concluído — saldos do Cora e do Inter atualizados.");
+      toast.success("Baixa registrada", `Repasse concluído — saldos do ${contaOrigemDL} e do Inter atualizados.`);
       await fetchData();
       setRepassesTick((t) => t + 1);
     } catch (e: unknown) {
@@ -1196,7 +1207,7 @@ export function DistribuicaoPage() {
       {podeEditar && (
         <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs text-stone-600 flex flex-wrap gap-x-6 gap-y-1">
           <span><b className="text-stone-800">1.</b> Confira o detalhado do mês (valores, faturas, vencimentos) e marque item a item como <b>A repassar</b>.</span>
-          <span><b className="text-stone-800">2.</b> Clique em <b>Consolidar repasse</b> — o sistema cria o valor global no Financeiro (Cora → Inter) automaticamente.</span>
+          <span><b className="text-stone-800">2.</b> Clique em <b>Consolidar repasse</b> — o sistema cria o valor global no Financeiro ({contaOrigemDL} → Inter) automaticamente.</span>
           <span><b className="text-stone-800">3.</b> Feito o repasse aos sócios, clique em <b>Dar baixa</b> — tudo vira Repassado de uma vez.</span>
         </div>
       )}
@@ -1634,40 +1645,82 @@ export function DistribuicaoPage() {
             {/* Modo leitura: a seleção fica (exportação e soma), as ações que gravam não. */}
             {podeEditar && (
             <>
-            <input
-              type="date"
-              value={bulkVencimento}
-              onChange={(e) => setBulkVencimento(e.target.value)}
-              className="h-7 rounded-lg border border-stone-200 px-2 text-xs"
-              title="Data do Repasse a aplicar nos selecionados"
-            />
-            <Button size="sm" variant="outline" disabled={!bulkVencimento || bulkBusy || bulkDeleteBusy}
-              onClick={() => aplicarEmMassa({ data_vencimento: bulkVencimento }, "Data do repasse aplicada")}>
-              Aplicar data do repasse
-            </Button>
-            {/* Status genérico em massa (27-jul — idem ao Financeiro) */}
+            {/* Alteração em massa (Adri, 30-out): 1º o que mudar, 2º o valor, 3º Aplicar */}
             <select
-              value={bulkStatusSel}
-              onChange={(e) => setBulkStatusSel(e.target.value)}
-              className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
-              title="Status a aplicar em todos os selecionados"
+              value={bulkCampo}
+              onChange={(e) => setBulkCampo(e.target.value as typeof bulkCampo)}
+              className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white font-medium"
+              title="O que alterar em todos os selecionados"
             >
-              <option value="">Escolher status…</option>
-              {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
-                <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
+              <option value="">Alterar…</option>
+              <option value="status">Status</option>
+              <option value="repasse">Data do repasse</option>
+              <option value="vencimento">Data de vencimento</option>
+              <option value="competencia">Competência</option>
             </select>
-            <Button size="sm" variant="outline" disabled={!bulkStatusSel || bulkBusy || bulkDeleteBusy}
-              onClick={() => {
-                const status = bulkStatusSel as StatusDL;
-                setBulkStatusSel("");
-                aplicarEmMassa(
-                  bulkVencimento ? { status, data_vencimento: bulkVencimento } : { status },
-                  `Status "${STATUS_DL_LABEL[status]}" aplicado`,
-                );
-              }}
-              title="Aplica o status escolhido em todos os selecionados de uma vez (aplica também a data do repasse, se preenchida)">
-              Aplicar status
-            </Button>
+            {bulkCampo === "status" && (
+              <select
+                value={bulkStatusSel}
+                onChange={(e) => setBulkStatusSel(e.target.value)}
+                className="h-7 rounded-lg border border-stone-200 px-2 text-xs bg-white"
+                title="Status a aplicar em todos os selecionados"
+              >
+                <option value="">Escolher status…</option>
+                {(Object.keys(STATUS_DL_LABEL) as StatusDL[]).map((s) =>
+                  <option key={s} value={s}>{STATUS_DL_LABEL[s]}</option>)}
+              </select>
+            )}
+            {bulkCampo === "repasse" && (
+              <input
+                type="date"
+                value={bulkVencimento}
+                onChange={(e) => setBulkVencimento(e.target.value)}
+                className="h-7 rounded-lg border border-stone-200 px-2 text-xs"
+                title="Data do Repasse a aplicar nos selecionados"
+              />
+            )}
+            {bulkCampo === "vencimento" && (
+              <input
+                type="date"
+                value={bulkVencDespesa}
+                onChange={(e) => setBulkVencDespesa(e.target.value)}
+                className="h-7 rounded-lg border border-stone-200 px-2 text-xs"
+                title="Data de vencimento a aplicar nos selecionados"
+              />
+            )}
+            {bulkCampo === "competencia" && (
+              <input
+                type="month"
+                value={bulkCompetencia}
+                onChange={(e) => setBulkCompetencia(e.target.value)}
+                className="h-7 rounded-lg border border-stone-200 px-2 text-xs"
+                title="Competência (mês) a aplicar nos selecionados"
+              />
+            )}
+            {bulkCampo && (
+              <Button size="sm" variant="outline"
+                disabled={bulkBusy || bulkDeleteBusy || !(
+                  (bulkCampo === "status" && bulkStatusSel)
+                  || (bulkCampo === "repasse" && bulkVencimento)
+                  || (bulkCampo === "vencimento" && bulkVencDespesa)
+                  || (bulkCampo === "competencia" && bulkCompetencia))}
+                loading={bulkBusy}
+                onClick={() => {
+                  if (bulkCampo === "status") {
+                    const status = bulkStatusSel as StatusDL;
+                    aplicarEmMassa({ status }, `Status "${STATUS_DL_LABEL[status]}" aplicado`);
+                  } else if (bulkCampo === "repasse") {
+                    aplicarEmMassa({ data_vencimento: bulkVencimento }, "Data do repasse aplicada");
+                  } else if (bulkCampo === "vencimento") {
+                    aplicarEmMassa({ data_vencimento_despesa: bulkVencDespesa }, "Vencimento aplicado");
+                  } else if (bulkCampo === "competencia") {
+                    aplicarEmMassa({ data: `${bulkCompetencia}-01` }, `Competência ${mesHumano(bulkCompetencia)} aplicada`);
+                  }
+                }}
+                title="Aplica a alteração em todos os lançamentos selecionados de uma vez">
+                Aplicar
+              </Button>
+            )}
             {/* Exclusão em lote (27-jul) */}
             <Button size="sm" variant="outline" disabled={bulkBusy || bulkDeleteBusy}
               loading={bulkDeleteBusy}
@@ -2027,7 +2080,7 @@ export function DistribuicaoPage() {
               <input type="checkbox" checked={incluirTransferencia}
                 onChange={(e) => setIncluirTransferencia(e.target.checked)}
                 className="h-4 w-4 rounded border-stone-300 accent-accent-500" />
-              Incluir transferência Cora → Inter
+              Incluir transferência {contaOrigemDL} → Inter
             </label>
           </div>
 
@@ -2035,7 +2088,7 @@ export function DistribuicaoPage() {
             <p className="font-semibold text-stone-700">O que será criado no Financeiro:</p>
             {incluirTransferencia && (
               <>
-                <p>• Saída no <b>Cora</b> de {formatCurrency(totalConsolidavel)} (Transf. Entre Contas — {papeis.transf_enviadas_conta})</p>
+                <p>• Saída no <b>{contaOrigemDL}</b> de {formatCurrency(totalConsolidavel)} (Transf. Entre Contas — {papeis.transf_enviadas_conta})</p>
                 <p>• Entrada no <b>Inter</b> de {formatCurrency(totalConsolidavel)} (Transf. Entre Contas — {papeis.transf_recebidas_conta})</p>
               </>
             )}

@@ -3,10 +3,10 @@ import { useEffect, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
-import { Landmark, Loader2, SlidersHorizontal } from "lucide-react";
+import { Landmark, Loader2, SlidersHorizontal, Users } from "lucide-react";
 import {
   obterConfigApp, obterConfigAppSeExistir, salvarConfigApp, CONFIG_RESGATES_SICREDI,
-  CONFIG_LIMITE_DV, CONFIG_FATURA_CARTAO_DIA, CONFIG_RESGATE_CONTA_ORIGEM, CONFIG_RESGATE,
+  CONFIG_LIMITE_DV, CONFIG_FATURA_CARTAO_DIA, CONFIG_RESGATE_CONTA_ORIGEM, CONFIG_RESGATE, CONFIG_DL_CONTA_ORIGEM,
 } from "@/lib/queries/configuracoes";
 import { listarContasEmpresa } from "@/lib/queries/bancos";
 import type { ContaBancariaEmpresaRow } from "@/types";
@@ -115,6 +115,8 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
           <RegrasResgates canEdit={canEdit} />
         </CardContent>
       </Card>
+      {/* Distribuição de Lucros (Adri, 30-out — migration 0069) */}
+      <ContaOrigemDL canEdit={canEdit} />
       {/* Parâmetros numéricos (RF 31-jul) — limite de DV e vencimento da fatura */}
       <Card>
         <CardHeader>
@@ -420,6 +422,54 @@ function RegrasResgates({ canEdit }: { canEdit: boolean }) {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * "Conta bancária de origem – Distribuição de Lucros" (0069): regra central —
+ * trocar aqui muda de onde saem os repasses novos, a linha provisionada do mês
+ * e os textos da tela Distribuição de Lucro.
+ */
+function ContaOrigemDL({ canEdit }: { canEdit: boolean }) {
+  const [contas, setContas] = useState<ContaBancariaEmpresaRow[]>([]);
+  const [aplicada, setAplicada] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    Promise.all([listarContasEmpresa(), obterConfigAppSeExistir(CONFIG_DL_CONTA_ORIGEM)])
+      .then(([cs, v]) => { setContas(cs); setAplicada(v !== null); })
+      .catch(() => setAplicada(false));
+  }, []);
+
+  const opcoes = [
+    { value: "", label: "CORA (como era até out/2026)" },
+    ...contas.filter((c) => c.ativa && c.tipo === "corrente")
+      .map((c) => ({ value: c.id, label: rotuloConta(c) })),
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Distribuição de Lucros</CardTitle>
+        <Users size={16} className="text-stone-400" />
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {aplicada === null && (
+          <span className="inline-flex items-center gap-2 text-sm text-stone-400">
+            <Loader2 size={16} className="animate-spin" /> Carregando…
+          </span>
+        )}
+        {aplicada === false && (
+          <p className="text-xs text-amber-700">Disponível depois que a migration 0069 for aplicada no banco.</p>
+        )}
+        {aplicada && (
+          <LinhaRegra titulo="Conta bancária de origem – Distribuição de Lucros"
+            ajuda="De onde sai a transferência do repasse para o INTER e onde nasce a linha provisionada do mês. Saindo da corrente Sicredi, a transferência é coberta pelo resgate da programação mensal (não gera resgate do Automático). Vale para os repasses novos; os já lançados ficam como estão.">
+            <ParametroSelect chave={CONFIG_DL_CONTA_ORIGEM} fallback="" canEdit={canEdit}
+              rotuloSucesso="Conta de origem da Distribuição de Lucros atualizada" opcoes={opcoes} />
+          </LinhaRegra>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

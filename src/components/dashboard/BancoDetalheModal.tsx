@@ -25,7 +25,10 @@ export function BancoDetalheModal({ banco, onClose }: Props) {
   useEffect(() => {
     if (!banco) { setRows([]); setTotal(0); return; }
     setLoading(true);
-    listarTransacoesEmpresa({ contaBancariaId: banco.conta_bancaria_id }, 1, 15)
+    // Mais recentes primeiro, pelo mesmo critério dos "Últimos Lançamentos" da
+    // Home (Adri, 30-out): ordem em que foram lançados, de qualquer competência.
+    // Antes vinham os 15 MAIS ANTIGOS (vencimento crescente).
+    listarTransacoesEmpresa({ contaBancariaId: banco.conta_bancaria_id }, 1, 30, "desc", "registro")
       .then((r) => { setRows(r.rows); setTotal(r.total); })
       .finally(() => setLoading(false));
   }, [banco]);
