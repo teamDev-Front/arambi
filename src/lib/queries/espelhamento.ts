@@ -98,7 +98,7 @@ export async function montarPreviaEspelhamento(opts: EspelhamentoOpcoes): Promis
       *,
       conta_contabil:classificacao_financeira!transacoes_empresa_conta_contabil_cod_fkey(codigo, nome),
       centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
-      conta_bancaria:contas_bancarias_empresa(id, nome, apelido)
+      conta_bancaria:contas_bancarias_empresa!conta_bancaria_id(id, nome, apelido)
     `)
     .gte("data", `${opts.anoOrigem}-01-01`)
     .lte("data", `${opts.anoOrigem}-12-31`)

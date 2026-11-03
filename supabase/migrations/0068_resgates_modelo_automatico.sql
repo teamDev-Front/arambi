@@ -48,9 +48,14 @@ end $$;
 -- ###########################################################################
 -- 1) Origem do recurso por lançamento
 -- ###########################################################################
+-- SEM foreign key de propósito: uma 2ª FK para contas_bancarias_empresa deixa
+-- ambíguo o embed "contas_bancarias_empresa(...)" do PostgREST e as telas caem
+-- com "more than one relationship was found" (aconteceu em produção, 03-nov).
 alter table public.transacoes_empresa
-  add column if not exists resgate_origem_id uuid
-    references public.contas_bancarias_empresa(id) on delete set null;
+  add column if not exists resgate_origem_id uuid;
+alter table public.transacoes_empresa
+  drop constraint if exists transacoes_empresa_resgate_origem_id_fkey;
+notify pgrst, 'reload schema';
 
 comment on column public.transacoes_empresa.resgate_origem_id is
   'Origem do recurso (0068): conta de investimento que cobre esta saída da corrente Sicredi. Vazio = conta padrão dos resgates, que gera o par automático. Outra conta = resgate feito à parte (ex.: Fundo Empresarial) e o título não gera resgate.';

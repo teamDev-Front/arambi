@@ -284,7 +284,7 @@ export async function buildCapaEmpresa(
     .select(`
       conta_bancaria_id, data, descricao, fornecedor_nome, valor, forma_pgto, tipo_despesa, ref, parcelas,
       conta_contabil_cod, centro_custo_cod, status, origem_planilha, resgate_auto_id,
-      conta_bancaria:contas_bancarias_empresa(apelido, nome, banco, ordem),
+      conta_bancaria:contas_bancarias_empresa!conta_bancaria_id(apelido, nome, banco, ordem),
       centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(nome)
     `);
   txQuery = aplicarEscopo(txQuery, args.scope, args.mesReferencia);
@@ -369,7 +369,7 @@ export async function buildCapaEmpresa(
   if (saidasTransf.length > 0) {
     const { data: entradas } = await supabase
       .from("transacoes_empresa")
-      .select("data, valor, conta_bancaria_id, conta_bancaria:contas_bancarias_empresa(apelido, nome)")
+      .select("data, valor, conta_bancaria_id, conta_bancaria:contas_bancarias_empresa!conta_bancaria_id(apelido, nome)")
       .eq("conta_contabil_cod", P.transf_recebidas_conta)
       .gt("valor", 0)
       .in("data", Array.from(new Set(saidasTransf.map((t) => t.data))));
@@ -768,7 +768,7 @@ export async function buildRelatorioContabil(
       data, valor, status, descricao, fornecedor_nome, conta_bancaria_id, centro_custo_cod, tipo_despesa,
       conta_contabil:classificacao_financeira!transacoes_empresa_conta_contabil_cod_fkey(codigo, nome, natureza),
       centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
-      conta_bancaria:contas_bancarias_empresa(nome, apelido, banco)
+      conta_bancaria:contas_bancarias_empresa!conta_bancaria_id(nome, apelido, banco)
     `);
   q = aplicarEscopo(q, args.scope, args.mesReferencia);
   const { data } = await q.order("data");

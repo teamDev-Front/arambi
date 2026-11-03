@@ -72,7 +72,7 @@ const TRANS_SELECT = `
   *,
   conta_contabil:classificacao_financeira!transacoes_empresa_conta_contabil_cod_fkey(codigo, nome),
   centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
-  conta_bancaria:contas_bancarias_empresa(id, nome, apelido)
+  conta_bancaria:contas_bancarias_empresa!conta_bancaria_id(id, nome, apelido)
 `;
 
 // Aplica os filtros da tela a qualquer query builder de transacoes_empresa.
@@ -294,7 +294,7 @@ export async function resumirEscopoTransacoes(
     .select(
       `id, valor, status, conta_bancaria_id, centro_custo_cod, tipo_despesa,
        centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
-       conta_bancaria:contas_bancarias_empresa(id, nome, apelido)`,
+       conta_bancaria:contas_bancarias_empresa!conta_bancaria_id(id, nome, apelido)`,
       { count: "exact" },
     );
 
@@ -320,7 +320,7 @@ export async function resumirEscopoTransacoes(
         .select(
           `id, valor, status, conta_bancaria_id, centro_custo_cod, tipo_despesa,
            centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
-           conta_bancaria:contas_bancarias_empresa(id, nome, apelido)`,
+           conta_bancaria:contas_bancarias_empresa!conta_bancaria_id(id, nome, apelido)`,
         )
         .in("id", lote);
       if (error) throw error;

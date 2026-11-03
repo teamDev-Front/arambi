@@ -22,7 +22,7 @@ const SELECT_RICH = `
   *,
   conta_contabil:classificacao_financeira!transacoes_empresa_conta_contabil_cod_fkey(codigo, nome),
   centro_custo:classificacao_financeira!transacoes_empresa_centro_custo_cod_fkey(codigo, nome),
-  conta_bancaria:contas_bancarias_empresa(id, nome, apelido)
+  conta_bancaria:contas_bancarias_empresa!conta_bancaria_id(id, nome, apelido)
 `;
 
 /**
