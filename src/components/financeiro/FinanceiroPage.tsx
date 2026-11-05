@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input, Select, Textarea } from "@/components/ui/Input";
-import { obterConfigApp, CONFIG_RESGATE_CONTA_ORIGEM } from "@/lib/queries/configuracoes";
+import { obterConfigApp, CONFIG_RESGATE, CONFIG_RESGATE_CONTA_ORIGEM } from "@/lib/queries/configuracoes";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { CompetenciaMultiSelect } from "@/components/ui/CompetenciaMultiSelect";
 import { ComboBox } from "@/components/ui/ComboBox";
@@ -56,6 +56,7 @@ import {
   isErroSaldoInvest,
   suportaOrigemRecurso,
   camposDaOrigem,
+  PREFIXO_ORIGEM_COBERTA,
   suportaAplicacaoAutomatica,
   origemDosCampos,
   obterOrigensPorIds,
@@ -161,8 +162,9 @@ type FormState = {
   /**
    * Origem do recurso (0068) da saída da corrente Sicredi: "" = conta padrão
    * dos resgates (gera o resgate automático), "saldo" = pago pelo saldo da
-   * própria conta (dispensa_resgate, 0049), id = conta de investimento com
-   * resgate feito à parte (não gera resgate).
+   * própria conta (dispensa_resgate, 0049), id = conta de investimento (gera o
+   * resgate naquela conta, 0070), "coberto:<id>" = já coberto por resgate lançado
+   * à parte, como o global do 1º dia útil (não gera nada).
    */
   origem_recurso: string;
   /** "Aplicar em qual conta?" (0069) — id da conta de investimento, "" = sem. */
@@ -290,6 +292,7 @@ export function FinanceiroPage() {
   const [suportaOrigem, setSuportaOrigem] = useState(false);
   const [suportaAplicacao, setSuportaAplicacao] = useState(false);
   const [contaPadraoResgateId, setContaPadraoResgateId] = useState("");
+  const [contaProgramacaoId, setContaProgramacaoId] = useState("");
   const [fornecedores, setFornecedores] = useState<FornecedorRow[]>([]);
 
   // ---- resumo dos saldos bancários no cabeçalho (RF 23-jul) ----
@@ -523,20 +526,28 @@ export function FinanceiroPage() {
     && form.conta_bancaria_id === sicrediCorrente.id
     && Number(form.valor) < 0;
 
-  // Opções da origem do recurso: a conta padrão gera o resgate automático; as
-  // outras contas de investimento = resgate feito à parte; ou o saldo da conta.
+  // Opções da origem do recurso (0070): cada conta de investimento gera o resgate
+  // nela (a padrão, ou a do avulso do dia); "já coberto" não gera nada — é o lote
+  // pago pelo resgate global do 1º dia útil; ou o saldo da própria conta.
   const opcoesOrigem = useMemo(() => {
     const nome = (b?: ContaBancariaEmpresaRow) => b?.apelido?.trim() || b?.nome || "conta padrão";
     const invest = bancos.filter((b) => b.ativa && b.tipo === "investimento");
     const padrao = invest.find((b) => b.id === contaPadraoResgateId)
       ?? bancos.find((b) => b.nome === "Cooperativa Sicredi Investimento (0913)" || b.apelido === "SICREDINVEST");
+    const outras = invest.filter((b) => b.id !== padrao?.id);
+    // Global sai da conta da programação mensal (Fundo Empresarial); sem ela
+    // configurada, qualquer outra conta pode ter coberto.
+    const daProgramacao = outras.filter((b) => b.id === contaProgramacaoId);
     return [
-      { value: "", label: `${nome(padrao)} — resgate automático (padrão)` },
-      ...invest.filter((b) => b.id !== padrao?.id)
-        .map((b) => ({ value: b.id, label: `${nome(b)} — resgate feito à parte` })),
+      { value: "", label: `${nome(padrao)} — gera o resgate (padrão)` },
+      ...outras.map((b) => ({ value: b.id, label: `${nome(b)} — gera o resgate desta conta` })),
+      ...(daProgramacao.length > 0 ? daProgramacao : outras).map((b) => ({
+        value: PREFIXO_ORIGEM_COBERTA + b.id,
+        label: `${nome(b)} — já coberto por resgate lançado (não gera)`,
+      })),
       { value: ORIGEM_SALDO_DA_CONTA, label: "Saldo da própria conta (tarifas) — sem resgate" },
     ];
-  }, [bancos, contaPadraoResgateId]);
+  }, [bancos, contaPadraoResgateId, contaProgramacaoId]);
 
   // Lookups da saída detalhada — carregados só quando a opção aparece.
   useEffect(() => {
@@ -1005,6 +1016,7 @@ export function FinanceiroPage() {
     suportaOrigemRecurso().then(setSuportaOrigem).catch(() => setSuportaOrigem(false));
     suportaAplicacaoAutomatica().then(setSuportaAplicacao).catch(() => setSuportaAplicacao(false));
     obterConfigApp(CONFIG_RESGATE_CONTA_ORIGEM, "").then(setContaPadraoResgateId).catch(() => {});
+    obterConfigApp(CONFIG_RESGATE.contaProgramacao, "").then(setContaProgramacaoId).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2633,13 +2645,18 @@ export function FinanceiroPage() {
               >
                 {opcoesOrigem.map((o) => <option key={o.value || "padrao"} value={o.value}>{o.label}</option>)}
                 {form.origem_recurso && !opcoesOrigem.some((o) => o.value === form.origem_recurso) && (
-                  <option value={form.origem_recurso}>Conta inativa — resgate feito à parte</option>
+                  <option value={form.origem_recurso}>
+                    {form.origem_recurso.startsWith(PREFIXO_ORIGEM_COBERTA)
+                      ? "Já coberto por resgate lançado (não gera)"
+                      : "Conta inativa — resgate na conta padrão"}
+                  </option>
                 )}
               </Select>
               <p className="text-[11px] text-stone-500 leading-relaxed">
-                <b>Padrão:</b> o sistema gera o resgate automático (regras em Configurações → Automações).{" "}
-                <b>Resgate feito à parte</b> (ex.: Fundo Empresarial — o resgate global do 1º dia útil ou o
-                avulso do dia): não gera resgate. <b>Saldo da própria conta:</b> para as tarifas.
+                <b>Gera o resgate:</b> o sistema lança as duas linhas, a entrada na conta corrente e a saída
+                da conta escolhida, um resgate por dia em cada conta (regras em Configurações → Automações).{" "}
+                <b>Já coberto:</b> para o que o resgate global do 1º dia útil paga, lançado à mão: não gera
+                nada. <b>Saldo da própria conta:</b> para as tarifas.
               </p>
             </div>
           )}

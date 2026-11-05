@@ -272,7 +272,8 @@ function ContaOrigemResgates({ canEdit }: { canEdit: boolean }) {
           Conta de investimento de onde sai o dinheiro de cada resgate (a linha negativa do par; a
           positiva continua na conta Sicredi). Vale para os resgates criados a partir da troca — os que
           já existem continuam na conta em que foram lançados. Lançamento com outra <b>origem do
-          recurso</b> (ex.: Fundo Empresarial, resgate feito à parte) não gera resgate.
+          recurso</b> (ex.: Fundo Empresarial) gera o resgate naquela conta; marcado como <b>já
+          coberto</b> (resgate global lançado à mão) não gera nada.
         </p>
         {carregado && !erroCarga && !migrationAplicada && (
           <p className="text-xs text-amber-700">

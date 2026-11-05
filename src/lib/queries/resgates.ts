@@ -224,7 +224,9 @@ export async function obterConferenciaSicredi(ano: string): Promise<ConferenciaS
     // Tarifas bancadas pelo saldo próprio da conta (0049): saem da comparação.
     // A Adri transferiu R$ 1.878,00 do Cora em jan/2026 — 12 × R$ 156,50 — justo
     // para cobrir essas taxas o ano todo, então elas não devem puxar resgate.
-    if (r.dispensa_resgate && valor < 0) {
+    // Com origem do recurso, a dispensa é "já coberto por resgate à parte" (0070):
+    // continua sendo saída do mês, que o resgate lançado à mão cobre.
+    if (r.dispensa_resgate && !r.resgate_origem_id && valor < 0) {
       l.pagasPeloSaldo += Math.abs(valor);
       continue;
     }
@@ -234,7 +236,7 @@ export async function obterConferenciaSicredi(ano: string): Promise<ConferenciaS
       if (r.resgate_auto_id) {
         comTitulo.add(r.resgate_auto_id);
       } else if (r.resgate_origem_id) {
-        // Resgate feito à parte (origem do recurso, 0068 — ex.: o resgate global
+        // Resgate lançado à parte (origem do recurso, 0068/0070 — ex.: o resgate global
         // do Fundo Empresarial no 1º dia útil): continua sendo saída do mês, que
         // o resgate lançado à mão cobre; não é pendência.
       } else if (ehHistoricoConferido(r)) {

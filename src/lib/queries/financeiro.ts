@@ -734,18 +734,25 @@ export async function atualizarStatusEmMassa(ids: string[], status: StatusArambu
 // Origem do recurso (0068) — de onde vem o dinheiro de uma saída da corrente
 // Sicredi. No formulário e em massa o valor é: "" = conta padrão dos resgates
 // (gera o resgate automático), "saldo" = pago pelo saldo da própria conta
-// (dispensa_resgate, 0049), ou o id de uma conta de investimento (resgate feito
-// à parte, ex.: Fundo Empresarial — não gera resgate).
+// (dispensa_resgate, 0049), o id de uma conta de investimento (gera o par naquela
+// conta, 0070 — avulso do dia pelo Fundo Empresarial) ou "coberto:<id>" (já coberto
+// por resgate lançado à parte — o global do 1º dia útil —, não gera nada).
 // ----------------------------------------------------------------------------
 export const ORIGEM_SALDO_DA_CONTA = "saldo";
+export const PREFIXO_ORIGEM_COBERTA = "coberto:";
 
 export function camposDaOrigem(origem: string): { resgate_origem_id: string | null; dispensa_resgate: boolean } {
   if (origem === ORIGEM_SALDO_DA_CONTA) return { resgate_origem_id: null, dispensa_resgate: true };
+  if (origem.startsWith(PREFIXO_ORIGEM_COBERTA)) {
+    return { resgate_origem_id: origem.slice(PREFIXO_ORIGEM_COBERTA.length), dispensa_resgate: true };
+  }
   return { resgate_origem_id: origem || null, dispensa_resgate: false };
 }
 
 export function origemDosCampos(r: { resgate_origem_id?: string | null; dispensa_resgate?: boolean | null }): string {
-  if (r.dispensa_resgate) return ORIGEM_SALDO_DA_CONTA;
+  if (r.dispensa_resgate) {
+    return r.resgate_origem_id ? PREFIXO_ORIGEM_COBERTA + r.resgate_origem_id : ORIGEM_SALDO_DA_CONTA;
+  }
   return r.resgate_origem_id ?? "";
 }
 
