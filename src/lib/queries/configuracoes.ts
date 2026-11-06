@@ -1,6 +1,6 @@
-// Queries do módulo Configurações (Admin).
-// Roda no client (browser). Escrita é protegida por RLS (somente admin —
-// policy *_admin com fn_is_admin() em classificacao_financeira).
+// Queries do módulo Configurações.
+// Roda no client (browser). Escrita é protegida por RLS: quem edita o módulo
+// (fn_pode_editar_modulo('configuracoes'), migration 0071).
 
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -245,7 +245,7 @@ export async function criarClassificacao(p: ClassificacaoFormPayload): Promise<C
     if (error.code === "23505") throw new Error(`O código "${codigo}" já existe.`);
     throw error;
   }
-  if (!data) throw new Error("Não foi possível criar — sua conta precisa ser administradora.");
+  if (!data) throw new Error("Não foi possível criar — sua conta precisa poder editar Configurações.");
   return data as ClassificacaoFinanceiraRow;
 }
 
@@ -262,7 +262,7 @@ export async function atualizarClassificacao(
     .select()
     .maybeSingle();
   if (error) throw error;
-  if (!data) throw new Error("Não foi possível atualizar — sua conta precisa ser administradora.");
+  if (!data) throw new Error("Não foi possível atualizar — sua conta precisa poder editar Configurações.");
   return data as ClassificacaoFinanceiraRow;
 }
 
@@ -301,7 +301,7 @@ export async function setAtivoClassificacao(codigo: string, ativo: boolean): Pro
     .eq("codigo", codigo)
     .select("codigo");
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Não foi possível alterar — sua conta precisa ser administradora.");
+  if (!data || data.length === 0) throw new Error("Não foi possível alterar — sua conta precisa poder editar Configurações.");
 }
 
 export interface UsoClassificacao { transacoes: number; filhos: number; total: number }
@@ -382,14 +382,14 @@ export async function atualizarStatusConfig(codigo: string, p: StatusConfigForm)
     .eq("codigo", codigo)
     .select("codigo");
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Não foi possível salvar — precisa ser admin (ou aplique a migration 0035).");
+  if (!data || data.length === 0) throw new Error("Não foi possível salvar — sua conta precisa poder editar Configurações (ou aplique a migration 0035).");
 }
 
 export async function setAtivoStatus(codigo: string, ativo: boolean): Promise<void> {
   const supabase = createClient();
   const { data, error } = await supabase.from("status_config").update({ ativo }).eq("codigo", codigo).select("codigo");
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Não foi possível alterar — precisa ser admin.");
+  if (!data || data.length === 0) throw new Error("Não foi possível alterar — sua conta precisa poder editar Configurações.");
 }
 
 export interface NovoStatusPayload {
@@ -417,7 +417,7 @@ export async function adicionarStatus(p: NovoStatusPayload): Promise<void> {
   if (error) {
     throw new Error(
       (error as { message?: string }).message ??
-        "Falha ao adicionar status (precisa ser admin e a migration 0035 aplicada).",
+        "Falha ao adicionar status (sua conta precisa poder editar Configurações, e a migration 0035 precisa estar aplicada).",
     );
   }
 }
@@ -507,6 +507,6 @@ export async function salvarConfigApp(chave: string, valor: string): Promise<voi
     .select("chave");
   if (error) throw error;
   if (!data || data.length === 0) {
-    throw new Error("Não foi possível salvar — sua conta precisa ser administradora (e a migration 0047 aplicada).");
+    throw new Error("Não foi possível salvar — sua conta precisa poder editar Configurações (e a migration 0047 aplicada).");
   }
 }

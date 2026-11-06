@@ -98,7 +98,7 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
                 onClick={alternar}
                 title={canEdit
                   ? (resgatesAtivos ? "Clique para DESLIGAR os resgates automáticos" : "Clique para LIGAR os resgates automáticos")
-                  : "Apenas administradores podem alterar"}
+                  : "Apenas quem edita Configurações pode alterar"}
                 className={`relative inline-flex h-8 w-32 items-center rounded-full transition-colors text-xs font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
                   resgatesAtivos ? "bg-emerald-600 text-white" : "bg-stone-300 text-stone-700"
                 }`}
@@ -304,7 +304,7 @@ function ContaOrigemResgates({ canEdit }: { canEdit: boolean }) {
           onChange={(e) => { if (e.target.value !== valorSelect) setPendente(e.target.value); }}
           disabled={!canEdit || !migrationAplicada || erroCarga || salvando}
           title={!canEdit
-            ? "Apenas administradores podem alterar"
+            ? "Apenas quem edita Configurações pode alterar"
             : migrationAplicada ? "Conta de investimento dos resgates automáticos novos" : "Aplique a migration 0064 no banco"}
           className="h-9 max-w-[18rem] rounded-lg border border-stone-200 bg-white px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-400 disabled:opacity-50"
         >
@@ -529,7 +529,7 @@ function ParametroSelect({
       value={valor}
       onChange={(e) => escolher(e.target.value)}
       disabled={!canEdit || salvando}
-      title={canEdit ? undefined : "Apenas administradores podem alterar"}
+      title={canEdit ? undefined : "Apenas quem edita Configurações pode alterar"}
       className="h-9 max-w-[18rem] rounded-lg border border-stone-200 bg-white px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-400 disabled:opacity-50"
     >
       {lista.map((o) => <option key={o.value || "vazio"} value={o.value}>{o.label}</option>)}
@@ -586,7 +586,7 @@ function ParametroTexto({
       onChange={(e) => setValor(e.target.value)}
       onBlur={salvar}
       onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-      title={canEdit ? "Digite e saia do campo (ou tecle Enter) para salvar" : "Apenas administradores podem alterar"}
+      title={canEdit ? "Digite e saia do campo (ou tecle Enter) para salvar" : "Apenas quem edita Configurações pode alterar"}
       className="w-72 h-9 rounded-lg border border-stone-200 px-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-400 disabled:opacity-50"
     />
   );
@@ -631,7 +631,7 @@ function ParametroChave({
       aria-checked={ligado}
       disabled={!canEdit || salvando}
       onClick={alternar}
-      title={canEdit ? undefined : "Apenas administradores podem alterar"}
+      title={canEdit ? undefined : "Apenas quem edita Configurações pode alterar"}
       className={`relative inline-flex h-7 w-28 items-center rounded-full transition-colors text-[11px] font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
         ligado ? "bg-emerald-600 text-white" : "bg-stone-300 text-stone-700"
       }`}
@@ -713,7 +713,7 @@ function ParametroNumerico({
         onChange={(e) => setValor(e.target.value)}
         onBlur={salvar}
         onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-        title={canEdit ? "Digite e saia do campo (ou tecle Enter) para salvar" : "Apenas administradores podem alterar"}
+        title={canEdit ? "Digite e saia do campo (ou tecle Enter) para salvar" : "Apenas quem edita Configurações pode alterar"}
         className={`${largura} h-9 rounded-lg border border-stone-200 px-2.5 text-sm text-right tabular-nums focus:outline-none focus:ring-1 focus:ring-accent-400 disabled:opacity-50`}
       />
       {salvando && <Loader2 size={14} className="animate-spin text-stone-400" />}

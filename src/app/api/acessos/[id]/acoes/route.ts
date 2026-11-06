@@ -2,7 +2,8 @@
 //   bloquear          → perfil inativo (corte imediato no RLS) + ban no Auth
 //   desbloquear       → reativa (também "libera" perfil sem liberação)
 //   senha_provisoria  → nova senha provisória (sem e-mail); a pessoa troca no próximo acesso
-// Só Super Admin; ninguém bloqueia nem reseta a si mesmo.
+// Módulo Acessos em edição, com as regras de delegação de permissoes.ts; ninguém
+// bloqueia nem reseta a si mesmo.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
@@ -12,6 +13,7 @@ import {
   banirNoAuth, cancelarPedidosPendentes, carregarUsuario, definirSenhaPeloAdmin, ehMigrationPendente,
   MSG_MIGRATION_PENDENTE,
 } from "@/lib/acessos/gestao";
+import { normalizarPermissoes, recusaGestao } from "@/lib/acessos/permissoes";
 import { gerarSenhaProvisoria } from "@/lib/acessos/senha";
 import type { ResultadoAcesso } from "@/lib/acessos/tipos";
 
@@ -22,7 +24,7 @@ const schema = z.object({ acao: z.enum(["bloquear", "desbloquear", "senha_provis
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function POST(req: NextRequest, ctx: Ctx) {
-  const auth = await autorizarApi({ superAdmin: true });
+  const auth = await autorizarApi({ modulos: ["acessos"], nivel: "edicao" });
   if (!auth.ok) return auth.resposta;
   const { id } = await ctx.params;
 
@@ -33,13 +35,15 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const admin = createAdminClient();
   const { data: alvo, error } = await admin
     .from("users")
-    .select("id, email, full_name, ativo, bloqueado_em")
+    .select("id, email, full_name, role, permissoes, ativo, bloqueado_em")
     .eq("id", id)
     .maybeSingle();
   if (error) {
     return NextResponse.json({ error: ehMigrationPendente(error) ? MSG_MIGRATION_PENDENTE : error.message }, { status: 500 });
   }
   if (!alvo) return NextResponse.json({ error: "Usuário não encontrado." }, { status: 404 });
+  const recusa = recusaGestao(auth.acesso, { id, role: alvo.role, permissoes: normalizarPermissoes(alvo.permissoes) });
+  if (recusa) return NextResponse.json({ error: recusa }, { status: 403 });
 
   const nome = alvo.full_name?.trim() || alvo.email;
   const log = (acaoLog: string, descricao: string, extra?: Record<string, unknown>) =>

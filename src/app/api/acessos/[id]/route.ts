@@ -1,7 +1,8 @@
 // PATCH  /api/acessos/[id] → altera dados, nível e módulos
 // DELETE /api/acessos/[id] → exclui acesso que nunca foi usado (apaga o usuário)
-// Só Super Admin. Ninguém rebaixa nem apaga a si mesmo; o banco (0058)
-// recusa deixar o sistema sem Super Admin ativo.
+// Módulo Acessos em edição, com as regras de delegação de permissoes.ts. Ninguém
+// rebaixa nem apaga a si mesmo; o banco (0058) recusa deixar o sistema sem Super
+// Admin ativo.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
@@ -9,7 +10,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { autorizarApi, registrarLog } from "@/lib/acessos/servidor";
 import { cancelarPedidosPendentes, carregarUsuario, ehMigrationPendente, MSG_MIGRATION_PENDENTE } from "@/lib/acessos/gestao";
 import {
-  NIVEL_GERAL_LABEL, nivelGeral, normalizarPermissoes, roleDasPermissoes, type MapaPermissoes,
+  NIVEL_GERAL_LABEL, nivelGeral, normalizarPermissoes, recusaConcessao, recusaGestao, roleDasPermissoes,
+  type MapaPermissoes,
 } from "@/lib/acessos/permissoes";
 import { MODULO_POR_KEY, type ModuloKey } from "@/lib/acessos/modulos";
 
@@ -47,7 +49,7 @@ function resumoMudancas(antes: MapaPermissoes, depois: MapaPermissoes): string[]
 }
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
-  const auth = await autorizarApi({ superAdmin: true });
+  const auth = await autorizarApi({ modulos: ["acessos"], nivel: "edicao" });
   if (!auth.ok) return auth.resposta;
   const { id } = await ctx.params;
 
@@ -60,9 +62,6 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   if (!b.superAdmin && Object.keys(permissoes).length === 0) {
     return NextResponse.json({ error: "Libere ao menos um módulo (ou marque Super Admin)." }, { status: 400 });
   }
-  if (id === auth.user.id && !b.superAdmin) {
-    return NextResponse.json({ error: "Você não pode tirar o seu próprio acesso de Super Admin." }, { status: 400 });
-  }
 
   const admin = createAdminClient();
   const { data: atual, error: errAtual } = await admin
@@ -71,6 +70,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: ehMigrationPendente(errAtual) ? MSG_MIGRATION_PENDENTE : errAtual.message }, { status: 500 });
   }
   if (!atual) return NextResponse.json({ error: "Usuário não encontrado." }, { status: 404 });
+
+  const antesPerm = atual.role === "admin" ? {} : normalizarPermissoes(atual.permissoes);
+  const recusa = recusaGestao(auth.acesso, { id, role: atual.role, permissoes: antesPerm })
+    ?? recusaConcessao(auth.acesso, antesPerm, permissoes, b.superAdmin);
+  if (recusa) return NextResponse.json({ error: recusa }, { status: 403 });
+  if (id === auth.user.id && !b.superAdmin) {
+    return NextResponse.json({ error: "Você não pode tirar o seu próprio acesso de Super Admin." }, { status: 400 });
+  }
 
   // Sócio (papel legado) continua sócio, salvo se virar Super Admin.
   const role = b.superAdmin ? "admin" : atual.role === "socio" ? "socio" : roleDasPermissoes(false, permissoes);
@@ -91,7 +98,6 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   // Nome também nos metadados do Auth (templates de e-mail usam {{ .Data.full_name }}).
   await admin.auth.admin.updateUserById(id, { user_metadata: { full_name: b.nome } });
 
-  const antesPerm = atual.role === "admin" ? {} : normalizarPermissoes(atual.permissoes);
   const nivelAntes = nivelGeral({ role: atual.role, permissoes: antesPerm });
   const nivelDepois = nivelGeral({ role, permissoes });
   const mudancas = resumoMudancas(antesPerm, permissoes);
@@ -110,7 +116,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
 }
 
 export async function DELETE(req: NextRequest, ctx: Ctx) {
-  const auth = await autorizarApi({ superAdmin: true });
+  const auth = await autorizarApi({ modulos: ["acessos"], nivel: "edicao" });
   if (!auth.ok) return auth.resposta;
   const { id } = await ctx.params;
   if (id === auth.user.id) {
@@ -119,11 +125,13 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
 
   const admin = createAdminClient();
   const { data: alvo, error } = await admin
-    .from("users").select("id, email, full_name, senha_definida_em").eq("id", id).maybeSingle();
+    .from("users").select("id, email, full_name, role, permissoes, senha_definida_em").eq("id", id).maybeSingle();
   if (error) {
     return NextResponse.json({ error: ehMigrationPendente(error) ? MSG_MIGRATION_PENDENTE : error.message }, { status: 500 });
   }
   if (!alvo) return NextResponse.json({ error: "Usuário não encontrado." }, { status: 404 });
+  const recusa = recusaGestao(auth.acesso, { id, role: alvo.role, permissoes: normalizarPermissoes(alvo.permissoes) });
+  if (recusa) return NextResponse.json({ error: recusa }, { status: 403 });
   // Só acesso que nunca foi usado (a pessoa não chegou a criar a senha); quem
   // já usou o sistema é BLOQUEADO — preserva o histórico de quem lançou o quê.
   if (alvo.senha_definida_em) {

@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { ListTree, Palette, Users, Zap } from "lucide-react";
-import { usePermissoes } from "@/components/acessos/PermissoesProvider";
+import { useModulo } from "@/components/acessos/PermissoesProvider";
 import { PlanoContasTab } from "./PlanoContasTab";
 import { StatusCoresTab } from "./StatusCoresTab";
 import { ColaboradoresTab } from "./ColaboradoresTab";
@@ -18,8 +18,7 @@ const ABAS: { id: Aba; label: string; icon: typeof ListTree }[] = [
 
 export function ConfiguracoesPage() {
   const [aba, setAba] = useState<Aba>("plano");
-  // Tela exclusiva do Super Admin (a página barra os demais no servidor).
-  const { superAdmin: canEdit } = usePermissoes();
+  const { podeEditar: canEdit } = useModulo("configuracoes");
 
   return (
     <div className="space-y-6">

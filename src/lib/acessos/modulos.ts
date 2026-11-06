@@ -29,11 +29,6 @@ export type ModuloKey =
   | "acessos"
   | "configuracoes";
 
-/** Módulos que nunca entram em users.permissoes — só o Super Admin acessa. */
-export type ModuloExclusivo = "acessos" | "configuracoes";
-/** Módulos que podem ser liberados na tela Acessos. */
-export type ModuloConcedivel = Exclude<ModuloKey, ModuloExclusivo>;
-
 export type GrupoModulo = "visao" | "financeiro" | "agro" | "documentos" | "sistema";
 
 export interface ModuloDef {
@@ -43,7 +38,6 @@ export interface ModuloDef {
   grupo: GrupoModulo;
   /** Uma linha explicando o que a pessoa passa a ver (tela Acessos). */
   descricao: string;
-  exclusivoSuperAdmin?: boolean;
 }
 
 /** Na ordem do menu lateral (a primeira rota liberada vira a página inicial). */
@@ -67,19 +61,23 @@ export const MODULOS: readonly ModuloDef[] = [
   { key: "recibos",         label: "Recibos & Termos",      href: "/dashboard/recibos",         grupo: "documentos", descricao: "Cadastro de recibos e termos." },
   { key: "lixeira",         label: "Lixeira",               href: "/dashboard/lixeira",         grupo: "sistema",    descricao: "Itens excluídos nos últimos 30 dias (restaurar exige edição)." },
   { key: "logs",            label: "Logs do Sistema",       href: "/dashboard/logs",            grupo: "sistema",    descricao: "Auditoria: acessos, convites, bloqueios e logins." },
-  { key: "acessos",         label: "Acessos",               href: "/dashboard/acessos",         grupo: "sistema",    descricao: "Usuários, convites, módulos e níveis.", exclusivoSuperAdmin: true },
-  { key: "configuracoes",   label: "Configurações",         href: "/dashboard/configuracoes",   grupo: "sistema",    descricao: "Plano de contas, status, colaboradores e automações.", exclusivoSuperAdmin: true },
+  { key: "acessos",         label: "Acessos",               href: "/dashboard/acessos",         grupo: "sistema",    descricao: "Usuários, módulos e senhas. Quem edita não altera Super Admin nem libera o que não tem." },
+  { key: "configuracoes",   label: "Configurações",         href: "/dashboard/configuracoes",   grupo: "sistema",    descricao: "Plano de contas, status, colaboradores e automações." },
 ];
 
 export const MODULO_POR_KEY: Readonly<Record<ModuloKey, ModuloDef>> = Object.fromEntries(
   MODULOS.map((m) => [m.key, m]),
 ) as Record<ModuloKey, ModuloDef>;
 
-export const MODULOS_CONCEDIVEIS = MODULOS.filter((m) => !m.exclusivoSuperAdmin) as readonly (ModuloDef & {
-  key: ModuloConcedivel;
-})[];
+/**
+ * Dão poder sobre o próprio sistema: só um Super Admin libera ou retira, e ficam
+ * fora de "Marcar todos" e "Marcar grupo" (quem libera marca um a um, de propósito).
+ */
+const MODULOS_SENSIVEIS: readonly ModuloKey[] = ["acessos", "configuracoes"];
 
-export const MODULOS_EXCLUSIVOS = MODULOS.filter((m) => m.exclusivoSuperAdmin);
+export function ehModuloSensivel(key: ModuloKey): boolean {
+  return MODULOS_SENSIVEIS.includes(key);
+}
 
 export const GRUPOS_MODULO: readonly { id: GrupoModulo; label: string }[] = [
   { id: "visao",      label: "Visão geral" },
@@ -89,8 +87,8 @@ export const GRUPOS_MODULO: readonly { id: GrupoModulo; label: string }[] = [
   { id: "sistema",    label: "Sistema" },
 ];
 
-export function ehModuloConcedivel(key: string): key is ModuloConcedivel {
-  return MODULOS_CONCEDIVEIS.some((m) => m.key === key);
+export function ehModulo(key: string): key is ModuloKey {
+  return MODULOS.some((m) => m.key === key);
 }
 
 /** Rotas do /dashboard que qualquer usuário ativo abre (não são módulos). */

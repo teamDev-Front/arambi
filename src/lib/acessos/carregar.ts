@@ -8,7 +8,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { UserRole } from "@/types";
-import { MODULOS_CONCEDIVEIS } from "@/lib/acessos/modulos";
+import { MODULOS, ehModuloSensivel } from "@/lib/acessos/modulos";
 import {
   normalizarPermissoes, type AcessoUsuario, type MapaPermissoes, type NivelModulo,
 } from "@/lib/acessos/permissoes";
@@ -37,8 +37,11 @@ function faltaColuna(err: { code?: string; message?: string } | null): boolean {
   return err.code === "42703" || err.code === "PGRST204" || /column .* does not exist/i.test(err.message ?? "");
 }
 
+/** Modelo antigo: nele, Acessos e Configurações continuam sendo só do admin. */
 function todosOsModulos(nivel: NivelModulo): MapaPermissoes {
-  return Object.fromEntries(MODULOS_CONCEDIVEIS.map((m) => [m.key, nivel])) as MapaPermissoes;
+  return Object.fromEntries(
+    MODULOS.filter((m) => !ehModuloSensivel(m.key)).map((m) => [m.key, nivel]),
+  ) as MapaPermissoes;
 }
 
 export function paraAcesso(linha: LinhaPerfil, legado = false): AcessoUsuario {

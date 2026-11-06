@@ -1,5 +1,6 @@
 "use client";
-// Tela Acessos (só Super Admin): quem entra no sistema, o que vê e o que altera.
+// Tela Acessos: quem entra no sistema, o que vê e o que altera. Leitura só consulta;
+// quem edita sem ser Super Admin segue as regras de delegação de permissoes.ts.
 // Sem e-mail (0059): o acesso nasce com senha provisória (mandada por WhatsApp),
 // a pessoa cria a própria no 1º acesso e "esqueci a senha" vira pedido aprovado aqui.
 // Toda escrita passa pelas rotas /api/acessos (service role + auditoria em Logs).
@@ -16,10 +17,11 @@ import { Select } from "@/components/ui/Input";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
+import { usePermissoes } from "@/components/acessos/PermissoesProvider";
 import { cn } from "@/lib/utils/cn";
 import { formatDateTime } from "@/lib/utils/format";
-import { MODULOS_CONCEDIVEIS, MODULO_POR_KEY, type ModuloConcedivel } from "@/lib/acessos/modulos";
-import { NIVEL_GERAL_LABEL, type NivelGeral } from "@/lib/acessos/permissoes";
+import { MODULOS, MODULO_POR_KEY, type ModuloKey } from "@/lib/acessos/modulos";
+import { NIVEL_GERAL_LABEL, recusaGestao, type NivelGeral } from "@/lib/acessos/permissoes";
 import {
   STATUS_ACESSO_LABEL, type AcaoAcesso, type AcessoPayload, type ListaAcessos, type PedidoSenha,
   type StatusAcesso, type UsuarioAcesso,
@@ -95,6 +97,8 @@ type ModalForm = { usuario: UsuarioAcesso | null; liberarAoSalvar?: boolean };
 export function AcessosPage() {
   const toast = useToast();
   const router = useRouter();
+  const { acesso, podeEditar } = usePermissoes();
+  const podeAlterar = podeEditar("acessos");
   const [usuarios, setUsuarios] = useState<UsuarioAcesso[]>([]);
   const [pedidos, setPedidos] = useState<PedidoSenha[]>([]);
   const [meuId, setMeuId] = useState<string | null>(null);
@@ -158,6 +162,11 @@ export function AcessosPage() {
   }), [usuarios]);
 
   const comPedido = useMemo(() => new Set(pedidos.map((p) => p.usuarioId)), [pedidos]);
+
+  function podeDecidir(p: PedidoSenha): boolean {
+    const alvo = usuarios.find((u) => u.id === p.usuarioId);
+    return !!alvo && !recusaGestao(acesso, alvo);
+  }
 
   const setores = useMemo(
     () => Array.from(new Set(usuarios.map((u) => u.setor).filter((s): s is string => !!s))).sort((a, b) => a.localeCompare(b, "pt-BR")),
@@ -340,9 +349,11 @@ export function AcessosPage() {
           <Button variant="ghost" size="sm" onClick={() => void carregar()} title="Atualizar lista">
             <RefreshCw size={14} className={cn(carregando && "animate-spin")} />
           </Button>
-          <Button onClick={() => setModal({ usuario: null })} disabled={!!erroCarga?.migration}>
-            <UserPlus size={15} /> Novo acesso
-          </Button>
+          {podeAlterar && (
+            <Button onClick={() => setModal({ usuario: null })} disabled={!!erroCarga?.migration}>
+              <UserPlus size={15} /> Novo acesso
+            </Button>
+          )}
         </div>
       </div>
 
@@ -403,7 +414,7 @@ export function AcessosPage() {
                 </div>
                 {ocupado === p.id ? (
                   <Loader2 size={16} className="animate-spin text-stone-400" />
-                ) : (
+                ) : podeDecidir(p) && (
                   <div className="flex gap-2">
                     <Button variant="ghost" size="sm" onClick={() => setConfirmacao({ tipo: "recusar", pedido: p })}>
                       <X size={14} /> Recusar
@@ -487,19 +498,19 @@ export function AcessosPage() {
                 <th className="px-4 py-3">Módulos</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Último acesso</th>
-                <th className="px-5 py-3 text-right">Ações</th>
+                {podeAlterar && <th className="px-5 py-3 text-right">Ações</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
               {carregando && usuarios.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-12 text-center text-stone-400">
+                  <td colSpan={podeAlterar ? 7 : 6} className="px-5 py-12 text-center text-stone-400">
                     <Loader2 size={18} className="mx-auto mb-2 animate-spin" /> Carregando usuários...
                   </td>
                 </tr>
               ) : filtrados.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-12 text-center text-sm text-stone-500">
+                  <td colSpan={podeAlterar ? 7 : 6} className="px-5 py-12 text-center text-sm text-stone-500">
                     {temFiltro ? "Nenhum usuário com esses filtros." : "Nenhum usuário cadastrado ainda."}
                   </td>
                 </tr>
@@ -509,6 +520,8 @@ export function AcessosPage() {
                     key={u.id}
                     u={u}
                     voce={u.id === meuId}
+                    podeAlterar={podeAlterar}
+                    recusa={recusaGestao(acesso, u)}
                     pediuSenha={comPedido.has(u.id)}
                     ocupado={ocupado === u.id}
                     onEditar={() => setModal({ usuario: u })}
@@ -569,9 +582,13 @@ export function AcessosPage() {
 // Linha da tabela
 // ---------------------------------------------------------------------------
 
-function LinhaUsuario({ u, voce, pediuSenha, ocupado, onEditar, onLiberar, onConfirmar }: {
+function LinhaUsuario({ u, voce, podeAlterar, recusa, pediuSenha, ocupado, onEditar, onLiberar, onConfirmar }: {
   u: UsuarioAcesso;
   voce: boolean;
+  /** Módulo Acessos em edição (sem isso, a coluna Ações nem aparece). */
+  podeAlterar: boolean;
+  /** Por que esta pessoa não pode ser alterada por quem está logado (null = pode). */
+  recusa: string | null;
   pediuSenha: boolean;
   ocupado: boolean;
   onEditar: () => void;
@@ -581,8 +598,8 @@ function LinhaUsuario({ u, voce, pediuSenha, ocupado, onEditar, onLiberar, onCon
   const nivel = NIVEL_PILL[u.nivel];
   const NivelIcon = nivel.icon;
   const status = STATUS_PILL[u.status];
-  const modulos = (Object.entries(u.permissoes) as [ModuloConcedivel, "leitura" | "edicao"][])
-    .sort(([a], [b]) => MODULOS_CONCEDIVEIS.findIndex((m) => m.key === a) - MODULOS_CONCEDIVEIS.findIndex((m) => m.key === b));
+  const modulos = (Object.entries(u.permissoes) as [ModuloKey, "leitura" | "edicao"][])
+    .sort(([a], [b]) => MODULOS.findIndex((m) => m.key === a) - MODULOS.findIndex((m) => m.key === b));
   const listaCompleta = modulos.map(([k, v]) => `${MODULO_POR_KEY[k].label} (${v === "edicao" ? "edição" : "leitura"})`).join("\n");
   const podeGerarSenha = !voce && (u.status === "ativo" || u.status === "primeiro_acesso" || u.status === "senha_provisoria");
 
@@ -674,10 +691,14 @@ function LinhaUsuario({ u, voce, pediuSenha, ocupado, onEditar, onLiberar, onCon
       <td className="px-4 py-3 whitespace-nowrap text-xs text-stone-500" title={u.ultimoAcesso ? formatDateTime(u.ultimoAcesso) : undefined}>
         {tempoRelativo(u.ultimoAcesso)}
       </td>
-      <td className="px-5 py-3">
+      {podeAlterar && <td className="px-5 py-3">
         <div className="flex items-center justify-end gap-0.5">
           {ocupado ? (
             <Loader2 size={15} className="mx-2 animate-spin text-stone-400" />
+          ) : recusa ? (
+            <span title={recusa} aria-label={recusa} className="p-1.5 text-stone-300">
+              <Lock size={14} />
+            </span>
           ) : (
             <>
               {u.status === "sem_liberacao" ? (
@@ -710,7 +731,7 @@ function LinhaUsuario({ u, voce, pediuSenha, ocupado, onEditar, onLiberar, onCon
             </>
           )}
         </div>
-      </td>
+      </td>}
     </tr>
   );
 }

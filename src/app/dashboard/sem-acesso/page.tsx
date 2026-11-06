@@ -27,9 +27,7 @@ export default async function Page({ searchParams }: Props) {
           {alvo ? `Você não tem acesso a ${alvo.label}` : "Você não tem acesso a esta página"}
         </h1>
         <p className="mt-2 text-center text-sm leading-relaxed text-stone-500">
-          {alvo?.exclusivoSuperAdmin
-            ? "Esta área é exclusiva do Super Admin."
-            : "Se precisar dela, peça ao administrador para liberar o módulo na tela Acessos."}
+          Se precisar dela, peça ao administrador para liberar o módulo na tela Acessos.
         </p>
 
         {liberados.length > 0 ? (

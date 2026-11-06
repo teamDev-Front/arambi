@@ -4,16 +4,15 @@
 
 import { useMemo, useState } from "react";
 import { Crown, PencilLine, Eye, Lock, Mail, Check, Info, KeyRound, RefreshCw } from "lucide-react";
+import { useAcesso } from "@/components/acessos/PermissoesProvider";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useUnsavedGuard } from "@/lib/hooks/useUnsavedGuard";
 import { cn } from "@/lib/utils/cn";
-import {
-  GRUPOS_MODULO, MODULOS_CONCEDIVEIS, MODULOS_EXCLUSIVOS, type ModuloConcedivel,
-} from "@/lib/acessos/modulos";
-import type { MapaPermissoes, NivelModulo } from "@/lib/acessos/permissoes";
+import { GRUPOS_MODULO, MODULOS, ehModuloSensivel, type ModuloKey } from "@/lib/acessos/modulos";
+import { ehSuperAdmin, tetoDeConcessao, type MapaPermissoes, type NivelModulo } from "@/lib/acessos/permissoes";
 import { REGRAS_SENHA, gerarSenhaProvisoria, senhaValida } from "@/lib/acessos/senha";
 import type { AcessoPayload, UsuarioAcesso } from "@/lib/acessos/tipos";
 
@@ -83,6 +82,12 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
   const [tentou, setTentou] = useState(false);
   const guard = useUnsavedGuard(true, form, onClose);
   const novo = !usuario;
+  // Quem libera: o Super Admin libera tudo; os demais, só o que também têm.
+  const ator = useAcesso();
+  const atorSuperAdmin = ehSuperAdmin(ator);
+  const teto = (k: ModuloKey) => tetoDeConcessao(ator, k);
+  const limitar = (k: ModuloKey, nivel: NivelModulo): NivelModulo => (teto(k) === "leitura" ? "leitura" : nivel);
+  const niveisDisponiveis = NIVEIS.filter((n) => atorSuperAdmin || n.id !== "super_admin");
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -106,32 +111,36 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
     setForm((f) => {
       // Leitura → Edição: o que estava marcado passa a ser edição.
       const modulos: MapaPermissoes = {};
-      for (const k of Object.keys(f.modulos) as ModuloConcedivel[]) {
-        modulos[k] = nivel === "edicao" ? (f.nivel === "edicao" ? f.modulos[k]! : "edicao") : "leitura";
+      for (const k of Object.keys(f.modulos) as ModuloKey[]) {
+        // Módulo fora do alcance de quem libera fica como está.
+        if (!teto(k)) { modulos[k] = f.modulos[k]; continue; }
+        modulos[k] = limitar(k, nivel === "edicao" ? (f.nivel === "edicao" ? f.modulos[k]! : "edicao") : "leitura");
       }
       return { ...f, nivel, modulos };
     });
   }
 
-  function alternarModulo(k: ModuloConcedivel) {
+  function alternarModulo(k: ModuloKey) {
     setForm((f) => {
       const modulos = { ...f.modulos };
       if (modulos[k]) delete modulos[k];
-      else modulos[k] = f.nivel === "edicao" ? "edicao" : "leitura";
+      else modulos[k] = limitar(k, f.nivel === "edicao" ? "edicao" : "leitura");
       return { ...f, modulos };
     });
   }
 
-  function nivelDoModulo(k: ModuloConcedivel, v: NivelModulo) {
+  function nivelDoModulo(k: ModuloKey, v: NivelModulo) {
     setForm((f) => ({ ...f, modulos: { ...f.modulos, [k]: v } }));
   }
 
-  function marcarGrupo(keys: ModuloConcedivel[], marcar: boolean) {
+  function marcarGrupo(keys: ModuloKey[], marcar: boolean) {
     setForm((f) => {
       const modulos = { ...f.modulos };
       for (const k of keys) {
-        if (marcar) modulos[k] = modulos[k] ?? (f.nivel === "edicao" ? "edicao" : "leitura");
-        else delete modulos[k];
+        if (!teto(k)) continue;
+        // Desmarcar tira tudo; marcar em lote nunca inclui Acessos e Configurações.
+        if (!marcar) delete modulos[k];
+        else if (!ehModuloSensivel(k)) modulos[k] = modulos[k] ?? limitar(k, f.nivel === "edicao" ? "edicao" : "leitura");
       }
       return { ...f, modulos };
     });
@@ -143,8 +152,8 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
     const superAdmin = form.nivel === "super_admin";
     const permissoes: MapaPermissoes = {};
     if (!superAdmin) {
-      for (const [k, v] of Object.entries(form.modulos) as [ModuloConcedivel, NivelModulo][]) {
-        permissoes[k] = form.nivel === "leitura" ? "leitura" : v;
+      for (const [k, v] of Object.entries(form.modulos) as [ModuloKey, NivelModulo][]) {
+        permissoes[k] = form.nivel === "leitura" && teto(k) ? "leitura" : v;
       }
     }
     onSalvar({
@@ -158,7 +167,7 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
     });
   }
 
-  const todosKeys = MODULOS_CONCEDIVEIS.map((m) => m.key);
+  const todosKeys = MODULOS.map((m) => m.key);
 
   return (
     <Modal
@@ -220,8 +229,8 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
         {/* 2. Nível */}
         <section className="space-y-3">
           <TituloSecao numero={2} titulo="Tipo de acesso" />
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {NIVEIS.map(({ id, titulo, texto, icon: Icon, cor, corAtivo }) => {
+          <div className={cn("grid grid-cols-1 gap-3", niveisDisponiveis.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+            {niveisDisponiveis.map(({ id, titulo, texto, icon: Icon, cor, corAtivo }) => {
               const ativo = form.nivel === id;
               const travado = ehVoceMesmo && id !== "super_admin";
               return (
@@ -288,32 +297,41 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
               )}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {GRUPOS_MODULO.map((g) => {
-                  const mods = MODULOS_CONCEDIVEIS.filter((m) => m.grupo === g.id);
+                  const mods = MODULOS.filter((m) => m.grupo === g.id);
                   if (mods.length === 0) return null;
                   const keys = mods.map((m) => m.key);
-                  const todosMarcados = keys.every((k) => form.modulos[k]);
+                  const marcaveis = keys.filter((k) => teto(k) && !ehModuloSensivel(k));
+                  const todosMarcados = marcaveis.every((k) => form.modulos[k]);
                   return (
                     <div key={g.id} className="rounded-xl border border-stone-200 overflow-hidden">
                       <div className="flex items-center justify-between bg-stone-50 px-4 py-2 border-b border-stone-100">
                         <span className="text-[11px] font-semibold uppercase tracking-wide text-stone-500">{g.label}</span>
-                        <button
-                          type="button"
-                          className="text-[11px] font-medium text-accent-700 hover:underline"
-                          onClick={() => marcarGrupo(keys, !todosMarcados)}
-                        >
-                          {todosMarcados ? "Desmarcar" : "Marcar"} grupo
-                        </button>
+                        {marcaveis.length > 0 && (
+                          <button
+                            type="button"
+                            className="text-[11px] font-medium text-accent-700 hover:underline"
+                            onClick={() => marcarGrupo(keys, !todosMarcados)}
+                          >
+                            {todosMarcados ? "Desmarcar" : "Marcar"} grupo
+                          </button>
+                        )}
                       </div>
                       <ul className="divide-y divide-stone-100">
                         {mods.map((m) => {
                           const nivelMod = form.modulos[m.key];
                           const marcado = !!nivelMod;
+                          const tetoMod = teto(m.key);
                           return (
-                            <li key={m.key} className={cn("flex items-center gap-3 px-4 py-2.5 transition", marcado && "bg-white")}>
-                              <label className="flex flex-1 min-w-0 items-start gap-3 cursor-pointer">
+                            <li
+                              key={m.key}
+                              title={tetoMod ? undefined : "Só um Super Admin pode liberar ou retirar este módulo."}
+                              className={cn("flex items-center gap-3 px-4 py-2.5 transition", marcado && "bg-white", !tetoMod && "opacity-50")}
+                            >
+                              <label className={cn("flex flex-1 min-w-0 items-start gap-3", tetoMod ? "cursor-pointer" : "cursor-not-allowed")}>
                                 <input
                                   type="checkbox"
                                   checked={marcado}
+                                  disabled={!tetoMod}
                                   onChange={() => alternarModulo(m.key)}
                                   className="mt-0.5 h-4 w-4 shrink-0 rounded border-stone-300 accent-[#a67c20]"
                                 />
@@ -325,7 +343,7 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
                                 </span>
                               </label>
                               {marcado && form.nivel === "edicao" && (
-                                <ChaveNivel valor={nivelMod!} onChange={(v) => nivelDoModulo(m.key, v)} />
+                                <ChaveNivel valor={nivelMod!} teto={tetoMod} onChange={(v) => nivelDoModulo(m.key, v)} />
                               )}
                               {marcado && form.nivel === "leitura" && (
                                 <span className="shrink-0 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700">
@@ -343,10 +361,9 @@ export function AcessoFormModal({ usuario, ehVoceMesmo, setoresExistentes, salva
 
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-stone-200 px-4 py-2.5 text-xs text-stone-500">
                 <Lock size={13} className="shrink-0" />
-                Exclusivos do Super Admin:
-                {MODULOS_EXCLUSIVOS.map((m) => (
-                  <span key={m.key} className="rounded-full bg-stone-100 px-2 py-0.5 font-medium text-stone-600">{m.label}</span>
-                ))}
+                {atorSuperAdmin
+                  ? "Acessos e Configurações não entram em “Marcar todos” nem em “Marcar grupo”: marque um a um."
+                  : "Você só libera módulos que também tem, até o seu nível. Acessos e Configurações só um Super Admin libera."}
               </div>
               {tentou && erros.modulos && <p className="text-xs text-red-600">{erros.modulos}</p>}
             </>
@@ -422,7 +439,12 @@ function TituloSecao({ numero, titulo }: { numero: number; titulo: string }) {
   );
 }
 
-function ChaveNivel({ valor, onChange }: { valor: NivelModulo; onChange: (v: NivelModulo) => void }) {
+function ChaveNivel({ valor, teto, onChange }: {
+  valor: NivelModulo;
+  /** Até onde quem libera pode chegar: null trava a chave. */
+  teto: NivelModulo | null;
+  onChange: (v: NivelModulo) => void;
+}) {
   const opcoes: { v: NivelModulo; label: string }[] = [
     { v: "edicao", label: "Edição" },
     { v: "leitura", label: "Leitura" },
@@ -435,12 +457,13 @@ function ChaveNivel({ valor, onChange }: { valor: NivelModulo; onChange: (v: Niv
           type="button"
           role="radio"
           aria-checked={valor === o.v}
+          disabled={!teto || (teto === "leitura" && o.v === "edicao")}
           onClick={() => onChange(o.v)}
           className={cn(
-            "rounded-md px-2 py-0.5 text-[11px] font-medium transition",
+            "rounded-md px-2 py-0.5 text-[11px] font-medium transition disabled:cursor-not-allowed",
             valor === o.v
               ? o.v === "edicao" ? "bg-emerald-600 text-white shadow-sm" : "bg-sky-600 text-white shadow-sm"
-              : "text-stone-500 hover:text-stone-700",
+              : "text-stone-500 hover:text-stone-700 disabled:opacity-40 disabled:hover:text-stone-500",
           )}
         >
           {o.label}

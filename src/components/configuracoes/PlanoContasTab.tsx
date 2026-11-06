@@ -263,7 +263,7 @@ export function PlanoContasTab({ canEdit }: { canEdit: boolean }) {
               className="h-3.5 w-3.5 rounded border-stone-300 accent-accent-500" />
             Mostrar inativas
           </label>
-          <Button size="sm" onClick={openNew} disabled={!canEdit} title={canEdit ? undefined : "Apenas administradores"}>
+          <Button size="sm" onClick={openNew} disabled={!canEdit} title={canEdit ? undefined : "Apenas quem edita Configurações pode alterar"}>
             <Plus size={14} /> Nova classificação
           </Button>
         </div>

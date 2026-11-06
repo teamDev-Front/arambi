@@ -138,7 +138,7 @@ export function StatusCoresTab({ canEdit }: { canEdit: boolean }) {
           </p>
         </div>
         <div className="ml-auto">
-          <Button size="sm" onClick={openNew} disabled={!canEdit || tabelaAusente} title={tabelaAusente ? "Aplique a migration 0035" : canEdit ? undefined : "Apenas administradores"}>
+          <Button size="sm" onClick={openNew} disabled={!canEdit || tabelaAusente} title={tabelaAusente ? "Aplique a migration 0035" : canEdit ? undefined : "Apenas quem edita Configurações pode alterar"}>
             <Plus size={14} /> Novo status
           </Button>
         </div>

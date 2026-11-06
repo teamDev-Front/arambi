@@ -1,6 +1,7 @@
 // GET  /api/acessos  → usuários (status, módulos, último acesso) + pedidos de nova senha
 // POST /api/acessos  → cria o acesso com SENHA PROVISÓRIA (sem e-mail)
-// Só Super Admin. Escrita via service role (o RLS da 0058 não deixa o client
+// Módulo Acessos: leitura consulta, edição altera (com as regras de delegação de
+// permissoes.ts). Escrita via service role (o RLS da 0058 não deixa o client
 // alterar papel/módulos).
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -11,7 +12,9 @@ import {
   COLUNAS_PERFIL, MSG_MIGRATION_PENDENTE, carregarUsuario, ehMigrationPendente,
   listarPedidosPendentes, mapaAuth, montarUsuario, traduzirErroSenha, type PerfilRow,
 } from "@/lib/acessos/gestao";
-import { NIVEL_GERAL_LABEL, nivelGeral, normalizarPermissoes, roleDasPermissoes } from "@/lib/acessos/permissoes";
+import {
+  NIVEL_GERAL_LABEL, nivelGeral, normalizarPermissoes, recusaConcessao, roleDasPermissoes,
+} from "@/lib/acessos/permissoes";
 import { MODULO_POR_KEY, type ModuloKey } from "@/lib/acessos/modulos";
 import { senhaValida } from "@/lib/acessos/senha";
 import type { ListaAcessos, ResultadoAcesso } from "@/lib/acessos/tipos";
@@ -33,7 +36,7 @@ const criarSchema = z.object({
 const pendente = () => NextResponse.json({ error: MSG_MIGRATION_PENDENTE, codigo: "migration_pendente" }, { status: 424 });
 
 export async function GET() {
-  const auth = await autorizarApi({ superAdmin: true });
+  const auth = await autorizarApi({ modulos: ["acessos"] });
   if (!auth.ok) return auth.resposta;
 
   const admin = createAdminClient();
@@ -63,7 +66,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await autorizarApi({ superAdmin: true });
+  const auth = await autorizarApi({ modulos: ["acessos"], nivel: "edicao" });
   if (!auth.ok) return auth.resposta;
 
   const parsed = criarSchema.safeParse(await req.json().catch(() => null));
@@ -75,6 +78,8 @@ export async function POST(req: NextRequest) {
   if (!b.superAdmin && Object.keys(permissoes).length === 0) {
     return NextResponse.json({ error: "Libere ao menos um módulo (ou marque Super Admin)." }, { status: 400 });
   }
+  const recusa = recusaConcessao(auth.acesso, {}, permissoes, b.superAdmin);
+  if (recusa) return NextResponse.json({ error: recusa }, { status: 403 });
 
   const admin = createAdminClient();
   const { data: existente, error: errExiste } = await admin

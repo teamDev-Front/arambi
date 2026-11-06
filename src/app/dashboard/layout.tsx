@@ -3,16 +3,29 @@ import { Header } from "@/components/layout/Header";
 import { ToastProvider } from "@/components/ui/Toast";
 import { PermissoesProvider } from "@/components/acessos/PermissoesProvider";
 import { obterSessaoAcesso } from "@/lib/acessos/servidor";
-import { NIVEL_GERAL_LABEL, ehSuperAdmin } from "@/lib/acessos/permissoes";
+import {
+  NIVEL_GERAL_LABEL, ehSuperAdmin, normalizarPermissoes, podeEditar, recusaGestao, type AcessoUsuario,
+} from "@/lib/acessos/permissoes";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-/** Pedidos de nova senha esperando o Super Admin (contador no menu). */
-async function contarPedidosSenha(): Promise<number> {
-  const { count, error } = await createAdminClient()
+/** Pedidos de nova senha que esta pessoa pode decidir (contador no menu). */
+async function contarPedidosSenha(acesso: AcessoUsuario): Promise<number> {
+  const admin = createAdminClient();
+  const { data: pedidos, error } = await admin
     .from("solicitacoes_senha")
-    .select("id", { count: "exact", head: true })
+    .select("user_id")
     .eq("status", "pendente");
-  return error ? 0 : count ?? 0;
+  if (error || !pedidos?.length) return 0;
+  if (ehSuperAdmin(acesso)) return pedidos.length;
+
+  const { data: perfis } = await admin
+    .from("users")
+    .select("id, role, permissoes")
+    .in("id", pedidos.map((p) => p.user_id));
+  const decidiveis = new Set((perfis ?? [])
+    .filter((p) => !recusaGestao(acesso, { id: p.id, role: p.role, permissoes: normalizarPermissoes(p.permissoes) }))
+    .map((p) => p.id));
+  return pedidos.filter((p) => decidiveis.has(p.user_id)).length;
 }
 
 // O layout só monta a casca com o perfil do usuário — ele não re-renderiza na
@@ -24,7 +37,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const userName = acesso?.nome ?? sessao?.user.email?.split("@")[0] ?? "Usuário";
   // Sob o nome: o cargo. Nível (leitura/edição) não é exibido para a pessoa.
   const userRole = acesso?.cargo || (ehSuperAdmin(acesso) ? NIVEL_GERAL_LABEL.super_admin : "");
-  const pedidosSenha = ehSuperAdmin(acesso) ? await contarPedidosSenha() : 0;
+  const pedidosSenha = acesso && podeEditar(acesso, "acessos") ? await contarPedidosSenha(acesso) : 0;
 
   return (
     <ToastProvider>

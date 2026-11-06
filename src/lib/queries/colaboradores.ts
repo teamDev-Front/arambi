@@ -50,7 +50,7 @@ export async function criarColaborador(nome: string, cpf: string): Promise<Colab
     if (error.code === "23505") throw new Error("Este CPF já está cadastrado.");
     throw error;
   }
-  if (!data) throw new Error("Não foi possível cadastrar — precisa ser admin.");
+  if (!data) throw new Error("Não foi possível cadastrar — sua conta precisa poder editar Configurações.");
   return data as ColaboradorRow;
 }
 
@@ -62,7 +62,7 @@ export async function atualizarColaborador(id: string, p: { nome: string }): Pro
     .eq("id", id)
     .select("id");
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Não foi possível salvar — precisa ser admin.");
+  if (!data || data.length === 0) throw new Error("Não foi possível salvar — sua conta precisa poder editar Configurações.");
 }
 
 /** Aprova solicitação pendente (plano B do portal). */
@@ -74,7 +74,7 @@ export async function aprovarColaborador(id: string): Promise<void> {
     .eq("id", id)
     .select("id");
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Não foi possível aprovar — precisa ser admin.");
+  if (!data || data.length === 0) throw new Error("Não foi possível aprovar — sua conta precisa poder editar Configurações.");
 }
 
 /** Desativa (bloqueia acesso) SEM apagar histórico. */
@@ -86,7 +86,7 @@ export async function desativarColaborador(id: string): Promise<void> {
     .eq("id", id)
     .select("id");
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Não foi possível desativar — precisa ser admin.");
+  if (!data || data.length === 0) throw new Error("Não foi possível desativar — sua conta precisa poder editar Configurações.");
 }
 
 /** Reativa um colaborador desativado. */
@@ -98,7 +98,7 @@ export async function reativarColaborador(id: string): Promise<void> {
     .eq("id", id)
     .select("id");
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Não foi possível reativar — precisa ser admin.");
+  if (!data || data.length === 0) throw new Error("Não foi possível reativar — sua conta precisa poder editar Configurações.");
 }
 
 /** Recusa e remove uma solicitação pendente (nunca teve histórico). */
@@ -111,5 +111,5 @@ export async function recusarSolicitacao(id: string): Promise<void> {
     .eq("status", "pendente")
     .select("id");
   if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Não foi possível recusar — precisa ser admin.");
+  if (!data || data.length === 0) throw new Error("Não foi possível recusar — sua conta precisa poder editar Configurações.");
 }

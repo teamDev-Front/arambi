@@ -14,7 +14,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { carregarAcesso } from "@/lib/acessos/carregar";
 import type { ModuloKey } from "@/lib/acessos/modulos";
 import {
-  ehSuperAdmin, podeEditar, podeVer, rotaInicial,
+  podeEditar, podeVer, rotaInicial,
   type AcessoUsuario, type NivelModulo,
 } from "@/lib/acessos/permissoes";
 import type { LogTipo, Json } from "@/types";
@@ -58,13 +58,6 @@ export async function exigirModulo(modulo: ModuloKey): Promise<AcessoUsuario> {
   return acesso;
 }
 
-/** Páginas exclusivas (Acessos, Configurações). */
-export async function exigirSuperAdmin(modulo: ModuloKey): Promise<AcessoUsuario> {
-  const acesso = await exigirSessaoAtiva();
-  if (!ehSuperAdmin(acesso)) redirect(`/dashboard/sem-acesso?modulo=${modulo}`);
-  return acesso;
-}
-
 /** Páginas livres para qualquer usuário ativo (Meu Perfil, Sem acesso). */
 export async function exigirUsuarioAtivo(): Promise<AcessoUsuario> {
   return exigirSessaoAtiva();
@@ -83,7 +76,6 @@ interface RegraApi {
   modulos?: ModuloKey[];
   /** Default "leitura" (ver/exportar). */
   nivel?: NivelModulo;
-  superAdmin?: boolean;
 }
 
 function negar(status: number, error: string): AutorizacaoApi {
@@ -96,7 +88,6 @@ export async function autorizarApi(regra: RegraApi = {}): Promise<AutorizacaoApi
   const { user, acesso, supabase } = s;
   if (!acesso || !acesso.ativo) return negar(403, "Acesso bloqueado. Fale com o administrador.");
   if (acesso.trocarSenha) return negar(403, "Crie a sua nova senha antes de continuar.");
-  if (regra.superAdmin && !ehSuperAdmin(acesso)) return negar(403, "Apenas o Super Admin pode fazer isso.");
   if (regra.modulos?.length) {
     const nivel = regra.nivel ?? "leitura";
     const permitido = regra.modulos.some((m) => (nivel === "edicao" ? podeEditar(acesso, m) : podeVer(acesso, m)));

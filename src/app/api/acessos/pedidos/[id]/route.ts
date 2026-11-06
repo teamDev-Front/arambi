@@ -1,6 +1,7 @@
 // POST /api/acessos/pedidos/[id]  { decisao: "aprovar" | "recusar" }
 // Pedido de nova senha feito na tela de login. Aprovar = a senha que a pessoa
-// escolheu passa a valer na hora (Admin API, sem e-mail). Só Super Admin.
+// escolheu passa a valer na hora (Admin API, sem e-mail). Módulo Acessos em edição,
+// com as regras de delegação: aprovar o pedido de um Super Admin daria a conta dele.
 // A senha pedida fica cifrada até aqui e é apagada em qualquer desfecho.
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -11,6 +12,7 @@ import {
   PRAZO_PEDIDO_DIAS, carregarUsuario, definirSenhaPeloAdmin, ehMigrationPendente, MSG_MIGRATION_PENDENTE,
 } from "@/lib/acessos/gestao";
 import { decifrar } from "@/lib/acessos/cifra";
+import { ehSuperAdmin, normalizarPermissoes, recusaGestao } from "@/lib/acessos/permissoes";
 import type { SolicitacaoSenhaRow } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +22,7 @@ const schema = z.object({ decisao: z.enum(["aprovar", "recusar"]) });
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function POST(req: NextRequest, ctx: Ctx) {
-  const auth = await autorizarApi({ superAdmin: true });
+  const auth = await autorizarApi({ modulos: ["acessos"], nivel: "edicao" });
   if (!auth.ok) return auth.resposta;
   const { id } = await ctx.params;
 
@@ -40,8 +42,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   const { data: alvo } = await admin
-    .from("users").select("id, email, full_name, ativo, senha_definida_em").eq("id", pedido.user_id).maybeSingle();
+    .from("users").select("id, email, full_name, role, permissoes, ativo, senha_definida_em").eq("id", pedido.user_id).maybeSingle();
   const nome = alvo?.full_name?.trim() || alvo?.email || "—";
+
+  const recusa = alvo
+    ? recusaGestao(auth.acesso, { id: alvo.id, role: alvo.role, permissoes: normalizarPermissoes(alvo.permissoes) })
+    : ehSuperAdmin(auth.acesso) ? null : "Só um Super Admin pode decidir este pedido.";
+  if (recusa) return NextResponse.json({ error: recusa }, { status: 403 });
 
   const fechar = (status: SolicitacaoSenhaRow["status"], motivo?: string) =>
     admin.from("solicitacoes_senha").update({
