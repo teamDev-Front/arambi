@@ -1479,11 +1479,20 @@ export function FinanceiroPage() {
     setBulkBusy(true);
     try {
       const r = await aplicarCampoEmMassa(ids, campo, valor);
+      const um = r.automaticos === 1;
+      const tipos = r.tiposAutomaticos.join(", ");
       const extra = r.automaticos > 0
-        ? ` ${r.automaticos} lançamento${r.automaticos === 1 ? "" : "s"} automático${r.automaticos === 1 ? "" : "s"} (resgate, DL, venda) ficou como estava — o sistema cuida dele${r.automaticos === 1 ? "" : "s"}.`
+        ? ` ${r.automaticos} lançamento${um ? "" : "s"} automático${um ? "" : "s"} (${tipos}) ${um ? "ficou como estava" : "ficaram como estavam"} — o sistema cuida dele${um ? "" : "s"}.`
         : "";
       if (r.alterados === 0) {
-        toast.info("Nada a alterar", `Os selecionados já estavam com ${rotulo}.${extra}`);
+        // Só diz "já estavam" quando algum selecionado de fato já tinha o valor —
+        // antes dizia isso mesmo quando TODOS eram automáticos (Adri, 24-nov).
+        const msg = r.jaIguais > 0
+          ? `Os selecionados já estavam com ${rotulo}.${extra}`
+          : r.automaticos > 0
+            ? `${um ? "O selecionado é um lançamento automático" : "Os selecionados são lançamentos automáticos"} (${tipos}) — o sistema cuida ${um ? "dele" : "deles"}, então não ${um ? "muda" : "mudam"} em lote.`
+            : "Nenhum lançamento foi alterado — confira se você tem permissão para editá-los.";
+        toast.info("Nada a alterar", msg);
       } else {
         const resumo = `${r.alterados} lançamento${r.alterados === 1 ? "" : "s"} com ${rotulo}.${extra}`;
         toast.desfazer(campo === "data" ? "Vencimento aplicado" : "Banco aplicado", resumo, async () => {

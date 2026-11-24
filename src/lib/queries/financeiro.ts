@@ -857,7 +857,8 @@ export async function restaurarOrigens(anteriores: OrigemAnterior[]): Promise<vo
 // Banco / vencimento em massa (Adri, 30-out) — "Alterar…" da barra dos
 // selecionados. Linhas que o sistema mantém sozinho (resgates e espelhos, DV,
 // DL, vendas) ficam de fora: a automação que as criou reescreveria o banco ou a
-// data, e trocar o banco de um espelho quebraria o par.
+// data, e trocar o banco de um espelho quebraria o par. Exceção (24-nov): o
+// BANCO da linha de saldo DV — ver automaticaBloqueiaCampo.
 // ----------------------------------------------------------------------------
 const PREFIXOS_AUTOMATICOS = ["auto:", "dv_auto", "dl_auto", "dl_repasse", "venda_auto", "venda_taxa_auto"];
 
@@ -865,7 +866,26 @@ export function ehLinhaAutomatica(origem: string | null | undefined): boolean {
   return !!origem && PREFIXOS_AUTOMATICOS.some((p) => origem.startsWith(p));
 }
 
+/** Nome da automação dona da linha, para o aviso dizer o que ficou de fora. */
+function tipoDaAutomatica(origem: string): string {
+  if (origem.startsWith("dv_auto")) return "saldo DV";
+  if (origem.startsWith("dl_")) return "DL";
+  if (origem.startsWith("venda_")) return "venda";
+  return "resgate";
+}
+
 export type CampoEmMassa = "conta_bancaria_id" | "data";
+
+/**
+ * A linha de saldo DV pode trocar de BANCO em lote: fn_dv_sync_linha só
+ * reescreve valor e observação (0054/0055), e a edição individual já permitia.
+ * O vencimento continua fora: a etiqueta dv_auto:<mês> amarra a linha ao mês.
+ */
+function automaticaBloqueiaCampo(origem: string | null | undefined, campo: CampoEmMassa): boolean {
+  if (!ehLinhaAutomatica(origem)) return false;
+  if (campo === "conta_bancaria_id" && origem!.startsWith("dv_auto")) return false;
+  return true;
+}
 
 export interface CampoAnterior {
   id: string;
@@ -876,6 +896,10 @@ export interface ResultadoCampoEmMassa {
   alterados: number;
   /** Selecionados que o sistema mantém sozinho — ficaram como estavam. */
   automaticos: number;
+  /** Quais automações eram essas ("resgate", "DL", "venda", "saldo DV"). */
+  tiposAutomaticos: string[];
+  /** Editáveis que já tinham o valor pedido. */
+  jaIguais: number;
   /** Valor de cada alterado ANTES — o que o "Desfazer" restaura. */
   anteriores: CampoAnterior[];
 }
@@ -886,7 +910,7 @@ export async function aplicarCampoEmMassa(
   campo: CampoEmMassa,
   valor: string,
 ): Promise<ResultadoCampoEmMassa> {
-  if (ids.length === 0) return { alterados: 0, automaticos: 0, anteriores: [] };
+  if (ids.length === 0) return { alterados: 0, automaticos: 0, tiposAutomaticos: [], jaIguais: 0, anteriores: [] };
   const supabase = createClient();
   const atuais = (await emLotes(ids, async (lote) => {
     const { data, error } = await supabase
@@ -897,7 +921,12 @@ export async function aplicarCampoEmMassa(
     return (data ?? []) as unknown as Array<Record<string, string | null>>;
   })).flat();
 
-  const editaveis = atuais.filter((r) => !ehLinhaAutomatica(r.origem_planilha));
+  const editaveis = atuais.filter((r) => !automaticaBloqueiaCampo(r.origem_planilha, campo));
+  const tiposAutomaticos = Array.from(new Set(
+    atuais
+      .filter((r) => automaticaBloqueiaCampo(r.origem_planilha, campo))
+      .map((r) => tipoDaAutomatica(r.origem_planilha as string)),
+  ));
   const mudam = editaveis.filter((r) => r[campo] !== valor);
   const anteriores = mudam.map((r) => ({ id: r.id as string, valor: r[campo] }));
 
@@ -913,6 +942,8 @@ export async function aplicarCampoEmMassa(
   return {
     alterados: partes.reduce((s, x) => s + x, 0),
     automaticos: atuais.length - editaveis.length,
+    tiposAutomaticos,
+    jaIguais: editaveis.length - mudam.length,
     anteriores,
   };
 }
