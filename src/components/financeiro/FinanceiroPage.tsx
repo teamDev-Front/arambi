@@ -1133,11 +1133,6 @@ export function FinanceiroPage() {
         data_vencimento_despesa: form.data,
         status: dlStatus,
         observacao: form.observacao || null,
-        // Aplicação automática (0069): só na saída da corrente em Aplicações
-        // Financeiras; fora disso o destino é limpo (a entrada some junto).
-        ...(suportaAplicacao
-          ? { aplicacao_destino_id: ehAplicacaoCorrente && form.aplicar_em ? form.aplicar_em : null }
-          : {}),
         origem_planilha: null,
         created_by: null,
       };
@@ -1195,6 +1190,13 @@ export function FinanceiroPage() {
         ...(suportaOrigem
           ? camposDaOrigem(form.origem_recurso)
           : { dispensa_resgate: form.origem_recurso === ORIGEM_SALDO_DA_CONTA }),
+        // Aplicação automática (0069): só na saída da corrente em Aplicações
+        // Financeiras; fora disso o destino é limpo (a entrada some junto).
+        // Até 24-nov isto estava no payload do detalhado (transacoes_socio), por
+        // engano: o destino nunca era gravado aqui (Adri, 24-nov).
+        ...(suportaAplicacao
+          ? { aplicacao_destino_id: ehAplicacaoCorrente && form.aplicar_em ? form.aplicar_em : null }
+          : {}),
         origem_planilha: null,
         created_by: null,
       };
