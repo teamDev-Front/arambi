@@ -7,6 +7,7 @@ import { Landmark, Loader2, SlidersHorizontal, Users } from "lucide-react";
 import {
   obterConfigApp, obterConfigAppSeExistir, salvarConfigApp, CONFIG_RESGATES_SICREDI,
   CONFIG_LIMITE_DV, CONFIG_FATURA_CARTAO_DIA, CONFIG_RESGATE_CONTA_ORIGEM, CONFIG_RESGATE, CONFIG_DL_CONTA_ORIGEM,
+  CONFIG_DV_CONTA,
 } from "@/lib/queries/configuracoes";
 import { listarContasEmpresa } from "@/lib/queries/bancos";
 import type { ContaBancariaEmpresaRow } from "@/types";
@@ -144,6 +145,9 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
             />
           </div>
 
+          {/* Banco da linha de saldo DV (Adri, 24-nov — migration 0072) */}
+          <ContaDV canEdit={canEdit} />
+
           <div className="flex items-start justify-between gap-4 flex-wrap border-t border-stone-100 pt-4">
             <div className="text-sm text-stone-600 max-w-xl space-y-1">
               <p><b className="text-stone-800">Vencimento da fatura do cartão Sicredi</b></p>
@@ -170,7 +174,7 @@ export function AutomacoesTab({ canEdit }: { canEdit: boolean }) {
 
       <p className="text-xs text-stone-400">
         As automações valem para todo o sistema. Alterações exigem as migrations 0047 e 0048 aplicadas no banco
-        (a conta de origem dos resgates, a 0064; as regras dos resgates, a 0068).
+        (a conta de origem dos resgates, a 0064; as regras dos resgates, a 0068; o banco da linha de saldo DV, a 0072).
       </p>
     </div>
   );
@@ -471,6 +475,50 @@ function ContaOrigemDL({ canEdit }: { canEdit: boolean }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Banco da linha "Despesa Variável — Saldo do mês" (0072). Ao trocar, o banco
+ * move sozinho as linhas de saldo DV ainda provisionadas, do mês atual em diante
+ * (gatilho tg_app_config_dv_conta), e religa o resgate de cada uma.
+ */
+function ContaDV({ canEdit }: { canEdit: boolean }) {
+  const [contas, setContas] = useState<ContaBancariaEmpresaRow[]>([]);
+  const [aplicada, setAplicada] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    Promise.all([listarContasEmpresa(), obterConfigAppSeExistir(CONFIG_DV_CONTA)])
+      .then(([cs, v]) => { setContas(cs); setAplicada(v !== null); })
+      .catch(() => setAplicada(false));
+  }, []);
+
+  const opcoes = [
+    { value: "", label: "CORA (como era até nov/2026)" },
+    ...contas.filter((c) => c.ativa && c.tipo === "corrente")
+      .map((c) => ({ value: c.id, label: rotuloConta(c) })),
+  ];
+
+  return (
+    <div className="flex items-start justify-between gap-4 flex-wrap border-t border-stone-100 pt-4">
+      <div className="text-sm text-stone-600 max-w-xl space-y-1">
+        <p><b className="text-stone-800">Banco da linha de saldo de Despesas Variáveis</b></p>
+        <p className="text-xs leading-relaxed">
+          Conta onde nasce a linha automática <b>Despesa Variável — Saldo do mês</b>. Ao trocar, as linhas de
+          saldo ainda <b>Provisionado DV</b>, do mês atual em diante, mudam junto; as de meses anteriores ficam
+          como estão. Na conta Sicredi, o saldo entra no resgate da programação mensal (Provisionados).
+        </p>
+        {aplicada === false && (
+          <p className="text-xs text-amber-700">Disponível depois que a migration 0072 for aplicada no banco.</p>
+        )}
+      </div>
+      {aplicada === null && <Loader2 size={16} className="animate-spin text-stone-400" />}
+      {aplicada && (
+        <ParametroSelect chave={CONFIG_DV_CONTA} fallback="" canEdit={canEdit}
+          rotuloSucesso="Banco da linha de saldo DV atualizado — as linhas em aberto foram junto"
+          opcoes={opcoes} />
+      )}
+    </div>
   );
 }
 

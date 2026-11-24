@@ -441,6 +441,12 @@ export const CONFIG_RESGATE_CONTA_ORIGEM = "resgate_conta_origem";
  * mês. Valor = id da conta em Bancos; vazio = CORA (como era até out-2026).
  */
 export const CONFIG_DL_CONTA_ORIGEM = "dl_conta_origem";
+/**
+ * Conta da linha automática "Despesa Variável — Saldo do mês" (0072, Adri
+ * 24-nov). Trocar move as linhas de saldo DV ainda provisionadas, do mês atual
+ * em diante (gatilho no banco). Valor = id da conta em Bancos; vazio = CORA.
+ */
+export const CONFIG_DV_CONTA = "dv_conta_bancaria";
 
 /**
  * Regras dos resgates automáticos (0068 — Sicredinvest Automático, out-2026).
